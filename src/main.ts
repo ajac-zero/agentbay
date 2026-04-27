@@ -1,27 +1,10 @@
 import { serve } from "@hono/node-server";
+import { config } from "./config.ts";
 import app from "./server.ts";
 
-const DEFAULT_PORT = 3000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
-function getPort() {
-  const rawPort = process.env.PORT;
-
-  if (rawPort === undefined) {
-    return DEFAULT_PORT;
-  }
-
-  const port = Number(rawPort);
-
-  if (!Number.isInteger(port) || port <= 0) {
-    throw new Error(`Invalid PORT: ${rawPort}`);
-  }
-
-  return port;
-}
-
-const port = getPort();
-const server = serve({ fetch: app.fetch, port }, (info) => {
+const server = serve({ fetch: app.fetch, port: config.server.port }, (info) => {
   console.log(`Wolfgang listening on port ${info.port}`);
 });
 
