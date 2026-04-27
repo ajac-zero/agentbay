@@ -1,4 +1,7 @@
 import { Hono } from "hono";
+import { config } from "./config.ts";
+
+void config;
 
 const app = new Hono();
 

@@ -27,6 +27,9 @@ importers:
       hono:
         specifier: ^4.12.15
         version: 4.12.15
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
     devDependencies:
       '@types/node':
         specifier: ^25.6.0
@@ -725,6 +728,9 @@ packages:
       utf-8-validate:
         optional: true
 
+  zod@4.3.6:
+    resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
+
 snapshots:
 
   '@hono/node-server@1.19.14(hono@4.12.15)':
@@ -1193,3 +1199,5 @@ snapshots:
       - yaml
 
   ws@8.20.0: {}
+
+  zod@4.3.6: {}

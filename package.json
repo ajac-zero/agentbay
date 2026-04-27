@@ -11,7 +11,8 @@
   "dependencies": {
     "@hono/node-server": "^2.0.0",
     "@hono/vite-dev-server": "^0.25.3",
-    "hono": "^4.12.15"
+    "hono": "^4.12.15",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
