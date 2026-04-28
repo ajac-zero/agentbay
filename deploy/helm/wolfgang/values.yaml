@@ -1,0 +1,79 @@
+replicaCount: 1
+
+image:
+  repository: wolfgang
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+rbac:
+  create: true
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+
+securityContext:
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 3000
+
+containerPort: 3000
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+config:
+  namespace: ""
+  sandboxTemplateName: opencode
+  sandboxRouterUrl: ""
+  sandboxPort: 8888
+  stateBackendUrl: redis://redis.default.svc.cluster.local:6379
+
+secrets:
+  slackSigningSecret: ""
+  slackBotToken: ""
+  slackClientId: ""
+  slackClientSecret: ""
+  discordPublicKey: ""
+  discordBotToken: ""
+  telegramBotToken: ""
+  githubWebhookSecret: ""
+  linearWebhookSecret: ""
+  googleChatVerificationToken: ""
+  whatsappVerifyToken: ""
+  whatsappAccessToken: ""
+  microsoftTeamsAppId: ""
+  microsoftTeamsAppPassword: ""
