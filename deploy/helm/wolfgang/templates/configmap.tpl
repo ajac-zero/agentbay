@@ -10,4 +10,6 @@ data:
   SANDBOX_TEMPLATE_NAME: {{ .Values.config.sandboxTemplateName | quote }}
   SANDBOX_ROUTER_URL: {{ include "wolfgang.sandboxRouterUrl" . | quote }}
   SANDBOX_PORT: {{ .Values.config.sandboxPort | quote }}
+  SANDBOX_IDLE_TTL_MINUTES: {{ .Values.config.sandboxIdleTtlMinutes | quote }}
+  SANDBOX_READY_TIMEOUT_SECONDS: {{ .Values.config.sandboxReadyTimeoutSeconds | quote }}
   STATE_BACKEND_URL: {{ .Values.config.stateBackendUrl | quote }}

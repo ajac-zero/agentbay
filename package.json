@@ -8,6 +8,7 @@
     "build": "tsc && vp build",
     "preview": "vp preview",
     "k8s:smoke": "node --experimental-strip-types scripts/k8s-smoke.ts",
+    "ensure-claim:smoke": "NAMESPACE=agent-sandbox SANDBOX_TEMPLATE_NAME=opencode SANDBOX_ROUTER_URL=http://sandbox-router.agent-sandbox.svc.cluster.local:8080 SANDBOX_PORT=8888 SANDBOX_IDLE_TTL_MINUTES=30 SANDBOX_READY_TIMEOUT_SECONDS=60 STATE_BACKEND_URL=redis://localhost:6379 node --experimental-strip-types scripts/ensure-claim-smoke.ts",
     "dev:cluster": "bash scripts/dev-cluster.sh"
   },
   "dependencies": {

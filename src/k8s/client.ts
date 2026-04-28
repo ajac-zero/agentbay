@@ -45,6 +45,7 @@ export interface SandboxClaim extends KubernetesObject {
       valueFrom?: unknown;
     }>;
     lifecycle?: {
+      shutdownPolicy?: "Delete" | "DeleteForeground" | "Retain";
       shutdownTime?: string;
     };
     warmpool?: string;

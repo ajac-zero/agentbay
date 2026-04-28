@@ -60,6 +60,8 @@ config:
   sandboxTemplateName: opencode
   sandboxRouterUrl: ""
   sandboxPort: 8888
+  sandboxIdleTtlMinutes: 30
+  sandboxReadyTimeoutSeconds: 60
   stateBackendUrl: redis://redis.default.svc.cluster.local:6379
 
 secrets:
