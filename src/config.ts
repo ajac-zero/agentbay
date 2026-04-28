@@ -14,6 +14,8 @@ const envSchema = z
     SANDBOX_TEMPLATE_NAME: nonEmptyString,
     SANDBOX_ROUTER_URL: z.url(),
     SANDBOX_PORT: portSchema.default(8888),
+    SANDBOX_IDLE_TTL_MINUTES: z.coerce.number().int().positive().default(30),
+    SANDBOX_READY_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(60),
     STATE_BACKEND_URL: z.url(),
 
     SLACK_SIGNING_SECRET: nonEmptyString.optional(),
@@ -108,6 +110,8 @@ export function loadConfig(source: Record<string, string | undefined> = process.
       templateName: env.SANDBOX_TEMPLATE_NAME,
       routerUrl: new URL(env.SANDBOX_ROUTER_URL),
       port: env.SANDBOX_PORT,
+      idleTtlMinutes: env.SANDBOX_IDLE_TTL_MINUTES,
+      readyTimeoutSeconds: env.SANDBOX_READY_TIMEOUT_SECONDS,
     },
     stateBackend: {
       url: new URL(env.STATE_BACKEND_URL),
