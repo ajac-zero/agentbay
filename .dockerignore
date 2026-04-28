@@ -1,0 +1,11 @@
+.git
+.jj
+.zed
+node_modules
+dist
+.vite
+.vite-temp
+*.log
+.env
+.env.*
+AGENTS.md
