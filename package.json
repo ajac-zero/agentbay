@@ -7,7 +7,8 @@
     "dev": "vp dev",
     "build": "tsc && vp build",
     "preview": "vp preview",
-    "k8s:smoke": "node --experimental-strip-types scripts/k8s-smoke.ts"
+    "k8s:smoke": "node --experimental-strip-types scripts/k8s-smoke.ts",
+    "dev:cluster": "bash scripts/dev-cluster.sh"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.0",
