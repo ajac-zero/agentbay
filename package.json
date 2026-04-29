@@ -17,6 +17,7 @@
     "@kubernetes/client-node": "^1.4.0",
     "@opencode-ai/sdk": "^1.14.29",
     "hono": "^4.12.15",
+    "redis": "^5.12.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
