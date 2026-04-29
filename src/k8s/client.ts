@@ -3,6 +3,7 @@ import {
   KubeConfig,
   KubernetesObjectApi,
   PatchStrategy,
+  Watch,
   type KubernetesListObject,
   type KubernetesObject,
   type V1ObjectMeta,
@@ -11,6 +12,7 @@ import { config } from "../config.ts";
 
 const SANDBOX_CLAIM_API_VERSION = "extensions.agents.x-k8s.io/v1alpha1";
 const SANDBOX_CLAIM_KIND = "SandboxClaim";
+const SANDBOX_CLAIM_RESOURCE = "sandboxclaims";
 const SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token";
 
 type KubeConfigSource = "in-cluster" | "kubeconfig";
@@ -71,6 +73,7 @@ export interface SandboxClaim extends KubernetesObject {
 export interface KubernetesClients {
   kubeConfig: KubeConfig;
   objectApi: KubernetesObjectApi;
+  watch: Watch;
   namespace: string;
   source: KubeConfigSource;
 }
@@ -178,6 +181,7 @@ function createKubernetesClients(): KubernetesClients {
   return {
     kubeConfig,
     objectApi: KubernetesObjectApi.makeApiClient(kubeConfig),
+    watch: new Watch(kubeConfig),
     namespace: config.kubernetes.namespace,
     source,
   };
@@ -207,5 +211,9 @@ export async function getSandboxClaim(name: string) {
   return getSandboxClaimClient().get(name);
 }
 
+export function getSandboxClaimWatchPath(namespace = getKubernetesClients().namespace) {
+  return `/apis/${SANDBOX_CLAIM_API_VERSION}/namespaces/${namespace}/${SANDBOX_CLAIM_RESOURCE}`;
+}
+
 export type SandboxClaimList = KubernetesListObject<SandboxClaim>;
-export { SANDBOX_CLAIM_API_VERSION, SANDBOX_CLAIM_KIND };
+export { SANDBOX_CLAIM_API_VERSION, SANDBOX_CLAIM_KIND, SANDBOX_CLAIM_RESOURCE };
