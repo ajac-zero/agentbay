@@ -57,7 +57,9 @@ affinity: {}
 
 config:
   namespace: ""
+  clusterDomain: cluster.local
   sandboxTemplateName: opencode
+  sandboxAccessMode: direct
   sandboxRouterUrl: ""
   sandboxPort: 8888
   sandboxIdleTtlMinutes: 30

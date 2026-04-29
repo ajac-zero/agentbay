@@ -10,6 +10,9 @@ import {
 } from "@kubernetes/client-node";
 import { config } from "../config.ts";
 
+const SANDBOX_API_VERSION = "agents.x-k8s.io/v1alpha1";
+const SANDBOX_KIND = "Sandbox";
+const SANDBOX_RESOURCE = "sandboxes";
 const SANDBOX_CLAIM_API_VERSION = "extensions.agents.x-k8s.io/v1alpha1";
 const SANDBOX_CLAIM_KIND = "SandboxClaim";
 const SANDBOX_CLAIM_RESOURCE = "sandboxclaims";
@@ -33,6 +36,27 @@ type ResourceHeader<T extends KubernetesObject> = Pick<T, "apiVersion" | "kind">
   metadata: ResourceMetadata;
 };
 
+type ResourceCondition = {
+  type?: string;
+  status?: string;
+  reason?: string;
+  message?: string;
+  lastTransitionTime?: string;
+};
+
+export interface Sandbox extends KubernetesObject {
+  apiVersion: typeof SANDBOX_API_VERSION;
+  kind: typeof SANDBOX_KIND;
+  metadata?: V1ObjectMeta;
+  status?: {
+    conditions?: ResourceCondition[];
+    podIPs?: string[];
+    service?: string;
+    serviceFQDN?: string;
+    [key: string]: unknown;
+  };
+}
+
 export interface SandboxClaim extends KubernetesObject {
   apiVersion: typeof SANDBOX_CLAIM_API_VERSION;
   kind: typeof SANDBOX_CLAIM_KIND;
@@ -54,13 +78,7 @@ export interface SandboxClaim extends KubernetesObject {
     [key: string]: unknown;
   };
   status?: {
-    conditions?: Array<{
-      type?: string;
-      status?: string;
-      reason?: string;
-      message?: string;
-      lastTransitionTime?: string;
-    }>;
+    conditions?: ResourceCondition[];
     sandbox?: {
       name?: string;
       namespace?: string;
@@ -153,6 +171,7 @@ export class NamespacedCustomResourceClient<T extends KubernetesObject> {
 }
 
 let cachedClients: KubernetesClients | null = null;
+let cachedSandboxClient: NamespacedCustomResourceClient<Sandbox> | null = null;
 let cachedSandboxClaimClient: NamespacedCustomResourceClient<SandboxClaim> | null = null;
 
 function isInClusterEnvironment() {
@@ -192,6 +211,17 @@ export function getKubernetesClients() {
   return cachedClients;
 }
 
+export function getSandboxClient() {
+  cachedSandboxClient ??= new NamespacedCustomResourceClient<Sandbox>(
+    getKubernetesClients().objectApi,
+    SANDBOX_API_VERSION,
+    SANDBOX_KIND,
+    getKubernetesClients().namespace,
+  );
+
+  return cachedSandboxClient;
+}
+
 export function getSandboxClaimClient() {
   cachedSandboxClaimClient ??= new NamespacedCustomResourceClient<SandboxClaim>(
     getKubernetesClients().objectApi,
@@ -201,6 +231,14 @@ export function getSandboxClaimClient() {
   );
 
   return cachedSandboxClaimClient;
+}
+
+export async function listSandboxes(options: ListOptions = {}) {
+  return getSandboxClient().list(options);
+}
+
+export async function getSandbox(name: string) {
+  return getSandboxClient().get(name);
 }
 
 export async function listSandboxClaims(options: ListOptions = {}) {
@@ -215,5 +253,13 @@ export function getSandboxClaimWatchPath(namespace = getKubernetesClients().name
   return `/apis/${SANDBOX_CLAIM_API_VERSION}/namespaces/${namespace}/${SANDBOX_CLAIM_RESOURCE}`;
 }
 
+export type SandboxList = KubernetesListObject<Sandbox>;
 export type SandboxClaimList = KubernetesListObject<SandboxClaim>;
-export { SANDBOX_CLAIM_API_VERSION, SANDBOX_CLAIM_KIND, SANDBOX_CLAIM_RESOURCE };
+export {
+  SANDBOX_API_VERSION,
+  SANDBOX_CLAIM_API_VERSION,
+  SANDBOX_CLAIM_KIND,
+  SANDBOX_CLAIM_RESOURCE,
+  SANDBOX_KIND,
+  SANDBOX_RESOURCE,
+};

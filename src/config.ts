@@ -7,12 +7,16 @@ const portSchema = z.coerce
   .min(1, "must be between 1 and 65535")
   .max(65535, "must be between 1 and 65535");
 
+const sandboxAccessModeSchema = z.enum(["direct", "router"]);
+
 const envSchema = z
   .object({
     PORT: portSchema.default(3000),
     NAMESPACE: nonEmptyString,
+    KUBERNETES_CLUSTER_DOMAIN: nonEmptyString.default("cluster.local"),
     SANDBOX_TEMPLATE_NAME: nonEmptyString,
-    SANDBOX_ROUTER_URL: z.url(),
+    SANDBOX_ACCESS_MODE: sandboxAccessModeSchema.default("direct"),
+    SANDBOX_ROUTER_URL: z.url().optional(),
     SANDBOX_PORT: portSchema.default(8888),
     SANDBOX_IDLE_TTL_MINUTES: z.coerce.number().int().positive().default(30),
     SANDBOX_READY_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(60),
@@ -50,6 +54,14 @@ const envSchema = z
       "MICROSOFT_TEAMS_APP_ID",
       "MICROSOFT_TEAMS_APP_PASSWORD",
     ]);
+
+    if (env.SANDBOX_ACCESS_MODE === "router" && env.SANDBOX_ROUTER_URL === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["SANDBOX_ROUTER_URL"],
+        message: "SANDBOX_ROUTER_URL is required when SANDBOX_ACCESS_MODE=router",
+      });
+    }
   });
 
 type Env = z.infer<typeof envSchema>;
@@ -105,10 +117,12 @@ export function loadConfig(source: Record<string, string | undefined> = process.
     },
     kubernetes: {
       namespace: env.NAMESPACE,
+      clusterDomain: env.KUBERNETES_CLUSTER_DOMAIN,
     },
     sandbox: {
       templateName: env.SANDBOX_TEMPLATE_NAME,
-      routerUrl: new URL(env.SANDBOX_ROUTER_URL),
+      accessMode: env.SANDBOX_ACCESS_MODE,
+      routerUrl: env.SANDBOX_ROUTER_URL === undefined ? null : new URL(env.SANDBOX_ROUTER_URL),
       port: env.SANDBOX_PORT,
       idleTtlMinutes: env.SANDBOX_IDLE_TTL_MINUTES,
       readyTimeoutSeconds: env.SANDBOX_READY_TIMEOUT_SECONDS,
