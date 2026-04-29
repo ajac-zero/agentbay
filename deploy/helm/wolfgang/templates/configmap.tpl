@@ -7,7 +7,9 @@ metadata:
 data:
   PORT: {{ .Values.containerPort | quote }}
   NAMESPACE: {{ include "wolfgang.namespace" . | quote }}
+  KUBERNETES_CLUSTER_DOMAIN: {{ .Values.config.clusterDomain | quote }}
   SANDBOX_TEMPLATE_NAME: {{ .Values.config.sandboxTemplateName | quote }}
+  SANDBOX_ACCESS_MODE: {{ .Values.config.sandboxAccessMode | quote }}
   SANDBOX_ROUTER_URL: {{ include "wolfgang.sandboxRouterUrl" . | quote }}
   SANDBOX_PORT: {{ .Values.config.sandboxPort | quote }}
   SANDBOX_IDLE_TTL_MINUTES: {{ .Values.config.sandboxIdleTtlMinutes | quote }}
