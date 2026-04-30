@@ -1,12 +1,17 @@
 import { ensureClaim } from "../k8s/claim.ts";
 import { createOpenCodeClient } from "../opencode/client.ts";
-import { promptStream, type OpenCodePromptClient, type PromptMessage } from "../opencode/prompt.ts";
+import {
+  promptStream,
+  type OpenCodePromptClient,
+  type PromptMessage,
+  type StreamChunk,
+} from "../opencode/prompt.ts";
 import { getOrCreateSession, type OpenCodeSessionClient } from "../opencode/session.ts";
 
 export interface ChatThread {
   id: string;
   title?: string;
-  post(stream: AsyncIterable<string>): Promise<void>;
+  post(stream: AsyncIterable<string | StreamChunk>): Promise<void>;
   subscribe(): Promise<void>;
 }
 
