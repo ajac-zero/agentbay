@@ -167,6 +167,9 @@ async function main() {
       assert.deepEqual(resource, builtClaim);
       return pendingClaim;
     },
+    async patch() {
+      throw new Error("patch should not be called when the claim is created in this flow");
+    },
   };
 
   const ensurePromise = ensureClaim(threadId, {

@@ -9,6 +9,7 @@ Wolfgang is an in-cluster orchestrator that bridges chat platforms to sandboxed 
 - Build: `vp build`
 - Kubernetes smoke test: `vp run k8s:smoke`
 - Bootstrap a local kind cluster: `vp run dev:cluster`
+- End-to-end kind smoke test: `vp run e2e:kind`
 
 ## Repository conventions
 
@@ -83,3 +84,35 @@ Useful follow-up commands:
 - `kubectl get sandboxtemplates -n agent-sandbox`
 - `kubectl get sandboxclaims -n agent-sandbox`
 - `kubectl get pods -n agent-sandbox-system`
+
+## End-to-end kind smoke test
+
+Once you have a working OpenCode sandbox image locally (or available from a registry), you can run the full local smoke flow:
+
+```sh
+vp run e2e:kind
+```
+
+What the smoke script does:
+
+- bootstraps or reuses the local kind cluster via `scripts/dev-cluster.sh`
+- deploys a disposable Redis instance for thread/session state
+- builds and loads a local `wolfgang:dev` image into kind
+- deploys Wolfgang with Helm
+- verifies Wolfgang `/healthz`
+- runs the real handler/session flow against a live sandbox through a port-forwarded `sandbox-router`
+- verifies:
+  - `SandboxClaim` creation
+  - direct connection resolution exposes sandbox Service DNS
+  - OpenCode session creation + Redis persistence
+  - session reuse on follow-up messages
+  - `SandboxClaim.spec.lifecycle.shutdownTime` bumps on subsequent activity
+
+Useful overrides:
+
+- `OPENCODE_IMAGE=... vp run e2e:kind`
+- `WOLFGANG_IMAGE=wolfgang:dev vp run e2e:kind`
+- `BUILD_WOLFGANG_IMAGE=false vp run e2e:kind`
+- `SKIP_CLUSTER_BOOTSTRAP=true vp run e2e:kind`
+- `SKIP_PROMPT=true vp run e2e:kind`
+- `E2E_FIRST_PROMPT='Reply with exactly: hello' vp run e2e:kind`
