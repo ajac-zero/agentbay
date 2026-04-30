@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import type { StreamChunk } from "../opencode/prompt.ts";
 import type { CoreHandlerDependencies } from "./handlers.ts";
 
 process.env.PORT ??= "3000";
@@ -100,9 +101,11 @@ function createThread(id: string) {
     thread: {
       id,
       title: "Thread 1",
-      post: async (stream: AsyncIterable<string>) => {
+      post: async (stream: AsyncIterable<string | StreamChunk>) => {
         for await (const chunk of stream) {
-          postedChunks.push(chunk);
+          if (typeof chunk === "string") {
+            postedChunks.push(chunk);
+          }
         }
       },
       subscribe,

@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { createServer } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { StreamChunk } from "../src/opencode/prompt.ts";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -305,10 +306,12 @@ function createSmokeThread(id: string, title: string) {
     title,
     messages: [] as string[],
     subscribeCount: 0,
-    async post(stream: AsyncIterable<string>) {
+    async post(stream: AsyncIterable<string | StreamChunk>) {
       let message = "";
       for await (const chunk of stream) {
-        message += chunk;
+        if (typeof chunk === "string") {
+          message += chunk;
+        }
       }
       this.messages.push(message);
     },
