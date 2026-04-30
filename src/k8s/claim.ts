@@ -17,7 +17,10 @@ const TERMINAL_CONDITION_TYPES = new Set(["Failed", "Finished"]);
 
 let cachedReadinessGate: SandboxClaimReadinessGate | null = null;
 
-type SandboxClaimApi = Pick<NamespacedCustomResourceClient<SandboxClaim>, "get" | "create">;
+type SandboxClaimApi = Pick<
+  NamespacedCustomResourceClient<SandboxClaim>,
+  "get" | "create" | "patch"
+>;
 
 type ClaimWaiter = {
   resolve: (claim: SandboxClaim) => void;
@@ -437,9 +440,11 @@ export async function ensureClaim(threadId: string, options: EnsureClaimOptions 
   const readyTimeoutMs = options.readyTimeoutMs ?? config.sandbox.readyTimeoutSeconds * 1_000;
 
   let claim: SandboxClaim;
+  let shouldRefreshShutdownTime = false;
 
   try {
     claim = await client.get(claimName);
+    shouldRefreshShutdownTime = true;
   } catch (error: unknown) {
     if (!isKubernetesApiErrorCode(error, 404)) {
       throw error;
@@ -453,7 +458,12 @@ export async function ensureClaim(threadId: string, options: EnsureClaimOptions 
       }
 
       claim = await client.get(claimName);
+      shouldRefreshShutdownTime = true;
     }
+  }
+
+  if (shouldRefreshShutdownTime) {
+    claim = await refreshSandboxClaimShutdownTime(client, claimName, options.now);
   }
 
   claim = await readinessGate.waitForReady(claim, { timeoutMs: readyTimeoutMs });
@@ -469,6 +479,27 @@ export async function ensureClaim(threadId: string, options: EnsureClaimOptions 
     podIP,
     password,
   } satisfies EnsureClaimResult;
+}
+
+async function refreshSandboxClaimShutdownTime(
+  client: SandboxClaimApi,
+  claimName: string,
+  now = new Date(),
+) {
+  return await client.patch({
+    apiVersion: "extensions.agents.x-k8s.io/v1alpha1",
+    kind: "SandboxClaim",
+    metadata: {
+      name: claimName,
+      namespace: config.kubernetes.namespace,
+    },
+    spec: {
+      lifecycle: {
+        shutdownPolicy: "Delete",
+        shutdownTime: getSandboxShutdownTime(now),
+      },
+    },
+  } as SandboxClaim);
 }
 
 function evaluateSandboxClaim(claim: SandboxClaim) {
