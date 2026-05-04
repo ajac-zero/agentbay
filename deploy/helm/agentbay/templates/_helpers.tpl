@@ -1,8 +1,8 @@
-{{- define "wolfgang.name" -}}
+{{- define "agentbay.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "wolfgang.fullname" -}}
+{{- define "agentbay.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
@@ -15,47 +15,47 @@
 {{- end -}}
 {{- end -}}
 
-{{- define "wolfgang.chart" -}}
+{{- define "agentbay.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "wolfgang.labels" -}}
-helm.sh/chart: {{ include "wolfgang.chart" . }}
-app.kubernetes.io/name: {{ include "wolfgang.name" . }}
+{{- define "agentbay.labels" -}}
+helm.sh/chart: {{ include "agentbay.chart" . }}
+app.kubernetes.io/name: {{ include "agentbay.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
-{{- define "wolfgang.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "wolfgang.name" . }}
+{{- define "agentbay.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "agentbay.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{- define "wolfgang.serviceAccountName" -}}
+{{- define "agentbay.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
-{{- default (include "wolfgang.fullname" .) .Values.serviceAccount.name -}}
+{{- default (include "agentbay.fullname" .) .Values.serviceAccount.name -}}
 {{- else -}}
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "wolfgang.namespace" -}}
+{{- define "agentbay.namespace" -}}
 {{- default .Release.Namespace .Values.config.namespace -}}
 {{- end -}}
 
-{{- define "wolfgang.sandboxRouterUrl" -}}
+{{- define "agentbay.sandboxRouterUrl" -}}
 {{- if .Values.config.sandboxRouterUrl -}}
 {{- .Values.config.sandboxRouterUrl -}}
 {{- else -}}
-{{- printf "http://sandbox-router.%s.svc.cluster.local:8080" (include "wolfgang.namespace" .) -}}
+{{- printf "http://sandbox-router.%s.svc.cluster.local:8080" (include "agentbay.namespace" .) -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "wolfgang.secretName" -}}
-{{- printf "%s-secrets" (include "wolfgang.fullname" .) -}}
+{{- define "agentbay.secretName" -}}
+{{- printf "%s-secrets" (include "agentbay.fullname" .) -}}
 {{- end -}}
 
-{{- define "wolfgang.configMapName" -}}
-{{- printf "%s-config" (include "wolfgang.fullname" .) -}}
+{{- define "agentbay.configMapName" -}}
+{{- printf "%s-config" (include "agentbay.fullname" .) -}}
 {{- end -}}

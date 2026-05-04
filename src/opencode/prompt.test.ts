@@ -356,12 +356,12 @@ describe("promptStream", () => {
     ];
 
     const client = await createOpenCodeClient({
-      claimName: "wf-claim",
+      claimName: "ab-claim",
       password: "stream-secret",
       claimClient: {
         get: vi.fn(async () =>
           createSandboxClaim({
-            claimName: "wf-claim",
+            claimName: "ab-claim",
             sandboxName: "sandbox-stream",
           }),
         ),

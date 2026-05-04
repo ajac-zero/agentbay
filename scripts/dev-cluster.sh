@@ -5,7 +5,7 @@ ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 KIND_CONFIG=${KIND_CONFIG:-"$ROOT_DIR/deploy/dev/kind-config.yaml"}
 SANDBOX_TEMPLATE_MANIFEST=${SANDBOX_TEMPLATE_MANIFEST:-"$ROOT_DIR/deploy/dev/opencode-sandbox-template.yaml"}
 
-CLUSTER_NAME=${CLUSTER_NAME:-wolfgang-dev}
+CLUSTER_NAME=${CLUSTER_NAME:-agentbay-dev}
 KUBECTL_CONTEXT=${KUBECTL_CONTEXT:-kind-${CLUSTER_NAME}}
 AGENT_SANDBOX_VERSION=${AGENT_SANDBOX_VERSION:-v0.4.2}
 AGENT_SANDBOX_SYSTEM_NAMESPACE=${AGENT_SANDBOX_SYSTEM_NAMESPACE:-agent-sandbox-system}
@@ -116,7 +116,7 @@ PY
 print_summary() {
   cat <<EOF
 
-Wolfgang local cluster bootstrap complete.
+Agentbay local cluster bootstrap complete.
 
 Cluster:
 - name: ${CLUSTER_NAME}

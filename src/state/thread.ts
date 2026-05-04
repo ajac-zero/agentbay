@@ -3,7 +3,7 @@ import { config } from "../config.ts";
 import { hashThreadId } from "../k8s/claim.ts";
 
 const OPEN_CODE_SESSION_ID_FIELD = "openCodeSessionId";
-const THREAD_STATE_KEY_PREFIX = "wolfgang:thread-state";
+const THREAD_STATE_KEY_PREFIX = "agentbay:thread-state";
 
 type RedisClient = ReturnType<typeof createClient>;
 

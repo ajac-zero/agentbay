@@ -1,16 +1,16 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "wolfgang.configMapName" . }}
+  name: {{ include "agentbay.configMapName" . }}
   labels:
-    {{- include "wolfgang.labels" . | nindent 4 }}
+    {{- include "agentbay.labels" . | nindent 4 }}
 data:
   PORT: {{ .Values.containerPort | quote }}
-  NAMESPACE: {{ include "wolfgang.namespace" . | quote }}
+  NAMESPACE: {{ include "agentbay.namespace" . | quote }}
   KUBERNETES_CLUSTER_DOMAIN: {{ .Values.config.clusterDomain | quote }}
   SANDBOX_TEMPLATE_NAME: {{ .Values.config.sandboxTemplateName | quote }}
   SANDBOX_ACCESS_MODE: {{ .Values.config.sandboxAccessMode | quote }}
-  SANDBOX_ROUTER_URL: {{ include "wolfgang.sandboxRouterUrl" . | quote }}
+  SANDBOX_ROUTER_URL: {{ include "agentbay.sandboxRouterUrl" . | quote }}
   SANDBOX_PORT: {{ .Values.config.sandboxPort | quote }}
   SANDBOX_IDLE_TTL_MINUTES: {{ .Values.config.sandboxIdleTtlMinutes | quote }}
   SANDBOX_READY_TIMEOUT_SECONDS: {{ .Values.config.sandboxReadyTimeoutSeconds | quote }}

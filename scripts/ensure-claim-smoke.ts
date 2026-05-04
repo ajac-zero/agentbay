@@ -72,9 +72,9 @@ async function main() {
   const builtClaim = buildSandboxClaim(threadId, now);
   const claimName = getClaimName(threadId);
 
-  assert.equal(claimName, `wf-${hashThreadId(threadId).slice(0, 12)}`);
-  assert.equal(builtClaim.metadata?.annotations?.["wolfgang.io/thread-id"], threadId);
-  assert.equal(builtClaim.metadata?.labels?.["wolfgang.io/thread-id-hash"], hashThreadId(threadId));
+  assert.equal(claimName, `ab-${hashThreadId(threadId).slice(0, 12)}`);
+  assert.equal(builtClaim.metadata?.annotations?.["agentbay.io/thread-id"], threadId);
+  assert.equal(builtClaim.metadata?.labels?.["agentbay.io/thread-id-hash"], hashThreadId(threadId));
   assert.equal(builtClaim.spec?.sandboxTemplateRef?.name, "opencode");
   assert.equal(
     builtClaim.spec?.env?.find((envVar) => envVar.name === OPENCODE_SERVER_PASSWORD_ENV)?.value,

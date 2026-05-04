@@ -1,20 +1,20 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "wolfgang.fullname" . }}
+  name: {{ include "agentbay.fullname" . }}
   labels:
-    {{- include "wolfgang.labels" . | nindent 4 }}
+    {{- include "agentbay.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "wolfgang.selectorLabels" . | nindent 6 }}
+      {{- include "agentbay.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "wolfgang.selectorLabels" . | nindent 8 }}
+        {{- include "agentbay.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -23,7 +23,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
-      serviceAccountName: {{ include "wolfgang.serviceAccountName" . }}
+      serviceAccountName: {{ include "agentbay.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -31,16 +31,16 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
-        - name: wolfgang
+        - name: agentbay
           image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           envFrom:
             - configMapRef:
-                name: {{ include "wolfgang.configMapName" . }}
+                name: {{ include "agentbay.configMapName" . }}
             - secretRef:
-                name: {{ include "wolfgang.secretName" . }}
+                name: {{ include "agentbay.secretName" . }}
           ports:
             - name: http
               containerPort: {{ .Values.containerPort }}

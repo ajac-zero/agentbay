@@ -9,10 +9,10 @@ import {
   type SandboxClaim,
 } from "./client.ts";
 
-const THREAD_ID_HASH_LABEL = "wolfgang.io/thread-id-hash";
-const THREAD_ID_ANNOTATION = "wolfgang.io/thread-id";
+const THREAD_ID_HASH_LABEL = "agentbay.io/thread-id-hash";
+const THREAD_ID_ANNOTATION = "agentbay.io/thread-id";
 const OPENCODE_SERVER_PASSWORD_ENV = "OPENCODE_SERVER_PASSWORD";
-const CLAIM_NAME_PREFIX = "wf-";
+const CLAIM_NAME_PREFIX = "ab-";
 const TERMINAL_CONDITION_TYPES = new Set(["Failed", "Finished"]);
 
 let cachedReadinessGate: SandboxClaimReadinessGate | null = null;
@@ -358,7 +358,7 @@ export function getClaimPassword(threadId: string) {
   validateThreadId(threadId);
 
   return createHash("sha256")
-    .update(`wolfgang:${config.kubernetes.namespace}:${config.sandbox.templateName}:${threadId}`)
+    .update(`agentbay:${config.kubernetes.namespace}:${config.sandbox.templateName}:${threadId}`)
     .digest("base64url")
     .slice(0, 32);
 }
