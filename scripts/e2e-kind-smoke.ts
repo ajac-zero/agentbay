@@ -8,28 +8,28 @@ import type { StreamChunk } from "../src/opencode/prompt.ts";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-const CLUSTER_NAME = process.env.CLUSTER_NAME ?? "wolfgang-dev";
+const CLUSTER_NAME = process.env.CLUSTER_NAME ?? "agentbay-dev";
 const KUBECTL_CONTEXT = process.env.KUBECTL_CONTEXT ?? `kind-${CLUSTER_NAME}`;
 const NAMESPACE = process.env.NAMESPACE ?? "agent-sandbox";
 const SANDBOX_TEMPLATE_NAME = process.env.SANDBOX_TEMPLATE_NAME ?? "opencode";
 const SANDBOX_PORT = Number.parseInt(process.env.SANDBOX_PORT ?? "8888", 10);
-const WOLFGANG_RELEASE = process.env.WOLFGANG_RELEASE ?? "wolfgang";
-const WOLFGANG_SERVICE_NAME = process.env.WOLFGANG_SERVICE_NAME ?? WOLFGANG_RELEASE;
+const AGENTBAY_RELEASE = process.env.AGENTBAY_RELEASE ?? "agentbay";
+const AGENTBAY_SERVICE_NAME = process.env.AGENTBAY_SERVICE_NAME ?? AGENTBAY_RELEASE;
 const SANDBOX_ROUTER_SERVICE_NAME = process.env.SANDBOX_ROUTER_SERVICE_NAME ?? "sandbox-router";
 const REDIS_SERVICE_NAME = process.env.REDIS_SERVICE_NAME ?? "redis";
-const WOLFGANG_IMAGE = process.env.WOLFGANG_IMAGE ?? "wolfgang:dev";
-const WOLFGANG_IMAGE_REPOSITORY =
-  process.env.WOLFGANG_IMAGE_REPOSITORY ?? WOLFGANG_IMAGE.split(":")[0] ?? "wolfgang";
-const WOLFGANG_IMAGE_TAG = process.env.WOLFGANG_IMAGE_TAG ?? WOLFGANG_IMAGE.split(":")[1] ?? "dev";
+const AGENTBAY_IMAGE = process.env.AGENTBAY_IMAGE ?? "agentbay:dev";
+const AGENTBAY_IMAGE_REPOSITORY =
+  process.env.AGENTBAY_IMAGE_REPOSITORY ?? AGENTBAY_IMAGE.split(":")[0] ?? "agentbay";
+const AGENTBAY_IMAGE_TAG = process.env.AGENTBAY_IMAGE_TAG ?? AGENTBAY_IMAGE.split(":")[1] ?? "dev";
 const STATE_BACKEND_URL_IN_CLUSTER =
   process.env.STATE_BACKEND_URL_IN_CLUSTER ??
   `redis://${REDIS_SERVICE_NAME}.${NAMESPACE}.svc.cluster.local:6379`;
-const BUILD_WOLFGANG_IMAGE = process.env.BUILD_WOLFGANG_IMAGE !== "false";
-const LOAD_WOLFGANG_IMAGE = process.env.LOAD_WOLFGANG_IMAGE !== "false";
+const BUILD_AGENTBAY_IMAGE = process.env.BUILD_AGENTBAY_IMAGE !== "false";
+const LOAD_AGENTBAY_IMAGE = process.env.LOAD_AGENTBAY_IMAGE !== "false";
 const SKIP_CLUSTER_BOOTSTRAP = process.env.SKIP_CLUSTER_BOOTSTRAP === "true";
 const SKIP_PROMPT = process.env.SKIP_PROMPT === "true";
-const FIRST_PROMPT = process.env.E2E_FIRST_PROMPT ?? "Reply with exactly: WOLFGANG_E2E_OK";
-const SECOND_PROMPT = process.env.E2E_SECOND_PROMPT ?? "Reply with exactly: WOLFGANG_E2E_FOLLOW_UP";
+const FIRST_PROMPT = process.env.E2E_FIRST_PROMPT ?? "Reply with exactly: AGENTBAY_E2E_OK";
+const SECOND_PROMPT = process.env.E2E_SECOND_PROMPT ?? "Reply with exactly: AGENTBAY_E2E_FOLLOW_UP";
 const EXPECTED_SUBSTRING = process.env.E2E_EXPECTED_SUBSTRING;
 const HELM_TIMEOUT = process.env.HELM_TIMEOUT ?? "180s";
 
@@ -58,31 +58,31 @@ async function main() {
     `--timeout=${HELM_TIMEOUT}`,
   ]);
 
-  if (BUILD_WOLFGANG_IMAGE) {
-    log(`Building Wolfgang image ${WOLFGANG_IMAGE}`);
-    await run("docker", ["build", "-t", WOLFGANG_IMAGE, ROOT_DIR]);
+  if (BUILD_AGENTBAY_IMAGE) {
+    log(`Building Agentbay image ${AGENTBAY_IMAGE}`);
+    await run("docker", ["build", "-t", AGENTBAY_IMAGE, ROOT_DIR]);
   }
 
-  if (LOAD_WOLFGANG_IMAGE) {
-    log(`Loading ${WOLFGANG_IMAGE} into kind cluster ${CLUSTER_NAME}`);
-    await run("kind", ["load", "docker-image", WOLFGANG_IMAGE, "--name", CLUSTER_NAME]);
+  if (LOAD_AGENTBAY_IMAGE) {
+    log(`Loading ${AGENTBAY_IMAGE} into kind cluster ${CLUSTER_NAME}`);
+    await run("kind", ["load", "docker-image", AGENTBAY_IMAGE, "--name", CLUSTER_NAME]);
   }
 
-  log("Deploying Wolfgang via Helm");
+  log("Deploying Agentbay via Helm");
   await run("helm", [
     "upgrade",
     "--install",
-    WOLFGANG_RELEASE,
-    resolve(ROOT_DIR, "deploy/helm/wolfgang"),
+    AGENTBAY_RELEASE,
+    resolve(ROOT_DIR, "deploy/helm/agentbay"),
     "--namespace",
     NAMESPACE,
     "--create-namespace",
     "--wait",
     `--timeout=${HELM_TIMEOUT}`,
     "--set",
-    `image.repository=${WOLFGANG_IMAGE_REPOSITORY}`,
+    `image.repository=${AGENTBAY_IMAGE_REPOSITORY}`,
     "--set",
-    `image.tag=${WOLFGANG_IMAGE_TAG}`,
+    `image.tag=${AGENTBAY_IMAGE_TAG}`,
     "--set",
     `config.namespace=${NAMESPACE}`,
     "--set",
@@ -93,8 +93,8 @@ async function main() {
     `config.stateBackendUrl=${STATE_BACKEND_URL_IN_CLUSTER}`,
   ]);
 
-  const wolfgangPortForward = await startPortForward({
-    resource: `service/${WOLFGANG_SERVICE_NAME}`,
+  const agentbayPortForward = await startPortForward({
+    resource: `service/${AGENTBAY_SERVICE_NAME}`,
     remotePort: 3000,
   });
   const routerPortForward = await startPortForward({
@@ -107,7 +107,7 @@ async function main() {
   });
 
   try {
-    await verifyHealthz(`http://127.0.0.1:${wolfgangPortForward.localPort}/healthz`);
+    await verifyHealthz(`http://127.0.0.1:${agentbayPortForward.localPort}/healthz`);
 
     process.env.PORT = "3000";
     process.env.NAMESPACE = NAMESPACE;
@@ -149,7 +149,7 @@ async function main() {
       namespace: NAMESPACE,
     });
     const threadId = `smoke:${new Date().toISOString()}:${Math.random().toString(36).slice(2, 10)}`;
-    const thread = createSmokeThread(threadId, "Wolfgang kind smoke");
+    const thread = createSmokeThread(threadId, "Agentbay kind smoke");
     const firstEnsureNow = new Date("2026-01-01T00:00:00.000Z");
     const secondEnsureNow = new Date("2026-01-01T00:05:00.000Z");
 
@@ -214,7 +214,7 @@ async function main() {
       routerUrl,
     });
     const firstSessionId = await getOrCreateSession(threadId, routerClient, {
-      title: "Wolfgang kind smoke",
+      title: "Agentbay kind smoke",
       stateStore,
     });
     const storedSessionId = await stateStore.getOpenCodeSessionId(threadId);
@@ -273,7 +273,7 @@ async function main() {
         {
           kindContext: KUBECTL_CONTEXT,
           namespace: NAMESPACE,
-          wolfgangUrl: `http://127.0.0.1:${wolfgangPortForward.localPort}`,
+          agentbayUrl: `http://127.0.0.1:${agentbayPortForward.localPort}`,
           sandboxRouterUrl: routerUrl.toString(),
           threadId,
           claimName,
@@ -293,7 +293,7 @@ async function main() {
     log("Kind smoke test passed");
   } finally {
     await Promise.all([
-      wolfgangPortForward.stop(),
+      agentbayPortForward.stop(),
       routerPortForward.stop(),
       redisPortForward.stop(),
     ]);
@@ -322,7 +322,7 @@ function createSmokeThread(id: string, title: string) {
 }
 
 async function verifyHealthz(url: string) {
-  log(`Verifying Wolfgang health at ${url}`);
+  log(`Verifying Agentbay health at ${url}`);
   const response = await fetch(url);
   assert.equal(response.status, 200, `expected ${url} to return 200`);
   assert.equal(await response.text(), "ok", `expected ${url} to return ok`);

@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "wolfgang.secretName" . }}
+  name: {{ include "agentbay.secretName" . }}
   labels:
-    {{- include "wolfgang.labels" . | nindent 4 }}
+    {{- include "agentbay.labels" . | nindent 4 }}
 type: Opaque
 stringData:
   {{- with .Values.secrets }}

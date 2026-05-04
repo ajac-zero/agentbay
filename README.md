@@ -1,6 +1,6 @@
-# Wolfgang
+# Agentbay
 
-Wolfgang is an in-cluster orchestrator that bridges chat platforms to sandboxed OpenCode sessions.
+Agentbay is an in-cluster orchestrator that bridges chat platforms to sandboxed OpenCode sessions.
 
 ## Development
 
@@ -24,13 +24,13 @@ Keep one-off validation tools and cluster/dev helpers in `scripts/`, not `src/`.
 
 Helm chart location:
 
-- `deploy/helm/wolfgang`
+- `deploy/helm/agentbay`
 
 Useful commands:
 
-- Lint the chart: `helm lint deploy/helm/wolfgang`
-- Render manifests: `helm template wolfgang deploy/helm/wolfgang --namespace agent-sandbox`
-- Install/upgrade: `helm upgrade --install wolfgang deploy/helm/wolfgang --namespace agent-sandbox --create-namespace`
+- Lint the chart: `helm lint deploy/helm/agentbay`
+- Render manifests: `helm template agentbay deploy/helm/agentbay --namespace agent-sandbox`
+- Install/upgrade: `helm upgrade --install agentbay deploy/helm/agentbay --namespace agent-sandbox --create-namespace`
 
 ## Local development
 
@@ -45,7 +45,7 @@ Prerequisites:
 
 Defaults used by the script:
 
-- cluster name: `wolfgang-dev`
+- cluster name: `agentbay-dev`
 - namespace: `agent-sandbox`
 - `SandboxTemplate` name: `opencode`
 - OpenCode image: `opencode:dev`
@@ -80,7 +80,7 @@ What the script does:
 
 Useful follow-up commands:
 
-- `kubectl config use-context kind-wolfgang-dev`
+- `kubectl config use-context kind-agentbay-dev`
 - `kubectl get sandboxtemplates -n agent-sandbox`
 - `kubectl get sandboxclaims -n agent-sandbox`
 - `kubectl get pods -n agent-sandbox-system`
@@ -97,9 +97,9 @@ What the smoke script does:
 
 - bootstraps or reuses the local kind cluster via `scripts/dev-cluster.sh`
 - deploys a disposable Redis instance for thread/session state
-- builds and loads a local `wolfgang:dev` image into kind
-- deploys Wolfgang with Helm
-- verifies Wolfgang `/healthz`
+- builds and loads a local `agentbay:dev` image into kind
+- deploys Agentbay with Helm
+- verifies Agentbay `/healthz`
 - runs the real handler/session flow against a live sandbox through a port-forwarded `sandbox-router`
 - verifies:
   - `SandboxClaim` creation
@@ -111,8 +111,8 @@ What the smoke script does:
 Useful overrides:
 
 - `OPENCODE_IMAGE=... vp run e2e:kind`
-- `WOLFGANG_IMAGE=wolfgang:dev vp run e2e:kind`
-- `BUILD_WOLFGANG_IMAGE=false vp run e2e:kind`
+- `AGENTBAY_IMAGE=agentbay:dev vp run e2e:kind`
+- `BUILD_AGENTBAY_IMAGE=false vp run e2e:kind`
 - `SKIP_CLUSTER_BOOTSTRAP=true vp run e2e:kind`
 - `SKIP_PROMPT=true vp run e2e:kind`
 - `E2E_FIRST_PROMPT='Reply with exactly: hello' vp run e2e:kind`

@@ -20,12 +20,12 @@ describe("createOpenCodeClient", () => {
     const requests: Request[] = [];
 
     const client = await createOpenCodeClient({
-      claimName: "wf-claim",
+      claimName: "ab-claim",
       password: "super-secret",
       claimClient: {
         get: vi.fn(async () =>
           createSandboxClaim({
-            claimName: "wf-claim",
+            claimName: "ab-claim",
             sandboxName: "sandbox-adopted",
           }),
         ),
@@ -66,7 +66,7 @@ describe("createOpenCodeClient", () => {
     const requests: Request[] = [];
 
     const client = await createOpenCodeClient({
-      claimName: "wf-claim",
+      claimName: "ab-claim",
       password: "router-secret",
       accessMode: "router",
       routerUrl: new URL("http://sandbox-router.agent-sandbox.svc.cluster.local:8080"),
@@ -74,7 +74,7 @@ describe("createOpenCodeClient", () => {
       claimClient: {
         get: vi.fn(async () =>
           createSandboxClaim({
-            claimName: "wf-claim",
+            claimName: "ab-claim",
             sandboxName: "sandbox-from-claim",
           }),
         ),
@@ -107,12 +107,12 @@ describe("createOpenCodeClient", () => {
     const requests: Request[] = [];
 
     const client = await createOpenCodeClient({
-      claimName: "wf-claim",
+      claimName: "ab-claim",
       password: "stream-secret",
       claimClient: {
         get: vi.fn(async () =>
           createSandboxClaim({
-            claimName: "wf-claim",
+            claimName: "ab-claim",
             sandboxName: "sandbox-stream",
           }),
         ),
@@ -152,7 +152,7 @@ describe("createOpenCodeClient", () => {
         claimReadCount += 1;
 
         return createSandboxClaim({
-          claimName: "wf-claim",
+          claimName: "ab-claim",
           sandboxName: claimReadCount === 1 ? "sandbox-a" : "sandbox-b",
         });
       }),
@@ -168,7 +168,7 @@ describe("createOpenCodeClient", () => {
     };
 
     const clientA = await createOpenCodeClient({
-      claimName: "wf-claim",
+      claimName: "ab-claim",
       password: "rotate-secret",
       claimClient,
       sandboxClient,
@@ -179,7 +179,7 @@ describe("createOpenCodeClient", () => {
     });
 
     const clientB = await createOpenCodeClient({
-      claimName: "wf-claim",
+      claimName: "ab-claim",
       password: "rotate-secret",
       claimClient,
       sandboxClient,

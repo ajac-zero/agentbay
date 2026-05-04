@@ -2,9 +2,9 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "wolfgang.fullname" . }}
+  name: {{ include "agentbay.fullname" . }}
   labels:
-    {{- include "wolfgang.labels" . | nindent 4 }}
+    {{- include "agentbay.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["extensions.agents.x-k8s.io"]
     resources: ["sandboxclaims"]

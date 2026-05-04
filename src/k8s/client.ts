@@ -132,7 +132,7 @@ export class NamespacedCustomResourceClient<T extends KubernetesObject> {
     return this.objectApi.create<T>(this.withResourceDefaults(resource));
   }
 
-  async patch(resource: T, fieldManager = "wolfgang") {
+  async patch(resource: T, fieldManager = "agentbay") {
     return this.objectApi.patch<T>(
       this.withResourceDefaults(resource),
       undefined,

@@ -5,7 +5,7 @@ import app from "./server.ts";
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 const server = serve({ fetch: app.fetch, port: config.server.port }, (info) => {
-  console.log(`Wolfgang listening on port ${info.port}`);
+  console.log(`Agentbay listening on port ${info.port}`);
 });
 
 let isShuttingDown = false;

@@ -2,9 +2,9 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "wolfgang.serviceAccountName" . }}
+  name: {{ include "agentbay.serviceAccountName" . }}
   labels:
-    {{- include "wolfgang.labels" . | nindent 4 }}
+    {{- include "agentbay.labels" . | nindent 4 }}
   {{- with .Values.serviceAccount.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
