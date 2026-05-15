@@ -1,0 +1,93 @@
+import type { Event, OpencodeClient } from "@opencode-ai/sdk/client";
+import type { BotProfile } from "../types.js";
+
+export async function createSession(client: OpencodeClient, title: string): Promise<string> {
+  const { data } = await client.session.create({
+    body: { title },
+    throwOnError: true,
+  });
+
+  return data.id;
+}
+
+export async function* runPrompt(input: {
+  client: OpencodeClient;
+  isFirstPrompt: boolean;
+  profile: BotProfile;
+  sessionID: string;
+  text: string;
+}): AsyncIterable<string> {
+  await assertSessionIdle(input.client, input.sessionID);
+
+  const events = await input.client.event.subscribe({});
+  await input.client.session.promptAsync({
+    path: { id: input.sessionID },
+    body: {
+      parts: [{ type: "text", text: promptText(input.profile, input.text, input.isFirstPrompt) }],
+      model: input.profile.defaultModel,
+      tools: input.profile.tools,
+    },
+    throwOnError: true,
+  });
+
+  for await (const event of events.stream) {
+    if (!isSessionEvent(event, input.sessionID)) continue;
+
+    if (event.type === "message.part.updated") {
+      const { part, delta } = event.properties;
+      if (part.type === "text" && delta) yield delta;
+    }
+
+    if (event.type === "permission.updated") {
+      await input.client.postSessionIdPermissionsPermissionId({
+        path: { id: input.sessionID, permissionID: event.properties.id },
+        body: { response: "always" },
+        throwOnError: true,
+      });
+    }
+
+    if (event.type === "session.error") {
+      throw new Error(`opencode session ${input.sessionID} error: ${formatOpencodeError(event.properties.error)}`);
+    }
+
+    if (event.type === "session.idle") return;
+  }
+}
+
+async function assertSessionIdle(client: OpencodeClient, sessionID: string): Promise<void> {
+  const { data } = await client.session.status({ throwOnError: true });
+  const status = data[sessionID];
+  if (status && status.type !== "idle") {
+    throw new Error(`opencode session ${sessionID} is not idle (${status.type})`);
+  }
+}
+
+function promptText(profile: BotProfile, text: string, isFirstPrompt: boolean): string {
+  if (!isFirstPrompt || !profile.systemPrompt) return text;
+  return `${profile.systemPrompt}\n\n${text}`;
+}
+
+function isSessionEvent(event: Event, sessionID: string): boolean {
+  switch (event.type) {
+    case "message.part.updated":
+      return "sessionID" in event.properties.part && event.properties.part.sessionID === sessionID;
+    case "session.idle":
+    case "session.status":
+    case "session.error":
+    case "session.compacted":
+      return event.properties.sessionID === sessionID;
+    case "permission.updated":
+      return event.properties.sessionID === sessionID;
+    default:
+      return true;
+  }
+}
+
+function formatOpencodeError(error: unknown): string {
+  if (!error || typeof error !== "object") return "unknown error";
+
+  const maybe = error as { data?: { message?: unknown }; name?: unknown };
+  const name = typeof maybe.name === "string" ? maybe.name : "Error";
+  const message = typeof maybe.data?.message === "string" ? maybe.data.message : JSON.stringify(error);
+  return `${name}: ${message}`;
+}

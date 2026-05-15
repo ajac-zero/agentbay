@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentbay
+  namespace: agents
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentbay
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentbay
+    spec:
+      serviceAccountName: agentbay
+      containers:
+        - name: agentbay
+          image: ghcr.io/example/agentbay:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: PORT
+              value: "3000"
+            - name: AGENTBAY_KUBE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: AGENTBAY_TEMPLATE_NAME
+              value: opencode-template
+            - name: AGENTBAY_WARMPOOL
+              value: none
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: agentbay-secrets
+                  key: redis-url
+                  optional: true
+            - name: SLACK_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: agentbay-secrets
+                  key: slack-bot-token
+                  optional: true
+            - name: SLACK_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: agentbay-secrets
+                  key: slack-signing-secret
+                  optional: true
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agentbay-secrets
+                  key: anthropic-api-key
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentbay
+  namespace: agents
+spec:
+  selector:
+    app.kubernetes.io/name: agentbay
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
