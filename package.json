@@ -1,0 +1,45 @@
+{
+  "name": "agentbay",
+  "version": "1.0.0",
+  "description": "Chat-native orchestrator for opencode agents in Kubernetes sandboxes",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "^11.0.9",
+      "onFail": "download"
+    }
+  },
+  "type": "module",
+  "dependencies": {
+    "@chat-adapter/discord": "^4.28.1",
+    "@chat-adapter/gchat": "^4.28.1",
+    "@chat-adapter/github": "^4.28.1",
+    "@chat-adapter/linear": "^4.28.1",
+    "@chat-adapter/messenger": "^4.28.1",
+    "@chat-adapter/slack": "^4.28.1",
+    "@chat-adapter/state-redis": "^4.28.1",
+    "@chat-adapter/teams": "^4.28.1",
+    "@chat-adapter/telegram": "^4.28.1",
+    "@chat-adapter/whatsapp": "^4.28.1",
+    "@hono/node-server": "^2.0.2",
+    "@kubernetes/client-node": "^1.4.0",
+    "@opencode-ai/sdk": "^1.14.50",
+    "chat": "^4.28.1",
+    "hono": "^4.12.18"
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "tsx": "^4.22.0",
+    "typescript": "^6.0.3"
+  }
+}
