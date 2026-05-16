@@ -126,7 +126,7 @@ export class SandboxManager {
         env,
         additionalPodMetadata: {
           labels: {
-            "app.kubernetes.io/managed-by": "agentbay",
+            "agentbay.dev/managed-by": "agentbay",
             "agentbay.dev/claim": input.claimName,
             "agentbay.dev/profile": input.profile.id,
           },
@@ -164,7 +164,12 @@ export class SandboxManager {
       })) as SandboxClaim;
     }
 
-    const reason = claim.status?.conditions?.map((condition) => `${condition.type}=${condition.status}`).join(", ");
+    const reason = claim.status?.conditions
+      ?.map((condition) => {
+        const details = [condition.reason, condition.message].filter(Boolean).join(": ");
+        return `${condition.type}=${condition.status}${details ? ` (${details})` : ""}`;
+      })
+      .join(", ");
     throw new Error(`Timed out waiting for SandboxClaim ${claim.metadata.name} to become Ready${reason ? ` (${reason})` : ""}`);
   }
 
@@ -180,9 +185,6 @@ export class SandboxManager {
   }
 
   private podFQDN(claim: SandboxClaim): string {
-    const explicit = claim.status?.sandbox?.serviceFQDN ?? claim.status?.sandbox?.podFQDN ?? claim.status?.serviceFQDN;
-    if (explicit) return explicit;
-
     const podIP = claim.status?.sandbox?.podIPs?.[0];
     if (podIP) return podIP;
 

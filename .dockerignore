@@ -1,0 +1,11 @@
+.git
+.opencode
+dist
+node_modules
+npm-debug.log*
+pnpm-debug.log*
+test
+*.tgz
+.env
+.env.*
+!.env.example

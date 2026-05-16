@@ -16,6 +16,16 @@ Typecheck:
 pnpm typecheck
 ```
 
+Run the k3s end-to-end test:
+
+```bash
+pnpm test:e2e
+```
+
+The e2e test uses `@testcontainers/k3s`, so Docker or another Testcontainers-compatible runtime and `kubectl` must be available. It fetches the pinned `kubernetes-sigs/agent-sandbox` release manifests, installs the real controllers and CRDs into k3s, provisions a real `SandboxClaim` from a test `SandboxTemplate`, and connects to a fake opencode HTTP server running in the sandbox Pod.
+
+If your Docker endpoint prevents Testcontainers Ryuk from mounting the Docker socket, run the test with `TESTCONTAINERS_RYUK_DISABLED=true pnpm test:e2e`. The test still stops the k3s container in teardown, but Ryuk is safer when your Docker environment supports it.
+
 Run the webhook server:
 
 ```bash
@@ -67,6 +77,22 @@ GET /healthz
 ```
 
 ## Deployment
+
+Build and push the orchestrator image:
+
+```bash
+docker build -t ghcr.io/your-org/agentbay:latest .
+docker push ghcr.io/your-org/agentbay:latest
+```
+
+Build and push the opencode sandbox image:
+
+```bash
+docker build -f opencode-sandbox.Dockerfile -t ghcr.io/your-org/opencode-sandbox:latest .
+docker push ghcr.io/your-org/opencode-sandbox:latest
+```
+
+Update `deploy/orchestrator.yaml` and `deploy/examples/sandbox-template.yaml` with your pushed image names before applying them.
 
 The `deploy/` directory contains starter Kubernetes manifests:
 
