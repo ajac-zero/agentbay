@@ -1,8 +1,9 @@
 import type { EnvVar } from "../types.js";
 
 export type SandboxClaimCondition = {
-  lastTransitionTime?: string;
-  message?: string;
+  lastTransitionTime: string;
+  message: string;
+  observedGeneration?: number;
   reason?: string;
   status: "True" | "False" | "Unknown";
   type: string;
@@ -37,11 +38,8 @@ export type SandboxClaim = {
     conditions?: SandboxClaimCondition[];
     sandbox?: {
       name?: string;
-      podFQDN?: string;
       podIPs?: string[];
-      serviceFQDN?: string;
     };
-    serviceFQDN?: string;
   };
 };
 

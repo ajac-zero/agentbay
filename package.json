@@ -7,7 +7,9 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit"
   },
   "keywords": [],
   "author": "",
@@ -15,7 +17,7 @@
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
-      "version": "^11.0.9",
+      "version": "11.1.2",
       "onFail": "download"
     }
   },
@@ -38,8 +40,10 @@
     "hono": "^4.12.18"
   },
   "devDependencies": {
+    "@testcontainers/k3s": "^11.14.0",
     "@types/node": "^25.8.0",
     "tsx": "^4.22.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
   }
 }
