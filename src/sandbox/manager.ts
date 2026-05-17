@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { CustomObjectsApi } from "@kubernetes/client-node";
+import { buildOpencodeConfigContent } from "../agent/config.js";
 import type { Config } from "../config.js";
 import type { BotProfile, EnvVar } from "../types.js";
 import { claimNameForThread } from "./naming.js";
@@ -100,6 +101,11 @@ export class SandboxManager {
       { name: "OPENCODE_SERVER_PASSWORD", value: input.password },
       ...this.config.claimEnv,
     ];
+
+    const opencodeConfigContent = buildOpencodeConfigContent(input.profile);
+    if (opencodeConfigContent) {
+      env.push({ name: "OPENCODE_CONFIG_CONTENT", value: opencodeConfigContent });
+    }
 
     return {
       apiVersion: "extensions.agents.x-k8s.io/v1alpha1",

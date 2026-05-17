@@ -1,5 +1,5 @@
 import type { Message, Thread } from "chat";
-import type { BotProfile } from "./types.js";
+import type { BotProfile, OpencodeConfig } from "./types.js";
 
 const defaultProfile: BotProfile = {
   id: "default",
@@ -10,6 +10,7 @@ const defaultProfile: BotProfile = {
     "You are running inside an isolated Kubernetes sandbox. Help the user with the requested coding task, keep them informed, and avoid touching unrelated files.",
   defaultModel: readDefaultModel(),
   tools: readTools(),
+  opencodeConfig: readOpencodeConfig(),
 };
 
 export const profiles: Record<string, BotProfile> = {
@@ -30,6 +31,24 @@ function readDefaultModel(): BotProfile["defaultModel"] {
   const providerID = process.env.AGENTBAY_DEFAULT_PROVIDER_ID;
   const modelID = process.env.AGENTBAY_DEFAULT_MODEL_ID;
   return providerID && modelID ? { providerID, modelID } : undefined;
+}
+
+function readOpencodeConfig(): OpencodeConfig | undefined {
+  const raw = process.env.AGENTBAY_OPENCODE_CONFIG_JSON;
+  if (!raw) return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`AGENTBAY_OPENCODE_CONFIG_JSON is not valid JSON: ${(error as Error).message}`);
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("AGENTBAY_OPENCODE_CONFIG_JSON must be a JSON object");
+  }
+
+  return parsed as OpencodeConfig;
 }
 
 function readTools(): Record<string, boolean> | undefined {

@@ -33,10 +33,8 @@ export async function* runPrompt(input: {
   for await (const event of events.stream) {
     if (!isSessionEvent(event, input.sessionID)) continue;
 
-    if (event.type === "message.part.updated") {
-      const { part, delta } = event.properties;
-      if (part.type === "text" && delta) yield delta;
-    }
+    const delta = textDelta(event, input.sessionID);
+    if (delta) yield delta;
 
     if (event.type === "permission.updated") {
       await input.client.postSessionIdPermissionsPermissionId({
@@ -51,6 +49,30 @@ export async function* runPrompt(input: {
     }
 
     if (event.type === "session.idle") return;
+  }
+}
+
+function textDelta(event: Event, sessionID: string): string | undefined {
+  const maybe = event as {
+    type: string;
+    properties: {
+      delta?: string;
+      field?: string;
+      sessionID?: string;
+      part?: { sessionID?: string; type?: string };
+    };
+  };
+
+  if (maybe.type === "message.part.delta") {
+    return maybe.properties.sessionID === sessionID && maybe.properties.field === "text"
+      ? maybe.properties.delta
+      : undefined;
+  }
+
+  if (maybe.type === "message.part.updated") {
+    return maybe.properties.part?.sessionID === sessionID && maybe.properties.part.type === "text"
+      ? maybe.properties.delta
+      : undefined;
   }
 }
 
