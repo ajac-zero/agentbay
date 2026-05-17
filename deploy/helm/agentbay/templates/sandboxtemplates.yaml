@@ -1,0 +1,122 @@
+{{- if .Values.sandboxTemplates.enabled -}}
+{{- $root := . -}}
+{{- range .Values.sandboxTemplates.templates }}
+{{- $t := . -}}
+{{- $ns := default (include "agentbay.claimsNamespace" $root) $t.namespace -}}
+---
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxTemplate
+metadata:
+  name: {{ required "sandboxTemplates.templates[].name is required" $t.name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agentbay.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: sandbox-template
+spec:
+{{- if $t.specOverride }}
+  {{- toYaml $t.specOverride | nindent 2 }}
+{{- else }}
+  envVarsInjectionPolicy: {{ $t.envVarsInjectionPolicy | default "Allowed" }}
+  service: {{ $t.service | default true }}
+  networkPolicyManagement: {{ $t.networkPolicyManagement | default "Managed" }}
+  networkPolicy:
+    ingress:
+      {{- if $t.networkPolicy.ingressFromOrchestrator }}
+      - from:
+          - podSelector:
+              matchLabels:
+                {{- include "agentbay.selectorLabels" $root | nindent 16 }}
+            namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: {{ $root.Release.Namespace }}
+        ports:
+          - protocol: TCP
+            port: {{ $t.port | default 4096 }}
+      {{- end }}
+      {{- with $t.networkPolicy.extraIngress }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+    egress:
+      {{- if $t.networkPolicy.egress.allowDNS }}
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: kube-system
+            podSelector:
+              matchLabels:
+                k8s-app: kube-dns
+        ports:
+          - protocol: UDP
+            port: 53
+          - protocol: TCP
+            port: 53
+      {{- end }}
+      {{- if $t.networkPolicy.egress.allowInternetExceptPrivate }}
+      - to:
+          - ipBlock:
+              cidr: 0.0.0.0/0
+              except:
+                - 10.0.0.0/8
+                - 172.16.0.0/12
+                - 192.168.0.0/16
+                - 169.254.0.0/16
+      {{- end }}
+      {{- with $t.networkPolicy.egress.extra }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+  podTemplate:
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      containers:
+        - name: opencode
+          image: "{{ $t.image.repository }}:{{ $t.image.tag }}"
+          imagePullPolicy: {{ $t.image.pullPolicy | default "IfNotPresent" }}
+          {{- with $t.command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $t.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          workingDir: {{ $t.workingDir | default "/workspace" }}
+          ports:
+            - containerPort: {{ $t.port | default 4096 }}
+              name: http
+          {{- with $t.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $t.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: workspace
+              mountPath: {{ $t.workingDir | default "/workspace" }}
+          {{- with $t.containerOverrides }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+      volumes:
+        - name: workspace
+          {{- if eq (default "emptyDir" $t.workspace.type) "persistentVolumeClaim" }}
+          ephemeral:
+            volumeClaimTemplate:
+              spec:
+                accessModes: ["ReadWriteOnce"]
+                {{- with $t.workspace.storageClassName }}
+                storageClassName: {{ . }}
+                {{- end }}
+                resources:
+                  requests:
+                    storage: {{ $t.workspace.size | default "1Gi" }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with $t.podSpecOverrides }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "agentbay.fullname" . }}-test-connection
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    # Run only when the user invokes `helm test`. Hook pods are deleted on
+    # success but kept on failure so logs can be inspected.
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:8.10.1
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c"]
+      args:
+        - |
+          set -eu
+          url="http://{{ include "agentbay.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/healthz"
+          echo "GET $url"
+          curl --silent --show-error --fail --max-time 5 --retry 10 --retry-all-errors --retry-delay 2 "$url"

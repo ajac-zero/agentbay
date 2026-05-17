@@ -1,0 +1,24 @@
+{{- if .Values.sandboxWarmPools.enabled -}}
+{{- $root := . -}}
+{{- range .Values.sandboxWarmPools.pools }}
+{{- $p := . -}}
+{{- $ns := default (include "agentbay.claimsNamespace" $root) $p.namespace -}}
+---
+apiVersion: extensions.agents.x-k8s.io/v1alpha1
+kind: SandboxWarmPool
+metadata:
+  name: {{ required "sandboxWarmPools.pools[].name is required" $p.name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "agentbay.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: sandbox-warmpool
+spec:
+  replicas: {{ $p.replicas | default 1 }}
+  sandboxTemplateRef:
+    name: {{ required "sandboxWarmPools.pools[].sandboxTemplateRef is required" $p.sandboxTemplateRef }}
+  {{- with $p.updateStrategy }}
+  updateStrategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

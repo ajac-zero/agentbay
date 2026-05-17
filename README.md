@@ -103,3 +103,26 @@ kubectl apply -f deploy/orchestrator.yaml
 ```
 
 The manifests are intentionally examples. Platform admins should own the `SandboxTemplate`, image, resource limits, network policy, and secret injection policy.
+
+### Helm chart
+
+A Helm chart for the orchestrator (Deployment, RBAC, optional in-cluster Redis, optional Ingress, optional `SandboxTemplate` / `SandboxWarmPool`) lives in [`deploy/helm/agentbay`](deploy/helm/agentbay). See its [README](deploy/helm/agentbay/README.md) for values, Redis modes, and the agent-sandbox prerequisite.
+
+The agent-sandbox CRDs and controllers must be installed in the cluster first:
+
+```bash
+TAG=v0.4.6
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$TAG/manifest.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$TAG/extensions.yaml
+```
+
+Then install the chart:
+
+```bash
+helm install agentbay deploy/helm/agentbay \
+  --namespace agents --create-namespace \
+  --set image.repository=ghcr.io/your-org/agentbay \
+  --set image.tag=latest \
+  --set adapters.slack.enabled=true \
+  --set secrets.existingSecret=agentbay-secrets
+```

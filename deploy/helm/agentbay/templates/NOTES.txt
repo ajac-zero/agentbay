@@ -1,0 +1,86 @@
+agentbay {{ .Chart.AppVersion }} is installing as release {{ .Release.Name }}
+in namespace {{ .Release.Namespace }}.
+
+SandboxClaims will be created in: {{ include "agentbay.claimsNamespace" . }}
+SandboxTemplate name:             {{ .Values.claims.templateName }}
+
+Chat SDK state backend:
+{{- $mode := include "agentbay.redis.mode" . }}
+{{- if eq $mode "in-cluster" }}
+  In-cluster Redis at redis://{{ include "agentbay.redis.fullname" . }}.{{ .Release.Namespace }}.svc:6379
+  {{- if not .Values.redis.persistence.enabled }}
+  (emptyDir — state is lost on Redis Pod restart. Set redis.persistence.enabled=true for durability.)
+  {{- end }}
+{{- else if eq $mode "external-url" }}
+  External Redis (URL provided via values).
+{{- else if eq $mode "external-secret" }}
+  External Redis (URL read from Secret {{ .Values.redis.external.existingSecret }} key {{ .Values.redis.external.existingSecretKey }}).
+{{- else }}
+  In-memory (Chat SDK default). Not suitable for multiple replicas or restarts.
+{{- end }}
+
+Enabled adapters:
+{{- $any := false }}
+{{- range $name, $adapter := .Values.adapters }}
+{{- if $adapter.enabled }}
+  - {{ $name }}
+{{- $any = true }}
+{{- end }}
+{{- end }}
+{{- if not $any }}
+  (none — enable one in values: adapters.<name>.enabled=true)
+{{- end }}
+
+Configure your chat platforms to send webhooks to:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  https://{{ .host }}/webhooks/<adapter>
+{{- end }}
+{{- else }}
+  http://{{ include "agentbay.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/webhooks/<adapter>
+
+  No Ingress was created. To expose the orchestrator externally, set
+  `ingress.enabled=true` (and configure TLS), or front the Service with
+  your own Ingress / Gateway / load balancer.
+{{- end }}
+
+Verify the orchestrator is healthy:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "agentbay.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "agentbay.fullname" . }} 8080:{{ .Values.service.port }}
+  curl http://127.0.0.1:8080/healthz
+
+SandboxTemplates:
+{{- if .Values.sandboxTemplates.enabled }}
+{{- range .Values.sandboxTemplates.templates }}
+  - {{ .name }} (namespace: {{ default (include "agentbay.claimsNamespace" $) .namespace }})
+{{- end }}
+{{- else }}
+  Not managed by this release (sandboxTemplates.enabled=false).
+  A SandboxTemplate named "{{ .Values.claims.templateName }}" must exist in
+  {{ include "agentbay.claimsNamespace" . }} before users can mention the bot.
+  See deploy/examples/sandbox-template.yaml for a starting point, or set
+  sandboxTemplates.enabled=true to manage templates from this chart.
+{{- end }}
+
+SandboxWarmPools:
+{{- if .Values.sandboxWarmPools.enabled }}
+{{- range .Values.sandboxWarmPools.pools }}
+  - {{ .name }} → {{ .sandboxTemplateRef }} (replicas: {{ .replicas }})
+{{- end }}
+{{- else }}
+  Not managed by this release (sandboxWarmPools.enabled=false).
+{{- end }}
+
+Prerequisite (not managed by this chart):
+  The agent-sandbox CRDs *and* controllers must already be installed in the
+  cluster — without the controllers, SandboxClaims will be created but never
+  reconciled into Pods, and the orchestrator will hang on every webhook.
+  Install them once per cluster (use a tag your platform has tested; the
+  e2e suite pins v0.4.6):
+
+    TAG=v0.4.6
+    kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$TAG/manifest.yaml
+    kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$TAG/extensions.yaml
+
+  Verify with:
+    kubectl -n agent-sandbox-system get deploy agent-sandbox-controller

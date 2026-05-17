@@ -75,11 +75,14 @@ DEBUG=testcontainers* TESTCONTAINERS_RYUK_DISABLED=true pnpm test:e2e
 
 `test/e2e/sandbox-manager.test.ts` is the heavy Kubernetes layer. It starts k3s with `@testcontainers/k3s`, applies pinned upstream `kubernetes-sigs/agent-sandbox` manifests, waits for the real controller and CRDs, creates a real `SandboxTemplate`, provisions a real `SandboxClaim` through `SandboxManager`, runs a fake opencode server in the resulting sandbox Pod, port-forwards to it, and verifies `createSession` plus `runPrompt` streaming.
 
+`test/e2e/helm-chart.test.ts` validates the Helm chart in `deploy/helm/agentbay/`. The `static validation` describe runs `helm lint` and `helm template` over several value combinations (default, external Redis from Secret, in-memory state, SandboxTemplate with auto-templated NetworkPolicy selectors, helm-test Pod) without a cluster. The `against a live cluster` describe spins up k3s, installs the agent-sandbox CRDs and controllers, then runs `helm install --dry-run=server` for default, kitchen-sink (SandboxTemplate + SandboxWarmPool + Ingress), and external-Redis configurations to confirm the rendered manifests are accepted by a real kube-apiserver with the real CRD schemas. Requires `helm` on `PATH`.
+
 ## Requirements
 
 - `pnpm` 11.x.
 - Docker or another Testcontainers-compatible runtime.
 - `kubectl` for the k3s-backed test, because the test uses `kubectl port-forward` to reach the sandbox Pod from the host process.
+- `helm` for `test/e2e/helm-chart.test.ts` (both the static validation and the server-side dry-run cases).
 - Network access to fetch pinned `kubernetes-sigs/agent-sandbox` release manifests unless they are already cached by the environment.
 - Enough time for the k3s test. A normal run can take around 60-90 seconds, mostly from starting k3s and controller/sandbox Pods.
 

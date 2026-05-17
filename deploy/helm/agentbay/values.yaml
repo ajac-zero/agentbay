@@ -1,0 +1,312 @@
+# -- Default values for agentbay.
+# -- Override any of these in your own values file passed to `helm install -f`.
+
+# -- Optional override for the release short name used in resource names.
+# -- Defaults to the chart name; truncated to 63 characters when combined with
+# -- the release name.
+nameOverride: ""
+
+# -- Optional full override for the fully qualified app name.
+# -- When set, this exact name is used for all resources.
+fullnameOverride: ""
+
+image:
+  # -- Orchestrator container image repository.
+  repository: ghcr.io/example/agentbay
+  # -- Image tag. Defaults to the chart's appVersion when empty.
+  tag: ""
+  # -- Image pull policy.
+  pullPolicy: IfNotPresent
+
+# -- Image pull secrets used by the orchestrator and (when enabled) the
+# -- in-cluster Redis Deployment.
+imagePullSecrets: []
+
+# -- Number of orchestrator replicas. Webhooks are stateless, but session
+# -- continuity relies on the configured state backend (Redis recommended
+# -- when running more than one replica).
+replicaCount: 1
+
+# -- Resource requests and limits for the orchestrator container.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# -- Pod-level security context applied to the orchestrator Pod.
+podSecurityContext: {}
+# -- Container-level security context applied to the orchestrator container.
+securityContext: {}
+
+# -- Node selector applied to the orchestrator Pod.
+nodeSelector: {}
+# -- Tolerations applied to the orchestrator Pod.
+tolerations: []
+# -- Affinity rules applied to the orchestrator Pod.
+affinity: {}
+
+# -- Additional labels merged into every chart-managed resource.
+extraLabels: {}
+# -- Additional annotations merged into every chart-managed resource.
+extraAnnotations: {}
+# -- Additional annotations applied only to the orchestrator Pod template.
+podAnnotations: {}
+
+service:
+  # -- Service type for the orchestrator.
+  type: ClusterIP
+  # -- Service port exposed in front of the orchestrator HTTP listener.
+  port: 80
+
+ingress:
+  # -- Whether to create an Ingress for the orchestrator webhook routes.
+  enabled: false
+  # -- IngressClass name. Leave empty to use the cluster default.
+  className: ""
+  # -- Annotations applied to the Ingress.
+  annotations: {}
+  # -- Hosts to route. Each entry can override its paths.
+  hosts:
+    - host: agentbay.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- TLS configuration for the Ingress.
+  tls: []
+  #  - secretName: agentbay-tls
+  #    hosts:
+  #      - agentbay.example.com
+
+serviceAccount:
+  # -- Whether to create the orchestrator ServiceAccount. Disable to use a
+  # -- pre-existing ServiceAccount in the release namespace.
+  create: true
+  # -- Name of the ServiceAccount. Defaults to the chart fullname when empty.
+  name: ""
+  # -- Annotations applied to the ServiceAccount.
+  annotations: {}
+
+rbac:
+  # -- Whether to create the Role and RoleBinding granting the orchestrator
+  # -- access to SandboxClaim resources in `claims.namespace`.
+  create: true
+
+claims:
+  # -- Namespace where SandboxClaims are created by the orchestrator.
+  # -- Defaults to the release namespace. The orchestrator's RBAC is scoped
+  # -- to this namespace.
+  namespace: ""
+  # -- Name of the SandboxTemplate used by the default profile.
+  templateName: opencode-template
+  # -- SandboxClaim.spec.warmpool value. Use "none" to disable warm pools.
+  warmpool: none
+  # -- Comma-separated list of orchestrator env vars to inject into each
+  # -- SandboxClaim when present. Mirrors AGENTBAY_CLAIM_ENV_KEYS.
+  envKeys: "ANTHROPIC_API_KEY,OPENAI_API_KEY,GITHUB_TOKEN"
+
+opencode:
+  # -- Port exposed by `opencode serve` inside each sandbox Pod.
+  port: 4096
+  # -- Working directory used by the opencode instance inside the sandbox.
+  directory: /workspace
+
+orchestrator:
+  # -- Port the orchestrator HTTP server listens on.
+  port: 3000
+  # -- Extra orchestrator env vars expressed as a name/value list. These are
+  # -- attached as plain `env` entries; use `secrets` for sensitive values.
+  extraEnv: []
+  #  - name: AGENTBAY_BOT_USER_NAME
+  #    value: agentbay
+  # -- Extra `envFrom` entries appended after the chart-managed Secret. Use
+  # -- this to layer in additional ConfigMaps or Secrets you manage outside
+  # -- this chart.
+  extraEnvFrom: []
+  #  - configMapRef:
+  #      name: my-extra-config
+
+# -- Adapter toggles. When an adapter is enabled, the orchestrator expects the
+# -- corresponding env vars to be available in `secrets.data` (or via
+# -- `secrets.existingSecret`). The chart sets AGENTBAY_<NAME>_ENABLED=true so
+# -- the orchestrator surfaces a clear error if any required variable is
+# -- missing at startup.
+adapters:
+  slack:
+    enabled: false
+  teams:
+    enabled: false
+  gchat:
+    enabled: false
+  discord:
+    enabled: false
+  telegram:
+    enabled: false
+  github:
+    enabled: false
+  linear:
+    enabled: false
+  whatsapp:
+    enabled: false
+  messenger:
+    enabled: false
+
+secrets:
+  # -- Whether the chart should create a Secret containing the orchestrator
+  # -- env vars listed in `secrets.data`. Set to false to use an existing
+  # -- Secret managed outside this chart.
+  create: true
+  # -- Name of an existing Secret to mount as `envFrom`. When set, the chart
+  # -- will not create a Secret of its own. The Secret must live in the
+  # -- release namespace and contain env vars under their canonical names
+  # -- (e.g. SLACK_BOT_TOKEN, ANTHROPIC_API_KEY, REDIS_URL, ...).
+  existingSecret: ""
+  # -- Inline secret data. Each key becomes an env var of the same name on
+  # -- the orchestrator container via `envFrom`. Leave empty and reference
+  # -- an existing Secret instead if you do not want plaintext values in
+  # -- your values file.
+  data: {}
+  #  SLACK_BOT_TOKEN: xoxb-...
+  #  SLACK_SIGNING_SECRET: ...
+  #  ANTHROPIC_API_KEY: sk-ant-...
+
+redis:
+  # -- Enable an in-cluster Redis Deployment for Chat SDK state. When false,
+  # -- the orchestrator either uses `redis.external` or falls back to the
+  # -- in-memory state adapter.
+  enabled: true
+  image:
+    repository: redis
+    tag: "7-alpine"
+    pullPolicy: IfNotPresent
+  # -- Persistence for in-cluster Redis. When disabled, Redis uses an
+  # -- emptyDir and state is lost on Pod restart.
+  persistence:
+    enabled: false
+    size: 1Gi
+    storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+  # -- Resource requests and limits for the in-cluster Redis container.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  # -- Use an external Redis instead of the in-cluster one. Ignored when
+  # -- `redis.enabled` is true. Set exactly one of `url` or `existingSecret`.
+  external:
+    # -- Full redis:// URL passed to the orchestrator as REDIS_URL.
+    url: ""
+    # -- Reference an existing Secret containing the REDIS_URL value.
+    existingSecret: ""
+    # -- Key inside `existingSecret` whose value is the REDIS_URL.
+    existingSecretKey: REDIS_URL
+
+# -- Manage SandboxTemplate resources from this chart. Disabled by default
+# -- because the agent-sandbox CRDs must be installed in the cluster first
+# -- and some platforms prefer to manage templates through GitOps or policy
+# -- engines (OPA, Kyverno).
+sandboxTemplates:
+  # -- Whether to render any SandboxTemplate resources.
+  enabled: false
+  # -- One entry per template. Each entry deep-merges over the built-in
+  # -- defaults documented in `templates/_sandbox-template-defaults.tpl`.
+  # -- The first template's `name` should match `claims.templateName` so
+  # -- the orchestrator's default profile resolves to a real template.
+  templates:
+    - name: opencode-template
+      # -- Namespace for the template. Defaults to claims.namespace.
+      namespace: ""
+      image:
+        repository: ghcr.io/example/opencode-sandbox
+        tag: latest
+        pullPolicy: IfNotPresent
+      # -- Port `opencode serve` listens on inside the sandbox Pod. Must
+      # -- match `opencode.port` on the orchestrator.
+      port: 4096
+      workingDir: /workspace
+      command: ["opencode"]
+      args: ["serve", "--hostname", "0.0.0.0", "--port", "4096"]
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+      # -- Workspace volume mounted at `workingDir`. Use `emptyDir` for
+      # -- ephemeral sessions or `persistentVolumeClaim` for PVC-backed
+      # -- session continuity (see DESIGN.md §8 D5).
+      workspace:
+        type: emptyDir
+        size: 1Gi
+        storageClassName: ""
+      # -- SandboxTemplate.spec.envVarsInjectionPolicy. Must be `Allowed`
+      # -- for the orchestrator to inject per-claim secrets via
+      # -- `claim.spec.env`.
+      envVarsInjectionPolicy: Allowed
+      # -- SandboxTemplate.spec.service. Required for the orchestrator to
+      # -- reach the Pod via DNS.
+      service: true
+      # -- SandboxTemplate.spec.networkPolicyManagement.
+      networkPolicyManagement: Managed
+      networkPolicy:
+        # -- Auto-render an ingress rule that only allows traffic from the
+        # -- orchestrator Pods this chart deploys. Selectors are templated
+        # -- from the orchestrator's labels so they cannot drift.
+        ingressFromOrchestrator: true
+        # -- Extra `ingress` rules appended verbatim to the policy.
+        extraIngress: []
+        egress:
+          # -- Allow egress to kube-dns on UDP/TCP 53.
+          allowDNS: true
+          # -- Allow egress to all public IPv4 except RFC1918 + link-local.
+          allowInternetExceptPrivate: true
+          # -- Extra `egress` rules appended verbatim to the policy.
+          extra: []
+      # -- Extra container `env` entries appended to the opencode container.
+      extraEnv: []
+      # -- Pod-level overrides applied verbatim under spec.podTemplate.spec.
+      podSpecOverrides: {}
+      # -- Container-level overrides applied verbatim under the opencode
+      # -- container.
+      containerOverrides: {}
+      # -- Full takeover of spec. When set, everything above is ignored and
+      # -- this object is used as `spec` exactly.
+      specOverride: {}
+
+# -- Manage SandboxWarmPool resources from this chart. Disabled by default
+# -- for the same reason as `sandboxTemplates`.
+sandboxWarmPools:
+  # -- Whether to render any SandboxWarmPool resources.
+  enabled: false
+  pools:
+    - name: opencode-default
+      # -- Namespace for the warmpool. Defaults to claims.namespace.
+      namespace: ""
+      # -- Name of the SandboxTemplate this pool replenishes.
+      sandboxTemplateRef: opencode-template
+      replicas: 2
+      updateStrategy:
+        type: OnReplenish
+
+# -- Readiness probe configuration for the orchestrator container.
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 0
+  periodSeconds: 10
+
+# -- Liveness probe configuration for the orchestrator container.
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 30

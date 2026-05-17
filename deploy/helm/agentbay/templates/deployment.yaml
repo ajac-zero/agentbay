@@ -1,0 +1,124 @@
+{{- $mode := include "agentbay.redis.mode" . -}}
+{{- $secretName := include "agentbay.secretName" . -}}
+{{- $useChartSecret := or .Values.secrets.create .Values.secrets.existingSecret -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentbay.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+  {{- with .Values.extraAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentbay.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentbay.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "agentbay.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: agentbay
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.orchestrator.port }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ .Values.orchestrator.port | quote }}
+            - name: AGENTBAY_KUBE_NAMESPACE
+              value: {{ include "agentbay.claimsNamespace" . | quote }}
+            - name: AGENTBAY_TEMPLATE_NAME
+              value: {{ .Values.claims.templateName | quote }}
+            - name: AGENTBAY_WARMPOOL
+              value: {{ .Values.claims.warmpool | quote }}
+            - name: AGENTBAY_CLAIM_ENV_KEYS
+              value: {{ .Values.claims.envKeys | quote }}
+            - name: AGENTBAY_OPENCODE_PORT
+              value: {{ .Values.opencode.port | quote }}
+            - name: AGENTBAY_OPENCODE_DIRECTORY
+              value: {{ .Values.opencode.directory | quote }}
+            {{- range $name, $adapter := .Values.adapters }}
+            {{- if $adapter.enabled }}
+            {{- if eq $name "gchat" }}
+            - name: AGENTBAY_GOOGLE_CHAT_ENABLED
+              value: "true"
+            {{- else }}
+            - name: AGENTBAY_{{ upper $name }}_ENABLED
+              value: "true"
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if eq $mode "in-cluster" }}
+            - name: REDIS_URL
+              value: "redis://{{ include "agentbay.redis.fullname" . }}.{{ .Release.Namespace }}.svc:6379"
+            {{- else if eq $mode "external-url" }}
+            - name: REDIS_URL
+              value: {{ .Values.redis.external.url | quote }}
+            {{- else if eq $mode "external-secret" }}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.external.existingSecret }}
+                  key: {{ .Values.redis.external.existingSecretKey }}
+            {{- end }}
+            {{- with .Values.orchestrator.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            {{- if $useChartSecret }}
+            - secretRef:
+                name: {{ $secretName }}
+                optional: {{ not .Values.secrets.create }}
+            {{- end }}
+            {{- with .Values.orchestrator.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
