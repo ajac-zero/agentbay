@@ -123,6 +123,14 @@ describe("SandboxManager e2e", () => {
       expect.arrayContaining([
         { name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
         { name: "EXTRA_ENV", value: "from-test" },
+        {
+          name: "OPENCODE_CONFIG_CONTENT",
+          value: JSON.stringify({
+            model: "anthropic/claude-sonnet-4-5",
+            tools: { bash: false },
+            permission: { "*": "allow" },
+          }),
+        },
       ]),
     );
     expect(password).toEqual(expect.any(String));
@@ -198,6 +206,9 @@ function testProfile(): BotProfile {
     templateName: "opencode-template",
     warmpool: "none",
     systemPrompt: "unused in SandboxManager tests",
+    defaultModel: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
+    tools: { bash: false },
+    opencodeConfig: { permission: { "*": "allow" } },
   };
 }
 
@@ -495,8 +506,11 @@ const server = http.createServer((request, response) => {
           part: { id: "part-1", sessionID: "session-e2e", messageID: "message-1", type: "text", text: "Hello" },
           delta: "Hello",
         }));
-        sendEvent(event("message.part.updated", {
-          part: { id: "part-1", sessionID: "session-e2e", messageID: "message-1", type: "text", text: "Hello from runPrompt" },
+        sendEvent(event("message.part.delta", {
+          sessionID: "session-e2e",
+          messageID: "message-1",
+          partID: "part-1",
+          field: "text",
           delta: " from runPrompt",
         }));
         sendEvent(event("session.idle", { sessionID: "session-e2e" }));
