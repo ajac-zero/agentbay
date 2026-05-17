@@ -1,0 +1,29 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "agentbay.fullname" . }}-sandboxclaims
+  namespace: {{ include "agentbay.claimsNamespace" . }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxclaims"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agentbay.fullname" . }}-sandboxclaims
+  namespace: {{ include "agentbay.claimsNamespace" . }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agentbay.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "agentbay.fullname" . }}-sandboxclaims
+{{- end }}
