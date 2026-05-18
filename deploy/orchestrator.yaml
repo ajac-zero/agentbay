@@ -28,10 +28,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: AGENTBAY_TEMPLATE_NAME
-              value: opencode-template
-            - name: AGENTBAY_WARMPOOL
-              value: none
+            - name: AGENTBAY_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: agentbay-secrets
+                  key: database-url
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:

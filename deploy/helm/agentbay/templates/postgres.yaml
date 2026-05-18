@@ -1,0 +1,121 @@
+{{- if .Values.database.enabled -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "agentbay.postgres.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: {{ .Values.database.auth.password | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agentbay.postgres.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "agentbay.postgres.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+---
+{{- if .Values.database.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "agentbay.postgres.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  accessModes:
+    {{- toYaml .Values.database.persistence.accessModes | nindent 4 }}
+  {{- with .Values.database.persistence.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.database.persistence.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentbay.postgres.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "agentbay.postgres.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentbay.postgres.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: postgres
+          image: "{{ .Values.database.image.repository }}:{{ .Values.database.image.tag }}"
+          imagePullPolicy: {{ .Values.database.image.pullPolicy }}
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.database.auth.username | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.database.auth.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentbay.postgres.fullname" . }}
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.database.auth.username | quote }}, "-d", {{ .Values.database.auth.database | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: postgres
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          {{- with .Values.database.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          {{- if .Values.database.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "agentbay.postgres.fullname" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}

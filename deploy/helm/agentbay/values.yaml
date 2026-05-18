@@ -99,9 +99,11 @@ claims:
   # -- Defaults to the release namespace. The orchestrator's RBAC is scoped
   # -- to this namespace.
   namespace: ""
-  # -- Name of the SandboxTemplate used by the default profile.
+  # -- Convenience default SandboxTemplate name for chart-managed templates.
+  # -- Runtime selection comes from DB-backed SandboxProfile.templateName.
   templateName: opencode-template
-  # -- SandboxClaim.spec.warmpool value. Use "none" to disable warm pools.
+  # -- Convenience default SandboxWarmPool reference for chart-managed examples.
+  # -- Runtime selection comes from DB-backed SandboxProfile.warmpool.
   warmpool: none
   # -- Comma-separated list of orchestrator env vars to inject into each
   # -- SandboxClaim when present. Mirrors AGENTBAY_CLAIM_ENV_KEYS.
@@ -127,6 +129,12 @@ orchestrator:
   extraEnvFrom: []
   #  - configMapRef:
   #      name: my-extra-config
+
+admin:
+  # -- Admin bearer token for `/admin/runtime/*`. When empty and this chart
+  # -- creates its own Secret, Helm generates a token and preserves it across
+  # -- upgrades. Existing Secrets should provide AGENTBAY_ADMIN_TOKEN directly.
+  token: ""
 
 # -- Adapter toggles. When an adapter is enabled, the orchestrator expects the
 # -- corresponding env vars to be available in `secrets.data` (or via
@@ -207,6 +215,49 @@ redis:
     # -- Key inside `existingSecret` whose value is the REDIS_URL.
     existingSecretKey: REDIS_URL
 
+database:
+  # -- Enable an in-cluster Postgres Deployment for runtime configuration.
+  # -- When false, use database.external or provide AGENTBAY_DATABASE_URL via secrets.
+  enabled: true
+  image:
+    repository: postgres
+    tag: "16-alpine"
+    pullPolicy: IfNotPresent
+  auth:
+    # -- Database user for the in-cluster Postgres instance.
+    username: agentbay
+    # -- Database name for the in-cluster Postgres instance.
+    database: agentbay
+    # -- Password for the in-cluster Postgres instance. Change for production.
+    password: agentbay
+  # -- Persistence for in-cluster Postgres. When disabled, Postgres uses an
+  # -- emptyDir and runtime config is lost on Pod restart.
+  persistence:
+    enabled: false
+    size: 8Gi
+    storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+  # -- Resource requests and limits for the in-cluster Postgres container.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # -- Set AGENTBAY_DATABASE_SSL=true for Postgres providers that require SSL.
+  ssl: false
+  # -- Use an external Postgres instead of the in-cluster one. Ignored when
+  # -- `database.enabled` is true. Set exactly one of `url` or `existingSecret`.
+  external:
+    # -- Full postgres:// URL passed to the orchestrator as AGENTBAY_DATABASE_URL.
+    url: ""
+    # -- Reference an existing Secret containing the Postgres URL.
+    existingSecret: ""
+    # -- Key inside `existingSecret` whose value is the Postgres URL.
+    existingSecretKey: AGENTBAY_DATABASE_URL
+
 # -- Manage SandboxTemplate resources from this chart. Disabled by default
 # -- because the agent-sandbox CRDs must be installed in the cluster first
 # -- and some platforms prefer to manage templates through GitOps or policy
@@ -216,8 +267,7 @@ sandboxTemplates:
   enabled: false
   # -- One entry per template. Each entry deep-merges over the built-in
   # -- defaults documented in `templates/_sandbox-template-defaults.tpl`.
-  # -- The first template's `name` should match `claims.templateName` so
-  # -- the orchestrator's default profile resolves to a real template.
+  # -- The first template's `name` usually matches `claims.templateName`.
   templates:
     - name: opencode-template
       # -- Namespace for the template. Defaults to claims.namespace.

@@ -4,19 +4,25 @@ import type { Adapter, Chat, Message, SentMessage, StateAdapter, Thread } from "
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerHandlers } from "../../src/chat/handlers.js";
 import type { Config } from "../../src/config.js";
+import { runWithBotSlug } from "../../src/runtime/context.js";
+import { resolveRuntime, sandboxProfileHash, type RuntimeStore } from "../../src/runtime/store.js";
+import type { ResolvedRuntime } from "../../src/runtime/types.js";
 import type { SandboxManager } from "../../src/sandbox/manager.js";
 import { createMemoryState } from "../../src/state/memory.js";
 import type { ClaimedSandbox } from "../../src/sandbox/types.js";
-import type { BotProfile, ThreadState } from "../../src/types.js";
+import type { ThreadState } from "../../src/types.js";
+import { defaultRuntimeSnapshot, TestRuntimeStore } from "./runtime-store-fixture.js";
 
 describe("chat handlers e2e", () => {
   let opencode: FakeOpencodeServer;
   let config: Config;
+  let runtimeStore: RuntimeStore;
   let state: StateAdapter;
 
   beforeEach(async () => {
     opencode = await startFakeOpencodeServer();
     config = testConfig(opencode.port);
+    runtimeStore = new TestRuntimeStore();
     state = createMemoryState();
   });
 
@@ -29,20 +35,24 @@ describe("chat handlers e2e", () => {
     const sandboxManager = new FakeSandboxManager(opencode.endpoint("claim-new"));
     const thread = new FakeThread("thread-new");
 
-    registerHandlers(chat.asChat(), { config, sandboxManager: sandboxManager.asSandboxManager(), state });
-    await chat.newMention(thread, message("message-new", thread.id, "first prompt"));
+    registerHandlers(chat.asChat(), { config, runtimeStore, sandboxManager: sandboxManager.asSandboxManager(), state });
+    await runWithBotSlug("agentbay", () => chat.newMention(thread, message("message-new", thread.id, "first prompt")));
 
     expect(thread.subscribed).toBe(true);
     expect(thread.typing).toEqual(["Preparing sandbox"]);
     expect(thread.posts).toEqual(["Spinning up an isolated opencode sandbox...", "Hello from fake opencode"]);
     expect(thread.currentState).toMatchObject({
       claimName: "claim-new",
+      botID: "bot-default",
+      agentProfileID: "agent-profile-default",
+      opencodeAgentName: "agentbay",
       password: opencode.password,
       podFQDN: "127.0.0.1",
-      profileID: "default",
+      sandboxProfileHash: expect.any(String),
+      sandboxProfileID: "sandbox-profile-default",
       sessionID: "session-e2e",
     });
-    expect(sandboxManager.claims).toEqual([{ profileID: "default", threadId: thread.id }]);
+    expect(sandboxManager.claims).toEqual([{ agentProfileID: "agent-profile-default", botID: "bot-default", threadId: thread.id }]);
     expect(sandboxManager.currentReadyChecks).toEqual([]);
     expect(sandboxManager.releases).toEqual([]);
   });
@@ -52,7 +62,7 @@ describe("chat handlers e2e", () => {
     const sandboxManager = new FakeSandboxManager(opencode.endpoint("unused"));
     const thread = new FakeThread("thread-existing", existingState("claim-existing"));
 
-    registerHandlers(chat.asChat(), { config, sandboxManager: sandboxManager.asSandboxManager(), state });
+    registerHandlers(chat.asChat(), { config, runtimeStore, sandboxManager: sandboxManager.asSandboxManager(), state });
     await chat.subscribedMessage(thread, message("message-existing", thread.id, "continue prompt"));
 
     expect(thread.subscribed).toBe(false);
@@ -71,7 +81,7 @@ describe("chat handlers e2e", () => {
       createdAt: new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString(),
     });
 
-    registerHandlers(chat.asChat(), { config, sandboxManager: sandboxManager.asSandboxManager(), state });
+    registerHandlers(chat.asChat(), { config, runtimeStore, sandboxManager: sandboxManager.asSandboxManager(), state });
     await chat.subscribedMessage(thread, message("message-expired", thread.id, "restart prompt"));
 
     expect(thread.posts).toEqual([
@@ -81,7 +91,63 @@ describe("chat handlers e2e", () => {
     ]);
     expect(thread.currentState).toMatchObject({ claimName: "claim-restarted", sessionID: "session-e2e" });
     expect(sandboxManager.releases).toEqual(["claim-expired"]);
-    expect(sandboxManager.claims).toEqual([{ profileID: "default", threadId: thread.id }]);
+    expect(sandboxManager.claims).toEqual([{ agentProfileID: "agent-profile-default", botID: "bot-default", threadId: thread.id }]);
+  });
+
+  it("restarts when stored runtime fields drift from the resolved runtime", async () => {
+    const chat = new FakeChat();
+    const sandboxManager = new FakeSandboxManager(opencode.endpoint("claim-runtime-drift"));
+    const thread = new FakeThread("thread-runtime-drift", existingState("claim-old-runtime"));
+    const snapshot = defaultRuntimeSnapshot();
+    snapshot.agentProfiles[0] = { ...snapshot.agentProfiles[0]!, opencodeAgentName: "reviewer" };
+
+    registerHandlers(chat.asChat(), {
+      config,
+      runtimeStore: new TestRuntimeStore(snapshot),
+      sandboxManager: sandboxManager.asSandboxManager(),
+      state,
+    });
+    await chat.subscribedMessage(thread, message("message-runtime-drift", thread.id, "use updated runtime"));
+
+    expect(thread.posts).toEqual([
+      "Agent runtime changed; starting a fresh sandbox with the updated runtime...",
+      "Spinning up an isolated opencode sandbox...",
+      "Hello from fake opencode",
+    ]);
+    expect(thread.currentState).toMatchObject({
+      claimName: "claim-runtime-drift",
+      opencodeAgentName: "reviewer",
+      sessionID: "session-e2e",
+    });
+    expect(sandboxManager.releases).toEqual(["claim-old-runtime"]);
+  });
+
+  it("restarts when sandbox profile contents change under the same id", async () => {
+    const chat = new FakeChat();
+    const sandboxManager = new FakeSandboxManager(opencode.endpoint("claim-sandbox-profile-drift"));
+    const thread = new FakeThread("thread-sandbox-profile-drift", existingState("claim-old-sandbox-profile"));
+    const snapshot = defaultRuntimeSnapshot();
+    snapshot.sandboxProfiles[0] = { ...snapshot.sandboxProfiles[0]!, templateName: "new-opencode-template" };
+
+    registerHandlers(chat.asChat(), {
+      config,
+      runtimeStore: new TestRuntimeStore(snapshot),
+      sandboxManager: sandboxManager.asSandboxManager(),
+      state,
+    });
+    await chat.subscribedMessage(thread, message("message-sandbox-profile-drift", thread.id, "use updated sandbox"));
+
+    expect(thread.posts).toEqual([
+      "Agent runtime changed; starting a fresh sandbox with the updated runtime...",
+      "Spinning up an isolated opencode sandbox...",
+      "Hello from fake opencode",
+    ]);
+    expect(thread.currentState).toMatchObject({
+      claimName: "claim-sandbox-profile-drift",
+      sandboxProfileHash: sandboxProfileHash(snapshot.sandboxProfiles[0]!),
+      sessionID: "session-e2e",
+    });
+    expect(sandboxManager.releases).toEqual(["claim-old-sandbox-profile"]);
   });
 
   it("restarts when the stored sandbox claim is unavailable", async () => {
@@ -89,7 +155,7 @@ describe("chat handlers e2e", () => {
     const sandboxManager = new FakeSandboxManager(opencode.endpoint("claim-after-missing"), { ready: false });
     const thread = new FakeThread("thread-missing", existingState("claim-missing"));
 
-    registerHandlers(chat.asChat(), { config, sandboxManager: sandboxManager.asSandboxManager(), state });
+    registerHandlers(chat.asChat(), { config, runtimeStore, sandboxManager: sandboxManager.asSandboxManager(), state });
     await chat.subscribedMessage(thread, message("message-missing", thread.id, "recover prompt"));
 
     expect(thread.posts).toEqual([
@@ -100,7 +166,7 @@ describe("chat handlers e2e", () => {
     expect(thread.currentState).toMatchObject({ claimName: "claim-after-missing", sessionID: "session-e2e" });
     expect(sandboxManager.currentReadyChecks).toEqual([{ claimName: "claim-missing", password: opencode.password }]);
     expect(sandboxManager.releases).toEqual(["claim-missing"]);
-    expect(sandboxManager.claims).toEqual([{ profileID: "default", threadId: thread.id }]);
+    expect(sandboxManager.claims).toEqual([{ agentProfileID: "agent-profile-default", botID: "bot-default", threadId: thread.id }]);
   });
 });
 
@@ -180,7 +246,7 @@ class FakeThread {
 }
 
 class FakeSandboxManager {
-  readonly claims: Array<{ profileID: string; threadId: string }> = [];
+  readonly claims: Array<{ agentProfileID: string; botID: string; threadId: string }> = [];
   readonly currentReadyChecks: Array<{ claimName: string; password: string }> = [];
   readonly releases: string[] = [];
 
@@ -191,8 +257,8 @@ class FakeSandboxManager {
 
   asSandboxManager(): SandboxManager {
     return {
-      claimFor: async (threadId: string, profile: BotProfile) => {
-        this.claims.push({ profileID: profile.id, threadId });
+      claimFor: async (threadId: string, runtime: ResolvedRuntime) => {
+        this.claims.push({ agentProfileID: runtime.agentProfile.id, botID: runtime.bot.id, threadId });
         return this.sandbox;
       },
       currentReadyClaim: async (claimName: string, password: string) => {
@@ -308,14 +374,28 @@ function testConfig(opencodePort: number): Config {
 }
 
 function existingState(claimName: string): ThreadState {
+  const runtime = defaultRuntime();
   return {
+    agentProfileID: runtime.agentProfile.id,
+    botID: runtime.bot.id,
     claimName,
     createdAt: new Date().toISOString(),
+    opencodeAgentName: runtime.opencodeAgentName,
+    opencodeConfigHash: runtime.opencodeConfig.configHash,
+    opencodeConfigID: runtime.opencodeConfig.id,
     password: "handler-secret",
     podFQDN: "127.0.0.1",
-    profileID: "default",
+    sandboxProfileHash: sandboxProfileHash(runtime.sandboxProfile),
+    sandboxProfileID: runtime.sandboxProfile.id,
     sessionID: "session-e2e",
   };
+}
+
+function defaultRuntime(): ResolvedRuntime {
+  const snapshot = defaultRuntimeSnapshot();
+  const bot = snapshot.bots[0];
+  if (!bot) throw new Error("seed runtime snapshot did not include a bot");
+  return resolveRuntime(snapshot, bot, bot.defaultAgentProfileID);
 }
 
 function message(id: string, threadId: string, text: string): Message {

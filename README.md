@@ -38,11 +38,17 @@ pnpm dev
 |---|---:|---|
 | `PORT` | `3000` | HTTP port for health and webhooks. |
 | `AGENTBAY_KUBE_NAMESPACE` | `agents` | Namespace where `SandboxClaim`s are created. |
-| `AGENTBAY_TEMPLATE_NAME` | `opencode-template` | `SandboxTemplate` used by the default profile. |
-| `AGENTBAY_WARMPOOL` | `none` | `SandboxClaim.spec.warmpool`. |
 | `AGENTBAY_OPENCODE_PORT` | `4096` | Port exposed by `opencode serve` in the sandbox. |
 | `AGENTBAY_OPENCODE_DIRECTORY` | `/workspace` | opencode instance directory. |
 | `REDIS_URL` | unset | Enables persistent Chat SDK state; otherwise in-memory state is used. |
+| `AGENTBAY_DATABASE_URL` / `DATABASE_URL` | required unless host vars are set | Postgres URL for bot/runtime/profile storage. Startup creates missing tables. |
+| `AGENTBAY_DATABASE_HOST` | unset | Alternative to URL-based config; pair with `AGENTBAY_DATABASE_USER`, `AGENTBAY_DATABASE_PASSWORD`, and `AGENTBAY_DATABASE_NAME`. |
+| `AGENTBAY_DATABASE_PORT` | `5432` | Postgres port when using `AGENTBAY_DATABASE_HOST`. |
+| `AGENTBAY_DATABASE_USER` | unset | Postgres user when using `AGENTBAY_DATABASE_HOST`. |
+| `AGENTBAY_DATABASE_PASSWORD` | unset | Postgres password when using `AGENTBAY_DATABASE_HOST`. |
+| `AGENTBAY_DATABASE_NAME` | unset | Postgres database when using `AGENTBAY_DATABASE_HOST`. |
+| `AGENTBAY_DATABASE_SSL` | `false` | Enables SSL for Postgres connections. |
+| `AGENTBAY_ADMIN_TOKEN` | required for bootstrap | Enables bearer-token-protected runtime CRUD routes under `/admin/runtime`. |
 | `AGENTBAY_SLACK_ENABLED` | auto | Enables Slack when `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` are present. |
 | `AGENTBAY_TEAMS_ENABLED` | auto | Enables Teams when `TEAMS_APP_ID` and `TEAMS_APP_PASSWORD` are present. |
 | `AGENTBAY_GOOGLE_CHAT_ENABLED` | auto | Enables Google Chat when auth and webhook verification env vars are present. |
@@ -59,21 +65,55 @@ pnpm dev
 Enabled adapter webhooks are mounted at:
 
 ```text
-ANY /webhooks/slack
-ANY /webhooks/teams
-ANY /webhooks/gchat
-ANY /webhooks/discord
-ANY /webhooks/telegram
-ANY /webhooks/github
-ANY /webhooks/linear
-ANY /webhooks/whatsapp
-ANY /webhooks/messenger
+ANY /agents/:botSlug/webhooks/slack
+ANY /agents/:botSlug/webhooks/teams
+ANY /agents/:botSlug/webhooks/gchat
+ANY /agents/:botSlug/webhooks/discord
+ANY /agents/:botSlug/webhooks/telegram
+ANY /agents/:botSlug/webhooks/github
+ANY /agents/:botSlug/webhooks/linear
+ANY /agents/:botSlug/webhooks/whatsapp
+ANY /agents/:botSlug/webhooks/messenger
 ```
 
 Health is mounted at:
 
 ```text
 GET /healthz
+```
+
+## Runtime Admin API
+
+Set `AGENTBAY_ADMIN_TOKEN` to enable authenticated CRUD routes. Requests must include `Authorization: Bearer <token>`.
+
+```text
+GET    /admin/runtime/bots
+POST   /admin/runtime/bots
+GET    /admin/runtime/bots/:id
+PUT    /admin/runtime/bots/:id
+DELETE /admin/runtime/bots/:id
+
+GET    /admin/runtime/sandbox-profiles
+POST   /admin/runtime/sandbox-profiles
+GET    /admin/runtime/sandbox-profiles/:id
+PUT    /admin/runtime/sandbox-profiles/:id
+DELETE /admin/runtime/sandbox-profiles/:id
+
+GET    /admin/runtime/opencode-configs
+POST   /admin/runtime/opencode-configs
+GET    /admin/runtime/opencode-configs/:id
+PUT    /admin/runtime/opencode-configs/:id
+DELETE /admin/runtime/opencode-configs/:id
+
+GET    /admin/runtime/agent-profiles
+POST   /admin/runtime/agent-profiles
+GET    /admin/runtime/agent-profiles/:id
+PUT    /admin/runtime/agent-profiles/:id
+DELETE /admin/runtime/agent-profiles/:id
+
+GET    /admin/runtime/bot-agent-profiles
+POST   /admin/runtime/bot-agent-profiles
+DELETE /admin/runtime/bot-agent-profiles/:botID/:agentProfileID
 ```
 
 ## Deployment
@@ -93,6 +133,8 @@ docker push ghcr.io/your-org/opencode-sandbox:latest
 ```
 
 Update `deploy/orchestrator.yaml` and `deploy/examples/sandbox-template.yaml` with your pushed image names before applying them.
+
+A Postgres database must be configured before starting the orchestrator. Use `AGENTBAY_DATABASE_URL` / `DATABASE_URL`, or the discrete `AGENTBAY_DATABASE_HOST` settings. The Helm chart can deploy an in-cluster Postgres for small installs, or reference an external Postgres URL/Secret.
 
 The `deploy/` directory contains starter Kubernetes manifests:
 

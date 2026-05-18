@@ -2,12 +2,15 @@ import type { Adapter, Chat, Lock, Message, StateAdapter, Thread } from "chat";
 import type { Config } from "../config.js";
 import { createAgentClient, waitForOpencodeReady } from "../agent/client.js";
 import { createSession, runPrompt } from "../agent/runner.js";
-import { getProfile, resolveProfile } from "../profiles.js";
+import { resolveInitialRuntime, resolveThreadRuntime } from "../runtime/resolver.js";
+import { sandboxProfileHash, type RuntimeStore } from "../runtime/store.js";
+import type { ResolvedRuntime } from "../runtime/types.js";
 import type { SandboxManager } from "../sandbox/manager.js";
-import type { BotProfile, ThreadState } from "../types.js";
+import type { ThreadState } from "../types.js";
 
 export type HandlerDeps = {
   config: Config;
+  runtimeStore: RuntimeStore;
   sandboxManager: SandboxManager;
   state: StateAdapter;
 };
@@ -64,14 +67,15 @@ async function handlePrompt(thread: Thread<ThreadState>, message: Message, deps:
 
     const state = await thread.state;
     if (isThreadState(state)) {
+      const runtime = await resolveThreadRuntime(deps.runtimeStore, state);
       if (isStateExpired(state, deps.config)) {
-        await restartSession(thread, message, deps, state, "Previous sandbox reached its configured lifetime; starting a fresh one...");
+        await restartSession(thread, message, deps, state, runtime, "Previous sandbox reached its configured lifetime; starting a fresh one...");
         return;
       }
 
       const sandbox = await deps.sandboxManager.currentReadyClaim(state.claimName, state.password);
       if (!sandbox) {
-        await restartSession(thread, message, deps, state, "Previous sandbox is no longer available; starting a fresh one...");
+        await restartSession(thread, message, deps, state, runtime, "Previous sandbox is no longer available; starting a fresh one...");
         return;
       }
 
@@ -86,26 +90,41 @@ async function handlePrompt(thread: Thread<ThreadState>, message: Message, deps:
 }
 
 async function startSession(thread: Thread<ThreadState>, message: Message, deps: HandlerDeps): Promise<void> {
-  const profile = resolveProfile(thread, message);
+  const runtime = await resolveInitialRuntime(deps.runtimeStore);
+  await startSessionWithRuntime(thread, message, deps, runtime);
+}
+
+async function startSessionWithRuntime(
+  thread: Thread<ThreadState>,
+  message: Message,
+  deps: HandlerDeps,
+  runtime: ResolvedRuntime,
+): Promise<void> {
   await thread.post("Spinning up an isolated opencode sandbox...");
 
   let claimName: string | undefined;
   let statePersisted = false;
-  const sandbox = await deps.sandboxManager.claimFor(thread.id, profile);
+  const sandbox = await deps.sandboxManager.claimFor(thread.id, runtime);
   claimName = sandbox.claimName;
 
   try {
     const client = createAgentClient(sandbox, deps.config);
     await waitForOpencodeReady(sandbox, deps.config);
 
-    const sessionID = await createSession(client, sessionTitle(thread, message, profile));
+    const sessionID = await createSession(client, sessionTitle(thread, message, runtime));
     await thread.setState(
       {
+        agentProfileID: runtime.agentProfile.id,
+        botID: runtime.bot.id,
         claimName: sandbox.claimName,
         createdAt: new Date().toISOString(),
+        opencodeAgentName: runtime.opencodeAgentName,
+        opencodeConfigHash: runtime.opencodeConfig.configHash,
+        opencodeConfigID: runtime.opencodeConfig.id,
         password: sandbox.password,
         podFQDN: sandbox.podFQDN,
-        profileID: profile.id,
+        sandboxProfileHash: sandboxProfileHash(runtime.sandboxProfile),
+        sandboxProfileID: runtime.sandboxProfile.id,
         sessionID,
       },
       { replace: true },
@@ -114,9 +133,8 @@ async function startSession(thread: Thread<ThreadState>, message: Message, deps:
 
     await thread.post(
       runPrompt({
+        agentName: runtime.opencodeAgentName,
         client,
-        isFirstPrompt: true,
-        profile,
         sessionID,
         text: message.text,
       }),
@@ -140,22 +158,40 @@ async function continueSession(
   deps: HandlerDeps,
   state: ThreadState,
 ): Promise<void> {
-  const profile = getProfile(state.profileID);
+  const runtime = await resolveThreadRuntime(deps.runtimeStore, state);
+  if (hasRuntimeDrift(state, runtime)) {
+    await restartSession(
+      thread,
+      message,
+      deps,
+      state,
+      runtime,
+      "Agent runtime changed; starting a fresh sandbox with the updated runtime...",
+    );
+    return;
+  }
+
   const endpoint = { password: state.password, podFQDN: state.podFQDN };
   const client = createAgentClient(endpoint, deps.config);
 
   try {
     await waitForOpencodeReady(endpoint, deps.config);
   } catch {
-    await restartSession(thread, message, deps, state, "Previous opencode server is no longer reachable; starting a fresh sandbox...");
+    await restartSession(
+      thread,
+      message,
+      deps,
+      state,
+      runtime,
+      "Previous opencode server is no longer reachable; starting a fresh sandbox...",
+    );
     return;
   }
 
   await thread.post(
     runPrompt({
+      agentName: runtime.opencodeAgentName,
       client,
-      isFirstPrompt: false,
-      profile,
       sessionID: state.sessionID,
       text: message.text,
     }),
@@ -167,16 +203,29 @@ async function restartSession(
   message: Message,
   deps: HandlerDeps,
   state: ThreadState,
+  runtime: ResolvedRuntime,
   notice: string,
 ): Promise<void> {
   await deps.sandboxManager.releaseClaim(state.claimName);
   await thread.post(notice);
-  await startSession(thread, message, deps);
+  await startSessionWithRuntime(thread, message, deps, runtime);
 }
 
-function sessionTitle(thread: Thread<ThreadState>, message: Message, profile: BotProfile): string {
+function sessionTitle(thread: Thread<ThreadState>, message: Message, runtime: ResolvedRuntime): string {
   const text = message.text.replace(/\s+/g, " ").trim().slice(0, 80);
-  return `${profile.id} ${thread.id}${text ? `: ${text}` : ""}`;
+  return `${runtime.bot.slug}/${runtime.agentProfile.slug} ${thread.id}${text ? `: ${text}` : ""}`;
+}
+
+function hasRuntimeDrift(state: ThreadState, runtime: ResolvedRuntime): boolean {
+  return (
+    state.botID !== runtime.bot.id ||
+    state.sandboxProfileID !== runtime.sandboxProfile.id ||
+    state.sandboxProfileHash !== sandboxProfileHash(runtime.sandboxProfile) ||
+    state.agentProfileID !== runtime.agentProfile.id ||
+    state.opencodeConfigID !== runtime.opencodeConfig.id ||
+    state.opencodeConfigHash !== runtime.opencodeConfig.configHash ||
+    state.opencodeAgentName !== runtime.opencodeAgentName
+  );
 }
 
 function formatError(error: unknown): string {
@@ -198,10 +247,16 @@ function isThreadState(value: unknown): value is ThreadState {
 
   return (
     typeof state.claimName === "string" &&
+    typeof state.botID === "string" &&
+    typeof state.sandboxProfileID === "string" &&
+    typeof state.sandboxProfileHash === "string" &&
+    typeof state.agentProfileID === "string" &&
+    typeof state.opencodeConfigID === "string" &&
+    typeof state.opencodeConfigHash === "string" &&
+    typeof state.opencodeAgentName === "string" &&
     typeof state.createdAt === "string" &&
     typeof state.password === "string" &&
     typeof state.podFQDN === "string" &&
-    typeof state.profileID === "string" &&
     typeof state.sessionID === "string"
   );
 }
