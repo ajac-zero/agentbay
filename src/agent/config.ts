@@ -1,4 +1,4 @@
-import type { BotProfile, OpencodeConfig } from "../types.js";
+import type { OpencodeConfigRecord } from "../runtime/types.js";
 
 /**
  * Build the JSON blob to inject into a sandbox Pod as
@@ -10,21 +10,7 @@ import type { BotProfile, OpencodeConfig } from "../types.js";
  * Returns `undefined` when the resulting object is empty so we don't add a
  * noise env var on claims that don't need it.
  */
-export function buildOpencodeConfigContent(profile: BotProfile): string | undefined {
-  const config: OpencodeConfig = {};
-
-  if (profile.defaultModel) {
-    config.model = `${profile.defaultModel.providerID}/${profile.defaultModel.modelID}`;
-  }
-
-  if (profile.tools && Object.keys(profile.tools).length > 0) {
-    config.tools = { ...profile.tools };
-  }
-
-  if (profile.opencodeConfig) {
-    Object.assign(config, profile.opencodeConfig);
-  }
-
-  if (Object.keys(config).length === 0) return undefined;
-  return JSON.stringify(config);
+export function buildOpencodeConfigContent(opencodeConfig: OpencodeConfigRecord): string | undefined {
+  if (Object.keys(opencodeConfig.config).length === 0) return undefined;
+  return JSON.stringify(opencodeConfig.config);
 }

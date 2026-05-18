@@ -9,12 +9,17 @@ import { createTelegramAdapter } from "@chat-adapter/telegram";
 import { createWhatsAppAdapter } from "@chat-adapter/whatsapp";
 import { Chat, type Adapter } from "chat";
 import type { Config } from "../config.js";
+import type { RuntimeStore } from "../runtime/store.js";
 import type { SandboxManager } from "../sandbox/manager.js";
 import { createStateAdapter } from "../state/adapter.js";
 import type { ThreadState } from "../types.js";
 import { registerHandlers } from "./handlers.js";
 
-export function createBot(config: Config, sandboxManager: SandboxManager): Chat<Record<string, Adapter>, ThreadState> {
+export function createBot(
+  config: Config,
+  sandboxManager: SandboxManager,
+  runtimeStore: RuntimeStore,
+): Chat<Record<string, Adapter>, ThreadState> {
   const adapters: Record<string, Adapter> = {};
   const state = createStateAdapter(config);
 
@@ -63,6 +68,6 @@ export function createBot(config: Config, sandboxManager: SandboxManager): Chat<
     userName: config.botUserName,
   });
 
-  registerHandlers(chat, { config, sandboxManager, state });
+  registerHandlers(chat, { config, runtimeStore, sandboxManager, state });
   return chat;
 }

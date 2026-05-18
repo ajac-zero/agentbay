@@ -1,8 +1,10 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { CustomObjectsApi } from "@kubernetes/client-node";
 import { buildOpencodeConfigContent } from "../agent/config.js";
 import type { Config } from "../config.js";
-import type { BotProfile, EnvVar } from "../types.js";
+import { sandboxProfileHash } from "../runtime/store.js";
+import type { ResolvedRuntime } from "../runtime/types.js";
+import type { EnvVar } from "../types.js";
 import { claimNameForThread } from "./naming.js";
 import type { ClaimedSandbox, SandboxClaim } from "./types.js";
 
@@ -16,20 +18,28 @@ export class SandboxManager {
     private readonly config: Config,
   ) {}
 
-  async claimFor(threadId: string, profile: BotProfile): Promise<ClaimedSandbox> {
+  async claimFor(threadId: string, runtime: ResolvedRuntime): Promise<ClaimedSandbox> {
     const claimName = claimNameForThread(threadId);
     const existing = await this.getClaim(claimName);
 
     if (existing) {
-      try {
-        return await this.waitForReady(existing, this.passwordFromClaim(existing));
-      } catch {
+      if (!claimMatchesRuntime(existing, runtime)) {
         await this.releaseClaim(claimName);
+      } else {
+        try {
+          return await this.waitForReady(existing, this.passwordFromClaim(existing));
+        } catch {
+          await this.releaseClaim(claimName);
+        }
       }
+
+      try {
+        await this.waitForDeleted(claimName);
+      } catch {}
     }
 
     const password = randomBytes(24).toString("base64url");
-    const claim = this.buildClaim({ claimName, password, profile, threadId });
+    const claim = this.buildClaim({ claimName, password, runtime, threadId });
     const created = (await this.api.createNamespacedCustomObject({
       group: GROUP,
       version: VERSION,
@@ -92,7 +102,7 @@ export class SandboxManager {
   private buildClaim(input: {
     claimName: string;
     password: string;
-    profile: BotProfile;
+    runtime: ResolvedRuntime;
     threadId: string;
   }): SandboxClaim {
     const shutdownTime = new Date(Date.now() + this.config.claimShutdownHours * 60 * 60 * 1_000).toISOString();
@@ -102,7 +112,7 @@ export class SandboxManager {
       ...this.config.claimEnv,
     ];
 
-    const opencodeConfigContent = buildOpencodeConfigContent(input.profile);
+    const opencodeConfigContent = buildOpencodeConfigContent(input.runtime.opencodeConfig);
     if (opencodeConfigContent) {
       env.push({ name: "OPENCODE_CONFIG_CONTENT", value: opencodeConfigContent });
     }
@@ -115,15 +125,24 @@ export class SandboxManager {
         namespace: this.config.kubeNamespace,
         labels: {
           "app.kubernetes.io/managed-by": "agentbay",
-          "agentbay.dev/profile": input.profile.id,
+          "agentbay.dev/agent-profile": labelValue(input.runtime.agentProfile.id),
+          "agentbay.dev/bot": labelValue(input.runtime.bot.id),
+          "agentbay.dev/sandbox-profile": labelValue(input.runtime.sandboxProfile.id),
         },
         annotations: {
+          "agentbay.dev/agent-profile-id": input.runtime.agentProfile.id,
+          "agentbay.dev/bot-id": input.runtime.bot.id,
+          "agentbay.dev/opencode-agent-name": input.runtime.opencodeAgentName,
+          "agentbay.dev/opencode-config-hash": input.runtime.opencodeConfig.configHash,
+          "agentbay.dev/opencode-config-id": input.runtime.opencodeConfig.id,
+          "agentbay.dev/sandbox-profile-hash": sandboxProfileHash(input.runtime.sandboxProfile),
+          "agentbay.dev/sandbox-profile-id": input.runtime.sandboxProfile.id,
           "agentbay.dev/thread-id": input.threadId,
         },
       },
       spec: {
-        sandboxTemplateRef: { name: input.profile.templateName },
-        warmpool: input.profile.warmpool,
+        sandboxTemplateRef: { name: input.runtime.sandboxProfile.templateName },
+        warmpool: input.runtime.sandboxProfile.warmpool,
         lifecycle: {
           shutdownTime,
           shutdownPolicy: "Delete",
@@ -133,8 +152,10 @@ export class SandboxManager {
         additionalPodMetadata: {
           labels: {
             "agentbay.dev/managed-by": "agentbay",
+            "agentbay.dev/agent-profile": labelValue(input.runtime.agentProfile.id),
+            "agentbay.dev/bot": labelValue(input.runtime.bot.id),
             "agentbay.dev/claim": input.claimName,
-            "agentbay.dev/profile": input.profile.id,
+            "agentbay.dev/sandbox-profile": labelValue(input.runtime.sandboxProfile.id),
           },
         },
       },
@@ -209,6 +230,23 @@ function isNotFound(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const maybe = error as { code?: number; response?: { statusCode?: number; status?: number } };
   return maybe.code === 404 || maybe.response?.statusCode === 404 || maybe.response?.status === 404;
+}
+
+function claimMatchesRuntime(claim: SandboxClaim, runtime: ResolvedRuntime): boolean {
+  const annotations = claim.metadata.annotations ?? {};
+  return (
+    annotations["agentbay.dev/agent-profile-id"] === runtime.agentProfile.id &&
+    annotations["agentbay.dev/bot-id"] === runtime.bot.id &&
+    annotations["agentbay.dev/opencode-config-hash"] === runtime.opencodeConfig.configHash &&
+    annotations["agentbay.dev/opencode-config-id"] === runtime.opencodeConfig.id &&
+    annotations["agentbay.dev/sandbox-profile-hash"] === sandboxProfileHash(runtime.sandboxProfile) &&
+    annotations["agentbay.dev/sandbox-profile-id"] === runtime.sandboxProfile.id
+  );
+}
+
+function labelValue(value: string): string {
+  if (value.length <= 63 && /^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$/.test(value)) return value;
+  return `h-${createHash("sha256").update(value).digest("hex").slice(0, 61)}`;
 }
 
 function sleep(ms: number): Promise<void> {

@@ -1,5 +1,4 @@
 import type { Event, OpencodeClient } from "@opencode-ai/sdk/client";
-import type { BotProfile } from "../types.js";
 
 export async function createSession(client: OpencodeClient, title: string): Promise<string> {
   const { data } = await client.session.create({
@@ -11,9 +10,8 @@ export async function createSession(client: OpencodeClient, title: string): Prom
 }
 
 export async function* runPrompt(input: {
+  agentName: string;
   client: OpencodeClient;
-  isFirstPrompt: boolean;
-  profile: BotProfile;
   sessionID: string;
   text: string;
 }): AsyncIterable<string> {
@@ -23,9 +21,8 @@ export async function* runPrompt(input: {
   await input.client.session.promptAsync({
     path: { id: input.sessionID },
     body: {
-      parts: [{ type: "text", text: promptText(input.profile, input.text, input.isFirstPrompt) }],
-      model: input.profile.defaultModel,
-      tools: input.profile.tools,
+      agent: input.agentName,
+      parts: [{ type: "text", text: input.text }],
     },
     throwOnError: true,
   });
@@ -82,11 +79,6 @@ async function assertSessionIdle(client: OpencodeClient, sessionID: string): Pro
   if (status && status.type !== "idle") {
     throw new Error(`opencode session ${sessionID} is not idle (${status.type})`);
   }
-}
-
-function promptText(profile: BotProfile, text: string, isFirstPrompt: boolean): string {
-  if (!isFirstPrompt || !profile.systemPrompt) return text;
-  return `${profile.systemPrompt}\n\n${text}`;
 }
 
 function isSessionEvent(event: Event, sessionID: string): boolean {

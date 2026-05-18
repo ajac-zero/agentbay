@@ -35,8 +35,11 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/kind: ServiceAccount/);
       expect(result.stdout).toMatch(/kind: Role\b/);
       expect(result.stdout).toMatch(/kind: RoleBinding/);
-      // In-cluster Redis is on by default
+      // In-cluster Redis and Postgres are on by default
       expect(result.stdout).toMatch(/name: demo-agentbay-redis/);
+      expect(result.stdout).toMatch(/name: demo-agentbay-postgres/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_HOST/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_PASSWORD/);
       // No SandboxTemplate / WarmPool / Ingress unless opted in
       expect(result.stdout).not.toMatch(/kind: SandboxTemplate/);
       expect(result.stdout).not.toMatch(/kind: SandboxWarmPool/);
@@ -77,6 +80,24 @@ describe("agentbay Helm chart", () => {
       expect(result.status, formatStderr(result)).toBe(0);
       expect(result.stdout).not.toMatch(/name: demo-agentbay-redis/);
       expect(result.stdout).toMatch(/secretKeyRef:\s+name: my-redis/);
+    });
+
+    it("uses an external Postgres URL from an existing Secret when configured", () => {
+      const result = helm([
+        "template",
+        "demo",
+        CHART_PATH,
+        "--namespace",
+        NAMESPACE,
+        "--set",
+        "database.enabled=false",
+        "--set",
+        "database.external.existingSecret=my-postgres",
+      ]);
+      expect(result.status, formatStderr(result)).toBe(0);
+      expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_URL/);
+      expect(result.stdout).toMatch(/secretKeyRef:\s+name: my-postgres/);
+      expect(result.stdout).not.toMatch(/name: demo-agentbay-postgres/);
     });
 
     it("falls back to in-memory Chat SDK state when no Redis is configured", () => {
@@ -209,4 +230,3 @@ function kubectl(kubeConfigPath: string, args: string[]): SpawnSyncReturns<strin
 function formatStderr(result: SpawnSyncReturns<string>): string {
   return `exit=${result.status}\nstderr=${result.stderr}\nstdout=${result.stdout}`;
 }
-

@@ -99,6 +99,22 @@ Name of the in-cluster Redis Service.
 {{- end -}}
 
 {{/*
+Selector labels for the in-cluster Postgres Deployment.
+*/}}
+{{- define "agentbay.postgres.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "agentbay.name" . }}-postgres
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: postgres
+{{- end -}}
+
+{{/*
+Name of the in-cluster Postgres Service and Secret.
+*/}}
+{{- define "agentbay.postgres.fullname" -}}
+{{- printf "%s-postgres" (include "agentbay.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
 Resolve which Redis URL strategy is active. Output is one of:
   "in-cluster"        - use the chart's Redis Deployment
   "external-url"      - use the literal value from redis.external.url
@@ -111,6 +127,25 @@ in-cluster
 {{- else if .Values.redis.external.url -}}
 external-url
 {{- else if .Values.redis.external.existingSecret -}}
+external-secret
+{{- else -}}
+none
+{{- end -}}
+{{- end -}}
+
+{{/*
+Resolve which Postgres URL strategy is active. Output is one of:
+  "in-cluster"        - use the chart's Postgres Deployment
+  "external-url"      - use the literal value from database.external.url
+  "external-secret"   - use a key from an existing Secret
+  "none"              - no chart-managed database URL
+*/}}
+{{- define "agentbay.database.mode" -}}
+{{- if .Values.database.enabled -}}
+in-cluster
+{{- else if .Values.database.external.url -}}
+external-url
+{{- else if .Values.database.external.existingSecret -}}
 external-secret
 {{- else -}}
 none

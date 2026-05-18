@@ -60,10 +60,31 @@ The chart supports three modes, selected by `redis.*`:
 | External Redis from existing Secret | `redis.enabled=false` + `redis.external.existingSecret=my-redis` + `redis.external.existingSecretKey=REDIS_URL` | Recommended for production; keeps credentials out of values files. |
 | None (in-memory) | `redis.enabled=false`, no `external.*` set | Chat SDK falls back to in-memory state. Single replica only; state is lost on restart. |
 
+## Postgres (runtime configuration)
+
+The chart supports three modes, selected by `database.*`:
+
+| Mode | How to enable | Notes |
+|---|---|---|
+| In-cluster Postgres (default) | `database.enabled=true` | Single-replica Deployment + Service + Secret. The orchestrator uses discrete host/user/password env vars. Set `database.persistence.enabled=true` for a PVC-backed volume. |
+| External Postgres URL | `database.enabled=false` + `database.external.url=postgres://...` | URL is rendered into the orchestrator Deployment env. |
+| External Postgres from existing Secret | `database.enabled=false` + `database.external.existingSecret=my-postgres` + `database.external.existingSecretKey=AGENTBAY_DATABASE_URL` | Recommended for production; keeps credentials out of values files. |
+
+On startup the orchestrator creates the required runtime tables if they do not exist. It does not seed runtime rows; create bots/profiles/configs through the admin API or your own SQL/bootstrap tooling.
+
+For production, prefer an existing Secret:
+
+```bash
+helm install agentbay deploy/helm/agentbay \
+  --namespace agents --create-namespace \
+  --set database.enabled=false \
+  --set database.external.existingSecret=agentbay-postgres
+```
+
 ## Secrets
 
 All adapter credentials and orchestrator-side secrets (model API keys,
-Redis URL, etc.) are mounted via `envFrom: secretRef`. Choose one of:
+Redis/Postgres URLs, `AGENTBAY_ADMIN_TOKEN`, etc.) are mounted via `envFrom: secretRef`. Choose one of:
 
 - **Chart-managed** (`secrets.create=true`, default): the chart creates a
   `Secret` named after the release with the keys provided in
@@ -76,6 +97,11 @@ Redis URL, etc.) are mounted via `envFrom: secretRef`. Choose one of:
 
 The full list of supported env var keys is in the project
 [README](../../../README.md#configuration).
+
+When the chart creates its own Secret, it also creates or preserves an
+`AGENTBAY_ADMIN_TOKEN` value so a fresh install can create the initial
+runtime records through `/admin/runtime/*`. If you use `secrets.existingSecret`,
+put `AGENTBAY_ADMIN_TOKEN` in that Secret yourself.
 
 ## Adapter toggles
 
@@ -108,7 +134,7 @@ sandboxes it references.
 sandboxTemplates:
   enabled: true
   templates:
-    - name: opencode-template          # must match claims.templateName
+    - name: opencode-template          # referenced by SandboxProfile.templateName in the runtime DB
       namespace: ""                    # defaults to claims.namespace
       image:
         repository: ghcr.io/your-org/opencode-sandbox

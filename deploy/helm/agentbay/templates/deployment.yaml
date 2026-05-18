@@ -1,4 +1,5 @@
 {{- $mode := include "agentbay.redis.mode" . -}}
+{{- $databaseMode := include "agentbay.database.mode" . -}}
 {{- $secretName := include "agentbay.secretName" . -}}
 {{- $useChartSecret := or .Values.secrets.create .Values.secrets.existingSecret -}}
 apiVersion: apps/v1
@@ -52,10 +53,6 @@ spec:
               value: {{ .Values.orchestrator.port | quote }}
             - name: AGENTBAY_KUBE_NAMESPACE
               value: {{ include "agentbay.claimsNamespace" . | quote }}
-            - name: AGENTBAY_TEMPLATE_NAME
-              value: {{ .Values.claims.templateName | quote }}
-            - name: AGENTBAY_WARMPOOL
-              value: {{ .Values.claims.warmpool | quote }}
             - name: AGENTBAY_CLAIM_ENV_KEYS
               value: {{ .Values.claims.envKeys | quote }}
             - name: AGENTBAY_OPENCODE_PORT
@@ -85,6 +82,34 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.redis.external.existingSecret }}
                   key: {{ .Values.redis.external.existingSecretKey }}
+            {{- end }}
+            {{- if eq $databaseMode "in-cluster" }}
+            - name: AGENTBAY_DATABASE_HOST
+              value: "{{ include "agentbay.postgres.fullname" . }}.{{ .Release.Namespace }}.svc"
+            - name: AGENTBAY_DATABASE_PORT
+              value: "5432"
+            - name: AGENTBAY_DATABASE_NAME
+              value: {{ .Values.database.auth.database | quote }}
+            - name: AGENTBAY_DATABASE_USER
+              value: {{ .Values.database.auth.username | quote }}
+            - name: AGENTBAY_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agentbay.postgres.fullname" . }}
+                  key: POSTGRES_PASSWORD
+            {{- else if eq $databaseMode "external-url" }}
+            - name: AGENTBAY_DATABASE_URL
+              value: {{ .Values.database.external.url | quote }}
+            {{- else if eq $databaseMode "external-secret" }}
+            - name: AGENTBAY_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.external.existingSecret }}
+                  key: {{ .Values.database.external.existingSecretKey }}
+            {{- end }}
+            {{- if .Values.database.ssl }}
+            - name: AGENTBAY_DATABASE_SSL
+              value: "true"
             {{- end }}
             {{- with .Values.orchestrator.extraEnv }}
             {{- toYaml . | nindent 12 }}

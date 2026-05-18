@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -19,10 +20,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAgentClient, waitForOpencodeReady } from "../../src/agent/client.js";
 import { createSession, runPrompt } from "../../src/agent/runner.js";
 import type { Config } from "../../src/config.js";
+import { sandboxProfileHash } from "../../src/runtime/store.js";
+import type { ResolvedRuntime } from "../../src/runtime/types.js";
 import { SandboxManager } from "../../src/sandbox/manager.js";
 import { claimNameForThread } from "../../src/sandbox/naming.js";
 import type { SandboxClaim } from "../../src/sandbox/types.js";
-import type { BotProfile } from "../../src/types.js";
+import { runtimeSnapshot, TestRuntimeStore } from "./runtime-store-fixture.js";
 
 type ManifestObject = KubernetesObject & {
   apiVersion: string;
@@ -91,7 +94,8 @@ describe("SandboxManager e2e", () => {
   it("provisions a real sandbox and connects to its opencode server", async () => {
     const threadId = `thread-${crypto.randomUUID()}`;
     const claimName = claimNameForThread(threadId);
-    const claimPromise = manager.claimFor(threadId, testProfile());
+    const runtime = await testRuntime();
+    const claimPromise = manager.claimFor(threadId, runtime);
 
     const createdClaim = await waitForClaim(customObjectsApi, claimName);
     const password = createdClaim.spec?.env?.find((entry) => entry.name === "OPENCODE_SERVER_PASSWORD")?.value;
@@ -99,9 +103,18 @@ describe("SandboxManager e2e", () => {
     expect(createdClaim.metadata.namespace).toBe(NAMESPACE);
     expect(createdClaim.metadata.labels).toMatchObject({
       "app.kubernetes.io/managed-by": "agentbay",
-      "agentbay.dev/profile": "e2e",
+      "agentbay.dev/agent-profile": labelValue(runtime.agentProfile.id),
+      "agentbay.dev/bot": labelValue(runtime.bot.id),
+      "agentbay.dev/sandbox-profile": labelValue(runtime.sandboxProfile.id),
     });
     expect(createdClaim.metadata.annotations).toMatchObject({
+      "agentbay.dev/agent-profile-id": runtime.agentProfile.id,
+      "agentbay.dev/bot-id": runtime.bot.id,
+      "agentbay.dev/opencode-agent-name": "coder",
+      "agentbay.dev/opencode-config-hash": runtime.opencodeConfig.configHash,
+      "agentbay.dev/opencode-config-id": "opencode-config-default",
+      "agentbay.dev/sandbox-profile-hash": sandboxProfileHash(runtime.sandboxProfile),
+      "agentbay.dev/sandbox-profile-id": runtime.sandboxProfile.id,
       "agentbay.dev/thread-id": threadId,
     });
     expect(createdClaim.spec).toMatchObject({
@@ -114,8 +127,10 @@ describe("SandboxManager e2e", () => {
       additionalPodMetadata: {
         labels: {
           "agentbay.dev/managed-by": "agentbay",
+          "agentbay.dev/agent-profile": labelValue(runtime.agentProfile.id),
+          "agentbay.dev/bot": labelValue(runtime.bot.id),
           "agentbay.dev/claim": claimName,
-          "agentbay.dev/profile": "e2e",
+          "agentbay.dev/sandbox-profile": labelValue(runtime.sandboxProfile.id),
         },
       },
     });
@@ -126,9 +141,15 @@ describe("SandboxManager e2e", () => {
         {
           name: "OPENCODE_CONFIG_CONTENT",
           value: JSON.stringify({
-            model: "anthropic/claude-sonnet-4-5",
-            tools: { bash: false },
             permission: { "*": "allow" },
+            agent: {
+              coder: {
+                prompt: "sandbox test prompt",
+                model: "anthropic/claude-sonnet-4-5",
+                tools: { bash: false },
+              },
+            },
+            default_agent: "coder",
           }),
         },
       ]),
@@ -154,9 +175,8 @@ describe("SandboxManager e2e", () => {
       const chunks: string[] = [];
 
       for await (const chunk of runPrompt({
+        agentName: runtime.opencodeAgentName,
         client,
-        isFirstPrompt: true,
-        profile: testProfile(),
         sessionID,
         text: "stream a greeting",
       })) {
@@ -200,16 +220,34 @@ function testConfig(): Config {
   };
 }
 
-function testProfile(): BotProfile {
-  return {
-    id: "e2e",
-    templateName: "opencode-template",
-    warmpool: "none",
-    systemPrompt: "unused in SandboxManager tests",
-    defaultModel: { providerID: "anthropic", modelID: "claude-sonnet-4-5" },
-    tools: { bash: false },
-    opencodeConfig: { permission: { "*": "allow" } },
-  };
+async function testRuntime(): Promise<ResolvedRuntime> {
+  return new TestRuntimeStore(
+    runtimeSnapshot({
+      agentProfileID: "agent/profile/default:invalid-and-far-too-long-for-a-kubernetes-label-value",
+      botID: "bot/default:invalid-and-far-too-long-for-a-kubernetes-label-value",
+      botSlug: "agentbay",
+      opencodeAgentName: "coder",
+      opencodeConfigID: "opencode-config-default",
+      opencodeConfigSlug: "default",
+      opencodeConfig: {
+        permission: { "*": "allow" },
+        agent: {
+          coder: {
+            prompt: "sandbox test prompt",
+            model: "anthropic/claude-sonnet-4-5",
+            tools: { bash: false },
+          },
+        },
+        default_agent: "coder",
+      },
+      sandboxProfileID: "sandbox/profile/default:invalid-and-far-too-long-for-a-kubernetes-label-value",
+    }),
+  ).resolveByBotSlug("agentbay");
+}
+
+function labelValue(value: string): string {
+  if (value.length <= 63 && /^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$/.test(value)) return value;
+  return `h-${createHash("sha256").update(value).digest("hex").slice(0, 61)}`;
 }
 
 async function installAgentSandbox(api: KubernetesObjectApi): Promise<void> {

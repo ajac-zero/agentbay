@@ -2,7 +2,7 @@ agentbay {{ .Chart.AppVersion }} is installing as release {{ .Release.Name }}
 in namespace {{ .Release.Namespace }}.
 
 SandboxClaims will be created in: {{ include "agentbay.claimsNamespace" . }}
-SandboxTemplate name:             {{ .Values.claims.templateName }}
+Chart reference SandboxTemplate:  {{ .Values.claims.templateName }}
 
 Chat SDK state backend:
 {{- $mode := include "agentbay.redis.mode" . }}
@@ -34,10 +34,10 @@ Enabled adapters:
 Configure your chat platforms to send webhooks to:
 {{- if .Values.ingress.enabled }}
 {{- range .Values.ingress.hosts }}
-  https://{{ .host }}/webhooks/<adapter>
+  https://{{ .host }}/agents/<botSlug>/webhooks/<adapter>
 {{- end }}
 {{- else }}
-  http://{{ include "agentbay.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/webhooks/<adapter>
+  http://{{ include "agentbay.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/agents/<botSlug>/webhooks/<adapter>
 
   No Ingress was created. To expose the orchestrator externally, set
   `ingress.enabled=true` (and configure TLS), or front the Service with
@@ -49,6 +49,16 @@ Verify the orchestrator is healthy:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "agentbay.fullname" . }} 8080:{{ .Values.service.port }}
   curl http://127.0.0.1:8080/healthz
 
+Admin runtime API:
+{{- if and .Values.secrets.create (not .Values.secrets.existingSecret) }}
+  A bearer token was written to Secret {{ include "agentbay.fullname" . }} key AGENTBAY_ADMIN_TOKEN.
+  Retrieve it with:
+    kubectl -n {{ .Release.Namespace }} get secret {{ include "agentbay.fullname" . }} -o jsonpath='{.data.AGENTBAY_ADMIN_TOKEN}' | base64 -d
+{{- else }}
+  Ensure your existing Secret provides AGENTBAY_ADMIN_TOKEN before creating runtime records.
+{{- end }}
+  Create DB-backed bots, sandbox profiles, opencode configs, and agent profiles under /admin/runtime/* before configuring chat webhooks.
+
 SandboxTemplates:
 {{- if .Values.sandboxTemplates.enabled }}
 {{- range .Values.sandboxTemplates.templates }}
@@ -56,8 +66,8 @@ SandboxTemplates:
 {{- end }}
 {{- else }}
   Not managed by this release (sandboxTemplates.enabled=false).
-  A SandboxTemplate named "{{ .Values.claims.templateName }}" must exist in
-  {{ include "agentbay.claimsNamespace" . }} before users can mention the bot.
+  Every DB-backed SandboxProfile.templateName must reference an existing
+  SandboxTemplate in {{ include "agentbay.claimsNamespace" . }} before users can mention the bot.
   See deploy/examples/sandbox-template.yaml for a starting point, or set
   sandboxTemplates.enabled=true to manage templates from this chart.
 {{- end }}

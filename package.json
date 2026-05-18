@@ -37,11 +37,13 @@
     "@kubernetes/client-node": "^1.4.0",
     "@opencode-ai/sdk": "^1.14.50",
     "chat": "^4.28.1",
-    "hono": "^4.12.18"
+    "hono": "^4.12.18",
+    "pg": "^8.20.0"
   },
   "devDependencies": {
     "@testcontainers/k3s": "^11.14.0",
     "@types/node": "^25.8.0",
+    "@types/pg": "^8.20.0",
     "tsx": "^4.22.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.6"
