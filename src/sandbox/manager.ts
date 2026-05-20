@@ -110,7 +110,7 @@ export class SandboxManager {
     const env: EnvVar[] = [
       { name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
       { name: "OPENCODE_SERVER_PASSWORD", value: input.password },
-      ...mergeEnvVars(this.config.claimEnv, resolveEnvVarRefs(input.runtime.agentProfile.claimEnv, this.env)),
+      ...resolveEnvVarRefs(input.runtime.agentProfile.claimEnv, this.env),
     ];
 
     const opencodeConfigContent = buildOpencodeConfigContent(input.runtime.opencodeConfig);
@@ -258,14 +258,6 @@ function resolveEnvVarRefs(refs: EnvVarRef[], env: NodeJS.ProcessEnv): EnvVar[] 
     if (!value) throw new Error(`Missing environment variable ${ref.valueFromEnv} for claim env ${ref.name}`);
     return { name: ref.name, value };
   });
-}
-
-function mergeEnvVars(...groups: EnvVar[][]): EnvVar[] {
-  const merged = new Map<string, EnvVar>();
-  for (const group of groups) {
-    for (const entry of group) merged.set(entry.name, entry);
-  }
-  return [...merged.values()];
 }
 
 function sleep(ms: number): Promise<void> {

@@ -1,9 +1,6 @@
-import type { EnvVar } from "./types.js";
-
 export type Config = {
   adminToken?: string;
   botUserName: string;
-  claimEnv: EnvVar[];
   claimPollIntervalMs: number;
   claimReadyTimeoutMs: number;
   claimShutdownHours: number;
@@ -32,7 +29,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     adminToken: emptyToUndefined(env.AGENTBAY_ADMIN_TOKEN),
     botUserName: env.AGENTBAY_BOT_USER_NAME ?? "agentbay",
-    claimEnv: readClaimEnv(env),
     claimPollIntervalMs: readNumber(env.AGENTBAY_CLAIM_POLL_INTERVAL_MS, 1_000),
     claimReadyTimeoutMs: readNumber(env.AGENTBAY_CLAIM_READY_TIMEOUT_MS, 180_000),
     claimShutdownHours: readNumber(env.AGENTBAY_CLAIM_SHUTDOWN_HOURS, 4),
@@ -200,18 +196,6 @@ function hasWhatsAppConfig(env: NodeJS.ProcessEnv): boolean {
 
 function hasEnv(env: NodeJS.ProcessEnv, name: string): boolean {
   return emptyToUndefined(env[name]) !== undefined;
-}
-
-function readClaimEnv(env: NodeJS.ProcessEnv): EnvVar[] {
-  const names = (env.AGENTBAY_CLAIM_ENV_KEYS ?? "ANTHROPIC_API_KEY,OPENAI_API_KEY,GITHUB_TOKEN")
-    .split(",")
-    .map((name) => name.trim())
-    .filter(Boolean);
-
-  return names.flatMap((name) => {
-    const value = env[name];
-    return value ? [{ name, value }] : [];
-  });
 }
 
 function readBoolean(value: string | undefined, fallback: boolean): boolean {

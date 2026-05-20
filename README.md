@@ -58,7 +58,6 @@ pnpm dev
 | `AGENTBAY_LINEAR_ENABLED` | auto | Enables Linear when `LINEAR_WEBHOOK_SECRET` and a Linear auth method are present. |
 | `AGENTBAY_WHATSAPP_ENABLED` | auto | Enables WhatsApp when `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_APP_SECRET`, `WHATSAPP_PHONE_NUMBER_ID`, and `WHATSAPP_VERIFY_TOKEN` are present. |
 | `AGENTBAY_MESSENGER_ENABLED` | auto | Enables Messenger when `FACEBOOK_APP_SECRET`, `FACEBOOK_PAGE_ACCESS_TOKEN`, and `FACEBOOK_VERIFY_TOKEN` are present. |
-| `AGENTBAY_CLAIM_ENV_KEYS` | common model/repo keys | Comma-separated orchestrator env vars to inject into every claim when present. Agent profile `claimEnv` refs can override or add per-agent claim env. |
 
 ## Webhooks
 
