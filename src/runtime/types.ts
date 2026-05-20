@@ -9,12 +9,23 @@ export type WarmpoolRef = "default" | "none" | (string & {});
 export type OpencodeConfig = Record<string, unknown>;
 
 export type Bot = {
+  adapters: BotAdapterConfig;
   id: string;
   slug: string;
   displayName: string;
   sandboxProfileID: string;
   defaultAgentProfileID: string;
   enabled: boolean;
+};
+
+export type BotAdapterConfig = {
+  telegram?: TelegramBotAdapterConfig;
+};
+
+export type TelegramBotAdapterConfig = {
+  botTokenEnv?: string;
+  secretTokenEnv?: string;
+  userName?: string;
 };
 
 export type SandboxProfile = {
@@ -36,12 +47,18 @@ export type OpencodeConfigRecord = {
 };
 
 export type AgentProfile = {
+  claimEnv: EnvVarRef[];
   id: string;
   slug: string;
   displayName: string;
   opencodeConfigID: string;
   opencodeAgentName: string;
   enabled: boolean;
+};
+
+export type EnvVarRef = {
+  name: string;
+  valueFromEnv: string;
 };
 
 export type BotAgentProfile = {

@@ -97,6 +97,28 @@ export function resolveRuntime(snapshot: RuntimeStoreSnapshot, bot: Bot, agentPr
   };
 }
 
+export function agentProfileHash(profile: AgentProfile): string {
+  return createHash("sha256")
+    .update(stableStringify({
+      claimEnv: profile.claimEnv,
+      id: profile.id,
+      opencodeAgentName: profile.opencodeAgentName,
+      opencodeConfigID: profile.opencodeConfigID,
+      slug: profile.slug,
+    }))
+    .digest("hex");
+}
+
+export function botAdaptersHash(bot: Bot): string {
+  return createHash("sha256")
+    .update(stableStringify({
+      adapters: bot.adapters,
+      id: bot.id,
+      slug: bot.slug,
+    }))
+    .digest("hex");
+}
+
 export function hashConfig(config: OpencodeConfig): string {
   return createHash("sha256").update(stableStringify(config)).digest("hex");
 }

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerHandlers } from "../../src/chat/handlers.js";
 import type { Config } from "../../src/config.js";
 import { runWithBotSlug } from "../../src/runtime/context.js";
-import { hashConfig, resolveRuntime, sandboxProfileHash, type RuntimeStore } from "../../src/runtime/store.js";
+import { agentProfileHash, hashConfig, resolveRuntime, sandboxProfileHash, type RuntimeStore } from "../../src/runtime/store.js";
 import type { ResolvedRuntime } from "../../src/runtime/types.js";
 import type { SandboxManager } from "../../src/sandbox/manager.js";
 import { createMemoryState } from "../../src/state/memory.js";
@@ -383,6 +383,7 @@ function existingState(claimName: string): ThreadState {
   const runtime = defaultRuntime();
   return {
     agentProfileID: runtime.agentProfile.id,
+    agentProfileHash: agentProfileHash(runtime.agentProfile),
     botID: runtime.bot.id,
     claimName,
     createdAt: new Date().toISOString(),

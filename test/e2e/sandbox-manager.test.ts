@@ -84,7 +84,7 @@ describe("SandboxManager e2e", () => {
     });
     await applyObject(objectApi, sandboxTemplate());
 
-    manager = new SandboxManager(customObjectsApi, testConfig());
+    manager = new SandboxManager(customObjectsApi, testConfig(), { ANTHROPIC_API_KEY_CODER: "per-agent-anthropic-key" });
   });
 
   afterAll(async () => {
@@ -109,6 +109,7 @@ describe("SandboxManager e2e", () => {
     });
     expect(createdClaim.metadata.annotations).toMatchObject({
       "agentbay.dev/agent-profile-id": runtime.agentProfile.id,
+      "agentbay.dev/agent-profile-hash": expect.any(String),
       "agentbay.dev/bot-id": runtime.bot.id,
       "agentbay.dev/opencode-agent-name": "coder",
       "agentbay.dev/opencode-config-hash": runtime.opencodeConfig.configHash,
@@ -137,6 +138,7 @@ describe("SandboxManager e2e", () => {
     expect(createdClaim.spec?.env).toEqual(
       expect.arrayContaining([
         { name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
+        { name: "ANTHROPIC_API_KEY", value: "per-agent-anthropic-key" },
         { name: "EXTRA_ENV", value: "from-test" },
         {
           name: "OPENCODE_CONFIG_CONTENT",
@@ -223,6 +225,7 @@ function testConfig(): Config {
 async function testRuntime(): Promise<ResolvedRuntime> {
   return new TestRuntimeStore(
     runtimeSnapshot({
+      agentClaimEnv: [{ name: "ANTHROPIC_API_KEY", valueFromEnv: "ANTHROPIC_API_KEY_CODER" }],
       agentProfileID: "agent/profile/default:invalid-and-far-too-long-for-a-kubernetes-label-value",
       botID: "bot/default:invalid-and-far-too-long-for-a-kubernetes-label-value",
       botSlug: "agentbay",

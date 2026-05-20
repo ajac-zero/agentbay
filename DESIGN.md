@@ -91,7 +91,7 @@ That's it. There is no agent code, no sandbox controller, no chat adapter to mai
 
 ### 4.1 Chat SDK Layer
 
-- **One `Chat` instance**, all adapters registered at boot.
+- **One `Chat` instance per bot as needed**, with adapters registered using that bot's secret references. This is required for platforms such as Telegram where the adapter credential is the bot identity.
 - One handler per relevant event: `onNewMention`, `onSubscribedMessage`, `onDirectMessage`, optionally `onSlashCommand` and `onAction` for control surfaces (e.g., a "stop" button).
 - Webhooks are mounted under an explicit bot path: `/agents/:botSlug/webhooks/:adapter`. There is no implicit global bot and no `/webhooks/:adapter` fallback in the target architecture.
 - **State**: persisted via a state adapter (Redis or equivalent) keyed by thread.
@@ -225,6 +225,13 @@ type Bot = {
   id: string
   slug: string                 // used in /agents/:botSlug/webhooks/:adapter
   displayName: string
+  adapters: {
+    telegram?: {
+      botTokenEnv?: string      // env var containing this Telegram bot token
+      secretTokenEnv?: string   // env var containing this webhook secret token
+      userName?: string
+    }
+  }
   sandboxProfileID: string
   defaultAgentProfileID: string
   enabled: boolean
@@ -278,11 +285,12 @@ type AgentProfile = {
   displayName: string
   opencodeConfigID: string
   opencodeAgentName: string
+  claimEnv: Array<{ name: string, valueFromEnv: string }>
   enabled: boolean
 }
 ```
 
-`AgentProfile` does not duplicate system prompt/model/tool fields. The referenced opencode agent definition is the source of truth.
+`AgentProfile` does not duplicate system prompt/model/tool fields. The referenced opencode agent definition is the source of truth. `claimEnv` stores env-var references only; secret values stay in the orchestrator environment and are resolved when creating a `SandboxClaim`.
 
 ### 6.5 Bot-Agent Allow List
 
@@ -354,7 +362,7 @@ This preserves the admin's `SandboxTemplate` policy (network, env injection, res
   - We will start with the **summary fallback** (simpler) and add PVCs only if it proves insufficient.
 
 ### D5b. opencode config is injected per claim and enforced.
-- The orchestrator forwards LLM provider credentials from its **own** environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …) into each `SandboxClaim.spec.env`. Today the orchestrator must have the secrets; tighter isolation (per-template `envFrom` Secret) is a later milestone.
+- The orchestrator forwards LLM provider credentials from its **own** environment into each `SandboxClaim.spec.env`. Global `AGENTBAY_CLAIM_ENV_KEYS` entries are defaults; `AgentProfile.claimEnv` can add or override env per agent without storing secret values in the database.
 - The resolved `OpencodeConfig` JSON is injected as `OPENCODE_CONFIG_CONTENT`. It contains the named opencode agent definitions that `AgentProfile` records point to.
 - On every prompt, the orchestrator passes `agent: opencodeAgentName` to `session.promptAsync()`. opencode's agent config owns prompt/model/tools/permission behavior.
 - In opencode's config merge order this injected layer sits **above** any `opencode.json` or `.opencode/` directory shipped inside the repo checked out into the sandbox, so a workspace cannot silently override the platform's chosen agent config.

@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { boolean, check, jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
-import type { OpencodeConfig } from "./types.js";
+import type { BotAdapterConfig, EnvVarRef, OpencodeConfig } from "./types.js";
 
 export const sandboxProfiles = pgTable("agentbay_sandbox_profiles", {
   enabled: boolean("enabled").notNull().default(true),
@@ -27,6 +27,7 @@ export const opencodeConfigs = pgTable("agentbay_opencode_configs", {
 ]);
 
 export const agentProfiles = pgTable("agentbay_agent_profiles", {
+  claimEnv: jsonb("claim_env").$type<EnvVarRef[]>().notNull().default([]),
   displayName: text("display_name").notNull(),
   enabled: boolean("enabled").notNull().default(true),
   id: text("id").primaryKey(),
@@ -41,6 +42,7 @@ export const agentProfiles = pgTable("agentbay_agent_profiles", {
 ]);
 
 export const bots = pgTable("agentbay_bots", {
+  adapters: jsonb("adapters").$type<BotAdapterConfig>().notNull().default({}),
   defaultAgentProfileID: text("default_agent_profile_id")
     .notNull()
     .references(() => agentProfiles.id),

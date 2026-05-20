@@ -3,6 +3,8 @@ import type { AgentProfile, Bot, BotAgentProfile, OpencodeConfigRecord, SandboxP
 import {
   assertOpencodeAgentExists,
   assertOpencodeConfigSupportsProfiles,
+  validateBotAdapters,
+  validateEnvVarRefs,
   validateRuntimeID,
   validateRuntimeSlug,
 } from "../../src/runtime/validation.js";
@@ -118,6 +120,7 @@ export class TestRuntimeStore implements RuntimeStore {
     validateRuntimeID(profile.id, "id");
     validateRuntimeSlug(profile.slug, "slug");
     validateRuntimeID(profile.opencodeConfigID, "opencodeConfigID");
+    validateEnvVarRefs(profile.claimEnv, "claimEnv");
     const opencodeConfig = this.requireOpencodeConfig(profile.opencodeConfigID);
     assertOpencodeAgentExists(opencodeConfig.config, profile.opencodeAgentName, opencodeConfig.id);
     upsertByID(this.snapshot.agentProfiles, profile);
@@ -129,6 +132,7 @@ export class TestRuntimeStore implements RuntimeStore {
     validateRuntimeSlug(bot.slug, "slug");
     validateRuntimeID(bot.defaultAgentProfileID, "defaultAgentProfileID");
     validateRuntimeID(bot.sandboxProfileID, "sandboxProfileID");
+    validateBotAdapters(bot.adapters);
     this.requireSandboxProfile(bot.sandboxProfileID);
     this.requireAgentProfile(bot.defaultAgentProfileID);
     upsertByID(this.snapshot.bots, bot);
@@ -197,6 +201,8 @@ export function defaultRuntimeSnapshot(): RuntimeStoreSnapshot {
 
 export function runtimeSnapshot(input: {
   agentProfileID: string;
+  agentClaimEnv?: AgentProfile["claimEnv"];
+  botAdapters?: Bot["adapters"];
   botID: string;
   botSlug: string;
   opencodeAgentName: string;
@@ -208,6 +214,7 @@ export function runtimeSnapshot(input: {
   return {
     agentProfiles: [
       {
+        claimEnv: input.agentClaimEnv ?? [],
         displayName: input.opencodeAgentName,
         enabled: true,
         id: input.agentProfileID,
@@ -219,6 +226,7 @@ export function runtimeSnapshot(input: {
     botAgentProfiles: [{ agentProfileID: input.agentProfileID, botID: input.botID }],
     bots: [
       {
+        adapters: input.botAdapters ?? {},
         defaultAgentProfileID: input.agentProfileID,
         displayName: input.botSlug,
         enabled: true,

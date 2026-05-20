@@ -3,6 +3,7 @@ export type ThreadState = {
   sandboxProfileID: string;
   sandboxProfileHash: string;
   agentProfileID: string;
+  agentProfileHash?: string;
   opencodeConfigID: string;
   opencodeConfigHash: string;
   opencodeAgentName: string;
