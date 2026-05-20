@@ -15,6 +15,8 @@ import {
 import * as schema from "./schema.js";
 import { agentProfiles, botAgentProfiles, bots, opencodeConfigs, sandboxProfiles } from "./schema.js";
 import {
+  validateBotAdapters,
+  validateEnvVarRefs,
   assertOpencodeAgentExists,
   assertOpencodeConfigSupportsProfiles,
   validateRuntimeID,
@@ -177,6 +179,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
     validateRuntimeID(profile.id, "id");
     validateRuntimeSlug(profile.slug, "slug");
     validateRuntimeID(profile.opencodeConfigID, "opencodeConfigID");
+    validateEnvVarRefs(profile.claimEnv, "claimEnv");
 
     const opencodeConfig = await this.getOpencodeConfig(profile.opencodeConfigID);
     if (!opencodeConfig) throw new Error(`Unknown opencode config: ${profile.opencodeConfigID}`);
@@ -204,6 +207,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
     validateRuntimeSlug(bot.slug, "slug");
     validateRuntimeID(bot.defaultAgentProfileID, "defaultAgentProfileID");
     validateRuntimeID(bot.sandboxProfileID, "sandboxProfileID");
+    validateBotAdapters(bot.adapters);
 
     return this.db.transaction(async (tx) => {
       const rows = await tx
@@ -303,6 +307,7 @@ type AgentProfileRow = InferSelectModel<typeof agentProfiles>;
 
 function botFromRow(row: BotRow): Bot {
   return {
+    adapters: row.adapters,
     defaultAgentProfileID: row.defaultAgentProfileID,
     displayName: row.displayName,
     enabled: row.enabled,
@@ -336,6 +341,7 @@ function opencodeConfigFromRow(row: OpencodeConfigRow): OpencodeConfigRecord {
 
 function agentProfileFromRow(row: AgentProfileRow): AgentProfile {
   return {
+    claimEnv: row.claimEnv,
     displayName: row.displayName,
     enabled: row.enabled,
     id: row.id,

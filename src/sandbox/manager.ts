@@ -2,8 +2,8 @@ import { createHash, randomBytes } from "node:crypto";
 import type { CustomObjectsApi } from "@kubernetes/client-node";
 import { buildOpencodeConfigContent } from "../agent/config.js";
 import type { Config } from "../config.js";
-import { sandboxProfileHash } from "../runtime/store.js";
-import type { ResolvedRuntime } from "../runtime/types.js";
+import { agentProfileHash, sandboxProfileHash } from "../runtime/store.js";
+import type { EnvVarRef, ResolvedRuntime } from "../runtime/types.js";
 import type { EnvVar } from "../types.js";
 import { claimNameForThread } from "./naming.js";
 import type { ClaimedSandbox, SandboxClaim } from "./types.js";
@@ -16,6 +16,7 @@ export class SandboxManager {
   constructor(
     private readonly api: CustomObjectsApi,
     private readonly config: Config,
+    private readonly env: NodeJS.ProcessEnv = process.env,
   ) {}
 
   async claimFor(threadId: string, runtime: ResolvedRuntime): Promise<ClaimedSandbox> {
@@ -109,7 +110,7 @@ export class SandboxManager {
     const env: EnvVar[] = [
       { name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
       { name: "OPENCODE_SERVER_PASSWORD", value: input.password },
-      ...this.config.claimEnv,
+      ...mergeEnvVars(this.config.claimEnv, resolveEnvVarRefs(input.runtime.agentProfile.claimEnv, this.env)),
     ];
 
     const opencodeConfigContent = buildOpencodeConfigContent(input.runtime.opencodeConfig);
@@ -131,6 +132,7 @@ export class SandboxManager {
         },
         annotations: {
           "agentbay.dev/agent-profile-id": input.runtime.agentProfile.id,
+          "agentbay.dev/agent-profile-hash": agentProfileHash(input.runtime.agentProfile),
           "agentbay.dev/bot-id": input.runtime.bot.id,
           "agentbay.dev/opencode-agent-name": input.runtime.opencodeAgentName,
           "agentbay.dev/opencode-config-hash": input.runtime.opencodeConfig.configHash,
@@ -236,6 +238,7 @@ function claimMatchesRuntime(claim: SandboxClaim, runtime: ResolvedRuntime): boo
   const annotations = claim.metadata.annotations ?? {};
   return (
     annotations["agentbay.dev/agent-profile-id"] === runtime.agentProfile.id &&
+    annotations["agentbay.dev/agent-profile-hash"] === agentProfileHash(runtime.agentProfile) &&
     annotations["agentbay.dev/bot-id"] === runtime.bot.id &&
     annotations["agentbay.dev/opencode-config-hash"] === runtime.opencodeConfig.configHash &&
     annotations["agentbay.dev/opencode-config-id"] === runtime.opencodeConfig.id &&
@@ -247,6 +250,22 @@ function claimMatchesRuntime(claim: SandboxClaim, runtime: ResolvedRuntime): boo
 function labelValue(value: string): string {
   if (value.length <= 63 && /^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$/.test(value)) return value;
   return `h-${createHash("sha256").update(value).digest("hex").slice(0, 61)}`;
+}
+
+function resolveEnvVarRefs(refs: EnvVarRef[], env: NodeJS.ProcessEnv): EnvVar[] {
+  return refs.map((ref) => {
+    const value = env[ref.valueFromEnv];
+    if (!value) throw new Error(`Missing environment variable ${ref.valueFromEnv} for claim env ${ref.name}`);
+    return { name: ref.name, value };
+  });
+}
+
+function mergeEnvVars(...groups: EnvVar[][]): EnvVar[] {
+  const merged = new Map<string, EnvVar>();
+  for (const group of groups) {
+    for (const entry of group) merged.set(entry.name, entry);
+  }
+  return [...merged.values()];
 }
 
 function sleep(ms: number): Promise<void> {

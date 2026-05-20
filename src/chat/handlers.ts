@@ -3,7 +3,7 @@ import type { Config } from "../config.js";
 import { createAgentClient, waitForOpencodeReady } from "../agent/client.js";
 import { createSession, runPrompt } from "../agent/runner.js";
 import { resolveInitialRuntime, resolveThreadRuntime } from "../runtime/resolver.js";
-import { sandboxProfileHash, type RuntimeStore } from "../runtime/store.js";
+import { agentProfileHash, sandboxProfileHash, type RuntimeStore } from "../runtime/store.js";
 import type { ResolvedRuntime } from "../runtime/types.js";
 import type { SandboxManager } from "../sandbox/manager.js";
 import type { ThreadState } from "../types.js";
@@ -115,6 +115,7 @@ async function startSessionWithRuntime(
     await thread.setState(
       {
         agentProfileID: runtime.agentProfile.id,
+        agentProfileHash: agentProfileHash(runtime.agentProfile),
         botID: runtime.bot.id,
         claimName: sandbox.claimName,
         createdAt: new Date().toISOString(),
@@ -222,6 +223,7 @@ function hasRuntimeDrift(state: ThreadState, runtime: ResolvedRuntime): boolean 
     state.sandboxProfileID !== runtime.sandboxProfile.id ||
     state.sandboxProfileHash !== sandboxProfileHash(runtime.sandboxProfile) ||
     state.agentProfileID !== runtime.agentProfile.id ||
+    state.agentProfileHash !== agentProfileHash(runtime.agentProfile) ||
     state.opencodeConfigID !== runtime.opencodeConfig.id ||
     state.opencodeConfigHash !== runtime.opencodeConfig.configHash ||
     state.opencodeAgentName !== runtime.opencodeAgentName

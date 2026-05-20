@@ -3,11 +3,15 @@ import type { Hono } from "hono";
 import type { Config } from "../config.js";
 import { runWithBotSlug } from "../runtime/context.js";
 import type { RuntimeStore } from "../runtime/store.js";
+import type { Bot } from "../runtime/types.js";
 import type { ThreadState } from "../types.js";
+import type { BotChatRegistry } from "./bot.js";
+
+type ChatSource = Chat<Record<string, Adapter>, ThreadState> | BotChatRegistry;
 
 export function mountWebhooks(
   app: Hono,
-  chat: Chat<Record<string, Adapter>, ThreadState>,
+  chat: ChatSource,
   config: Config,
   runtimeStore: RuntimeStore,
 ): void {
@@ -17,11 +21,17 @@ export function mountWebhooks(
       const bot = await runtimeStore.botBySlug(botSlug);
       if (!bot || !bot.enabled) return context.text(`Unknown agent bot: ${botSlug}`, 404);
 
-      const handler = chat.webhooks[adapterName];
+      const botChat = await chatForBot(chat, bot);
+      const handler = botChat.webhooks[adapterName];
       if (!handler) return context.text(`${adapterName} adapter is not enabled`, 404);
       return runWithBotSlug(botSlug, () => handler(context.req.raw));
     });
   }
+}
+
+async function chatForBot(chat: ChatSource, bot: Bot): Promise<Chat<Record<string, Adapter>, ThreadState>> {
+  if ("chatForBot" in chat) return chat.chatForBot(bot);
+  return chat;
 }
 
 function enabledWebhookAdapters(config: Config): string[] {

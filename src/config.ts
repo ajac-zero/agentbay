@@ -112,6 +112,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         hasTelegramConfig(env),
         "Telegram",
         "TELEGRAM_BOT_TOKEN",
+        { allowExplicitWithoutConfig: true },
       ),
     },
     whatsapp: {
@@ -132,11 +133,12 @@ function readAdapterEnabled(
   hasRequiredConfig: boolean,
   label: string,
   requirements: string,
+  options: { allowExplicitWithoutConfig?: boolean } = {},
 ): boolean {
   const explicitlyConfigured = env[enabledEnvName] !== undefined && env[enabledEnvName] !== "";
   const enabled = explicitlyConfigured ? readBoolean(env[enabledEnvName], false) : hasRequiredConfig;
 
-  if (enabled && !hasRequiredConfig) {
+  if (enabled && !hasRequiredConfig && !(explicitlyConfigured && options.allowExplicitWithoutConfig)) {
     throw new Error(`${label} is enabled, but ${requirements} must be set`);
   }
 

@@ -47,6 +47,7 @@ describe("runtime admin API", () => {
     expect(sandbox.status).toBe(201);
 
     const agent = await requestJSON(app, "POST", "/admin/runtime/agent-profiles", {
+      claimEnv: [{ name: "ANTHROPIC_API_KEY", valueFromEnv: "ANTHROPIC_API_KEY_CODER" }],
       displayName: "Coder",
       enabled: true,
       id: "agent-profile-coder",
@@ -55,8 +56,10 @@ describe("runtime admin API", () => {
       slug: "coder",
     });
     expect(agent.status).toBe(201);
+    expect(agent.body).toMatchObject({ claimEnv: [{ name: "ANTHROPIC_API_KEY", valueFromEnv: "ANTHROPIC_API_KEY_CODER" }] });
 
     const bot = await requestJSON(app, "POST", "/admin/runtime/bots", {
+      adapters: { telegram: { botTokenEnv: "TELEGRAM_BOT_TOKEN_CODER", userName: "coderbot" } },
       defaultAgentProfileID: "agent-profile-coder",
       displayName: "Cluster Bot",
       enabled: true,
@@ -65,10 +68,11 @@ describe("runtime admin API", () => {
       slug: "clusterbot",
     });
     expect(bot.status).toBe(201);
+    expect(bot.body).toMatchObject({ adapters: { telegram: { botTokenEnv: "TELEGRAM_BOT_TOKEN_CODER", userName: "coderbot" } } });
 
     const fetched = await requestJSON(app, "GET", "/admin/runtime/bots/bot-cluster");
     expect(fetched.status).toBe(200);
-    expect(fetched.body).toMatchObject({ id: "bot-cluster", slug: "clusterbot" });
+    expect(fetched.body).toMatchObject({ adapters: { telegram: { botTokenEnv: "TELEGRAM_BOT_TOKEN_CODER" } }, id: "bot-cluster", slug: "clusterbot" });
 
     const allowList = await requestJSON(app, "GET", "/admin/runtime/bot-agent-profiles");
     expect(allowList.status).toBe(200);
@@ -155,6 +159,18 @@ describe("runtime admin API", () => {
     });
     expect(longID.status).toBe(400);
     expect(longID.body).toMatchObject({ error: "id must be a lowercase DNS label with at most 63 characters" });
+
+    const invalidEnv = await requestJSON(app, "POST", "/admin/runtime/agent-profiles", {
+      claimEnv: [{ name: "ANTHROPIC-API-KEY", valueFromEnv: "ANTHROPIC_API_KEY" }],
+      displayName: "Bad Env",
+      enabled: true,
+      id: "bad-env",
+      opencodeAgentName: "agentbay",
+      opencodeConfigID: "opencode-config-default",
+      slug: "bad-env",
+    });
+    expect(invalidEnv.status).toBe(400);
+    expect(invalidEnv.body).toMatchObject({ error: "claimEnv[0].name must be a valid environment variable name" });
   });
 
   it("fails resolution clearly when stored runtime references a missing opencode agent", async () => {

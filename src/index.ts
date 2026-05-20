@@ -1,6 +1,6 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { createBot } from "./chat/bot.js";
+import { createBotRegistry } from "./chat/bot.js";
 import { mountWebhooks } from "./chat/webhooks.js";
 import { loadConfig } from "./config.js";
 import { mountRuntimeAdmin } from "./runtime/admin.js";
@@ -11,7 +11,7 @@ import { SandboxManager } from "./sandbox/manager.js";
 const config = loadConfig();
 const runtimeStore = await createRuntimeStore();
 const sandboxManager = new SandboxManager(createCustomObjectsApi(), config);
-const chat = createBot(config, sandboxManager, runtimeStore);
+const chats = createBotRegistry(config, sandboxManager, runtimeStore);
 const app = new Hono();
 
 app.get("/healthz", async (context) =>
@@ -33,7 +33,7 @@ app.get("/healthz", async (context) =>
   }),
 );
 
-mountWebhooks(app, chat, config, runtimeStore);
+mountWebhooks(app, chats, config, runtimeStore);
 mountRuntimeAdmin(app, config, runtimeStore);
 
 const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
@@ -42,7 +42,7 @@ const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
 
 async function shutdown(signal: string): Promise<void> {
   console.log(`received ${signal}, shutting down`);
-  await chat.shutdown();
+  await chats.shutdown();
   await runtimeStore.close?.();
   server.close();
 }

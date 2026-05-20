@@ -15,6 +15,13 @@
       "when": 1779257513071,
       "tag": "0001_quick_spitfire",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1779287290103,
+      "tag": "0002_peaceful_squadron_supreme",
+      "breakpoints": true
     }
   ]
 }

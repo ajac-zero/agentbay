@@ -2,8 +2,8 @@ import { timingSafeEqual } from "node:crypto";
 import { Hono, type Context } from "hono";
 import type { Config } from "../config.js";
 import type { RuntimeStore, UpsertOpencodeConfigInput } from "./store.js";
-import type { AgentProfile, Bot, BotAgentProfile, OpencodeConfig, SandboxProfile } from "./types.js";
-import { validateRuntimeID, validateRuntimeSlug } from "./validation.js";
+import type { AgentProfile, Bot, BotAdapterConfig, BotAgentProfile, EnvVarRef, OpencodeConfig, SandboxProfile } from "./types.js";
+import { validateEnvVarName, validateRuntimeID, validateRuntimeSlug } from "./validation.js";
 
 export function mountRuntimeAdmin(app: Hono, config: Config, runtimeStore: RuntimeStore): void {
   if (!config.adminToken) return;
@@ -106,6 +106,7 @@ async function readBody(context: Context): Promise<Record<string, unknown>> {
 
 function readBot(body: Record<string, unknown>, pathID?: string): Bot {
   return {
+    adapters: readBotAdapters(body),
     defaultAgentProfileID: readReferenceID(body, "defaultAgentProfileID"),
     displayName: readString(body, "displayName"),
     enabled: readBoolean(body, "enabled"),
@@ -137,6 +138,7 @@ function readOpencodeConfig(body: Record<string, unknown>, pathID?: string): Ups
 
 function readAgentProfile(body: Record<string, unknown>, pathID?: string): AgentProfile {
   return {
+    claimEnv: readEnvVarRefs(body, "claimEnv"),
     displayName: readString(body, "displayName"),
     enabled: readBoolean(body, "enabled"),
     id: readID(body, pathID),
@@ -144,6 +146,47 @@ function readAgentProfile(body: Record<string, unknown>, pathID?: string): Agent
     opencodeConfigID: readReferenceID(body, "opencodeConfigID"),
     slug: readSlug(body, "slug"),
   };
+}
+
+function readBotAdapters(body: Record<string, unknown>): BotAdapterConfig {
+  const value = body.adapters;
+  if (value === undefined) return {};
+  if (!isRecord(value)) throw new Error("adapters must be a JSON object");
+
+  const adapters: BotAdapterConfig = {};
+  if (value.telegram !== undefined) {
+    if (!isRecord(value.telegram)) throw new Error("adapters.telegram must be a JSON object");
+    const telegram = value.telegram;
+    adapters.telegram = {
+      ...(telegram.botTokenEnv === undefined ? {} : { botTokenEnv: readEnvRefString(telegram, "botTokenEnv", "adapters.telegram.botTokenEnv") }),
+      ...(telegram.secretTokenEnv === undefined
+        ? {}
+        : { secretTokenEnv: readEnvRefString(telegram, "secretTokenEnv", "adapters.telegram.secretTokenEnv") }),
+      ...(telegram.userName === undefined ? {} : { userName: readString(telegram, "userName") }),
+    };
+  }
+
+  return adapters;
+}
+
+function readEnvVarRefs(body: Record<string, unknown>, field: string): EnvVarRef[] {
+  const value = body[field];
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+
+  return value.map((entry, index) => {
+    if (!isRecord(entry)) throw new Error(`${field}[${index}] must be a JSON object`);
+    return {
+      name: readEnvRefString(entry, "name", `${field}[${index}].name`),
+      valueFromEnv: readEnvRefString(entry, "valueFromEnv", `${field}[${index}].valueFromEnv`),
+    };
+  });
+}
+
+function readEnvRefString(body: Record<string, unknown>, field: string, displayField: string): string {
+  const value = body[field];
+  if (typeof value !== "string" || value.length === 0) throw new Error(`${displayField} must be a non-empty string`);
+  return validateEnvVarName(value, displayField);
 }
 
 function readBotAgentProfile(body: Record<string, unknown>): BotAgentProfile {
