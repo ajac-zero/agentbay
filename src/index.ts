@@ -1,8 +1,8 @@
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
 import { createBot } from "./chat/bot.js";
 import { mountWebhooks } from "./chat/webhooks.js";
 import { loadConfig } from "./config.js";
+import { createOpenApiApp, mountHealthRoute, mountOpenApiDocs } from "./openapi.js";
 import { mountRuntimeAdmin } from "./runtime/admin.js";
 import { createRuntimeStore } from "./runtime/store.js";
 import { createCustomObjectsApi } from "./sandbox/client.js";
@@ -12,31 +12,14 @@ const config = loadConfig();
 const runtimeStore = await createRuntimeStore();
 const sandboxManager = new SandboxManager(createCustomObjectsApi(), config);
 const chat = createBot(config, sandboxManager, runtimeStore);
-const app = new Hono();
+const app = createOpenApiApp();
 
-app.get("/healthz", async (context) =>
-  context.json({
-    ok: true,
-    service: "agentbay",
-    bots: (await runtimeStore.listBots()).map((bot) => ({ slug: bot.slug, enabled: bot.enabled })),
-    adapters: {
-      discord: config.discord.enabled,
-      gchat: config.gchat.enabled,
-      github: config.github.enabled,
-      linear: config.linear.enabled,
-      messenger: config.messenger.enabled,
-      slack: config.slack.enabled,
-      teams: config.teams.enabled,
-      telegram: config.telegram.enabled,
-      whatsapp: config.whatsapp.enabled,
-    },
-  }),
-);
-
+mountHealthRoute(app, config, runtimeStore);
 mountWebhooks(app, chat, config, runtimeStore);
 mountRuntimeAdmin(app, config, runtimeStore);
+mountOpenApiDocs(app);
 
-const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
+const server = serve({ fetch: (request) => app.fetch(request), port: config.port }, (info) => {
   console.log(`agentbay listening on http://0.0.0.0:${info.port}`);
 });
 

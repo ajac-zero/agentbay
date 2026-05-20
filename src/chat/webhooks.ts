@@ -6,7 +6,7 @@ import type { RuntimeStore } from "../runtime/store.js";
 import type { ThreadState } from "../types.js";
 
 export function mountWebhooks(
-  app: Hono,
+  app: Hono<any>,
   chat: Chat<Record<string, Adapter>, ThreadState>,
   config: Config,
   runtimeStore: RuntimeStore,

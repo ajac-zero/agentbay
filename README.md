@@ -82,6 +82,15 @@ Health is mounted at:
 GET /healthz
 ```
 
+OpenAPI docs are mounted at:
+
+```text
+GET /docs
+GET /openapi.json
+```
+
+Runtime admin routes and schemas are documented from the same route definitions used to mount the handlers. Chat adapter webhook payloads remain adapter-owned pass-through requests and are documented as a generic webhook endpoint.
+
 ## Runtime Admin API
 
 Set `AGENTBAY_ADMIN_TOKEN` to enable authenticated CRUD routes. Requests must include `Authorization: Bearer <token>`.
