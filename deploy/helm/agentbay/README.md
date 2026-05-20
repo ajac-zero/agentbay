@@ -70,7 +70,7 @@ The chart supports three modes, selected by `database.*`:
 | External Postgres URL | `database.enabled=false` + `database.external.url=postgres://...` | URL is rendered into the orchestrator Deployment env. |
 | External Postgres from existing Secret | `database.enabled=false` + `database.external.existingSecret=my-postgres` + `database.external.existingSecretKey=AGENTBAY_DATABASE_URL` | Recommended for production; keeps credentials out of values files. |
 
-On startup the orchestrator creates the required runtime tables if they do not exist. It does not seed runtime rows; create bots/profiles/configs through the admin API or your own SQL/bootstrap tooling.
+On startup the orchestrator applies pending Drizzle migrations for the runtime tables. It does not seed runtime rows; create bots/profiles/configs through the admin API or your own SQL/bootstrap tooling.
 
 For production, prefer an existing Secret:
 
