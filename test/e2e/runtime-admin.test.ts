@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { Config } from "../../src/config.js";
 import { mountRuntimeAdmin } from "../../src/runtime/admin.js";
-import { TestRuntimeStore } from "./runtime-store-fixture.js";
+import { defaultRuntimeSnapshot, TestRuntimeStore } from "./runtime-store-fixture.js";
 
 describe("runtime admin API", () => {
   it("is disabled when no admin token is configured", async () => {
@@ -83,6 +83,87 @@ describe("runtime admin API", () => {
 
     expect(response.status).toBe(400);
     expect(response.body).toMatchObject({ error: "Cannot delete default agent profile mapping for bot bot-default" });
+  });
+
+  it("rejects agent profiles whose opencode agent is missing from the selected config", async () => {
+    const app = new Hono();
+    mountRuntimeAdmin(app, testConfig(), new TestRuntimeStore());
+
+    const response = await requestJSON(app, "POST", "/admin/runtime/agent-profiles", {
+      displayName: "Reviewer",
+      enabled: true,
+      id: "agent-profile-reviewer",
+      opencodeAgentName: "reviewer",
+      opencodeConfigID: "opencode-config-default",
+      slug: "reviewer",
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      error: "Agent profile references missing opencode agent reviewer in config opencode-config-default",
+    });
+  });
+
+  it("rejects opencode config updates that remove agents used by existing profiles", async () => {
+    const app = new Hono();
+    mountRuntimeAdmin(app, testConfig(), new TestRuntimeStore());
+
+    const response = await requestJSON(app, "PUT", "/admin/runtime/opencode-configs/opencode-config-default", {
+      config: { agent: { coder: { prompt: "new prompt" } }, default_agent: "coder" },
+      displayName: "Default Config",
+      enabled: true,
+      id: "opencode-config-default",
+      slug: "default",
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      error: "Agent profile references missing opencode agent agentbay in config opencode-config-default",
+    });
+  });
+
+  it("rejects invalid runtime ids and slugs before calling the store", async () => {
+    const app = new Hono();
+    mountRuntimeAdmin(app, testConfig(), new TestRuntimeStore());
+
+    const invalidID = await requestJSON(app, "POST", "/admin/runtime/opencode-configs", {
+      config: { agent: { coder: {} } },
+      displayName: "Bad ID",
+      enabled: true,
+      id: "BadID",
+      slug: "bad-id",
+    });
+    expect(invalidID.status).toBe(400);
+    expect(invalidID.body).toMatchObject({ error: "id must be a lowercase DNS label with at most 63 characters" });
+
+    const invalidSlug = await requestJSON(app, "POST", "/admin/runtime/opencode-configs", {
+      config: { agent: { coder: {} } },
+      displayName: "Bad Slug",
+      enabled: true,
+      id: "bad-slug",
+      slug: "bad/slug",
+    });
+    expect(invalidSlug.status).toBe(400);
+    expect(invalidSlug.body).toMatchObject({ error: "slug must be a lowercase DNS label with at most 63 characters" });
+
+    const longID = await requestJSON(app, "POST", "/admin/runtime/opencode-configs", {
+      config: { agent: { coder: {} } },
+      displayName: "Long ID",
+      enabled: true,
+      id: "a".repeat(64),
+      slug: "long-id",
+    });
+    expect(longID.status).toBe(400);
+    expect(longID.body).toMatchObject({ error: "id must be a lowercase DNS label with at most 63 characters" });
+  });
+
+  it("fails resolution clearly when stored runtime references a missing opencode agent", async () => {
+    const snapshot = defaultRuntimeSnapshot();
+    snapshot.agentProfiles[0] = { ...snapshot.agentProfiles[0]!, opencodeAgentName: "missing" };
+
+    await expect(new TestRuntimeStore(snapshot).resolveByBotSlug("agentbay")).rejects.toThrow(
+      "Agent profile references missing opencode agent missing in config opencode-config-default",
+    );
   });
 });
 

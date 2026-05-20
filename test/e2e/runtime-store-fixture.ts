@@ -1,11 +1,19 @@
 import { hashConfig, resolveRuntime, type RuntimeStore, type RuntimeStoreSnapshot, type UpsertOpencodeConfigInput } from "../../src/runtime/store.js";
 import type { AgentProfile, Bot, BotAgentProfile, OpencodeConfigRecord, SandboxProfile } from "../../src/runtime/types.js";
+import {
+  assertOpencodeAgentExists,
+  assertOpencodeConfigSupportsProfiles,
+  validateRuntimeID,
+  validateRuntimeSlug,
+} from "../../src/runtime/validation.js";
 import type { ThreadState } from "../../src/types.js";
 
 export class TestRuntimeStore implements RuntimeStore {
   constructor(private readonly snapshot: RuntimeStoreSnapshot = defaultRuntimeSnapshot()) {}
 
   async addBotAgentProfile(entry: BotAgentProfile): Promise<BotAgentProfile> {
+    validateRuntimeID(entry.botID, "botID");
+    validateRuntimeID(entry.agentProfileID, "agentProfileID");
     this.requireBot(entry.botID);
     this.requireAgentProfile(entry.agentProfileID);
     if (!this.snapshot.botAgentProfiles.some((candidate) => sameBotAgentProfile(candidate, entry))) {
@@ -107,12 +115,20 @@ export class TestRuntimeStore implements RuntimeStore {
   }
 
   async upsertAgentProfile(profile: AgentProfile): Promise<AgentProfile> {
-    this.requireOpencodeConfig(profile.opencodeConfigID);
+    validateRuntimeID(profile.id, "id");
+    validateRuntimeSlug(profile.slug, "slug");
+    validateRuntimeID(profile.opencodeConfigID, "opencodeConfigID");
+    const opencodeConfig = this.requireOpencodeConfig(profile.opencodeConfigID);
+    assertOpencodeAgentExists(opencodeConfig.config, profile.opencodeAgentName, opencodeConfig.id);
     upsertByID(this.snapshot.agentProfiles, profile);
     return profile;
   }
 
   async upsertBot(bot: Bot): Promise<Bot> {
+    validateRuntimeID(bot.id, "id");
+    validateRuntimeSlug(bot.slug, "slug");
+    validateRuntimeID(bot.defaultAgentProfileID, "defaultAgentProfileID");
+    validateRuntimeID(bot.sandboxProfileID, "sandboxProfileID");
     this.requireSandboxProfile(bot.sandboxProfileID);
     this.requireAgentProfile(bot.defaultAgentProfileID);
     upsertByID(this.snapshot.bots, bot);
@@ -121,12 +137,20 @@ export class TestRuntimeStore implements RuntimeStore {
   }
 
   async upsertOpencodeConfig(input: UpsertOpencodeConfigInput): Promise<OpencodeConfigRecord> {
+    validateRuntimeID(input.id, "id");
+    validateRuntimeSlug(input.slug, "slug");
     const config = { ...input, configHash: hashConfig(input.config), updatedAt: input.updatedAt ?? new Date().toISOString() };
+    assertOpencodeConfigSupportsProfiles(
+      config,
+      this.snapshot.agentProfiles.filter((profile) => profile.opencodeConfigID === config.id),
+    );
     upsertByID(this.snapshot.opencodeConfigs, config);
     return config;
   }
 
   async upsertSandboxProfile(profile: SandboxProfile): Promise<SandboxProfile> {
+    validateRuntimeID(profile.id, "id");
+    validateRuntimeSlug(profile.slug, "slug");
     upsertByID(this.snapshot.sandboxProfiles, profile);
     return profile;
   }
@@ -139,8 +163,10 @@ export class TestRuntimeStore implements RuntimeStore {
     if (!this.snapshot.bots.some((bot) => bot.id === id)) throw new Error(`Unknown bot: ${id}`);
   }
 
-  private requireOpencodeConfig(id: string): void {
-    if (!this.snapshot.opencodeConfigs.some((config) => config.id === id)) throw new Error(`Unknown opencode config: ${id}`);
+  private requireOpencodeConfig(id: string): OpencodeConfigRecord {
+    const config = this.snapshot.opencodeConfigs.find((candidate) => candidate.id === id);
+    if (!config) throw new Error(`Unknown opencode config: ${id}`);
+    return config;
   }
 
   private requireSandboxProfile(id: string): void {
