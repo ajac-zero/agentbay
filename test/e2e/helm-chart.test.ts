@@ -40,10 +40,32 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/name: demo-agentbay-postgres/);
       expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_HOST/);
       expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_PASSWORD/);
+      expect(result.stdout).not.toMatch(/name: demo-agentbay-runtime-seed/);
       // No SandboxTemplate / WarmPool / Ingress unless opted in
       expect(result.stdout).not.toMatch(/kind: SandboxTemplate/);
       expect(result.stdout).not.toMatch(/kind: SandboxWarmPool/);
       expect(result.stdout).not.toMatch(/kind: Ingress/);
+    });
+
+    it("renders an idempotent runtime seed hook when enabled", () => {
+      const result = helm([
+        "template",
+        "demo",
+        CHART_PATH,
+        "--namespace",
+        NAMESPACE,
+        "--set",
+        "runtimeSeed.enabled=true",
+      ]);
+      expect(result.status, formatStderr(result)).toBe(0);
+      expect(result.stdout).toMatch(/name: demo-agentbay-runtime-seed/);
+      expect(result.stdout).toMatch(/helm\.sh\/hook: post-install,post-upgrade/);
+      expect(result.stdout).toMatch(/key: AGENTBAY_ADMIN_TOKEN/);
+      expect(result.stdout).toMatch(/PUT "\/admin\/runtime\/opencode-configs\/opencode-config-default"/);
+      expect(result.stdout).toMatch(/PUT "\/admin\/runtime\/sandbox-profiles\/sandbox-profile-default"/);
+      expect(result.stdout).toMatch(/PUT "\/admin\/runtime\/agent-profiles\/agent-profile-agentbay"/);
+      expect(result.stdout).toMatch(/PUT "\/admin\/runtime\/bots\/bot-agentbay"/);
+      expect(result.stdout).toMatch(/"slug":"agentbay"/);
     });
 
     it("renders SandboxTemplates with a NetworkPolicy ingress selector that matches the orchestrator", () => {
