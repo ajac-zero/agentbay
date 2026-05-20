@@ -136,6 +136,76 @@ admin:
   # -- upgrades. Existing Secrets should provide AGENTBAY_ADMIN_TOKEN directly.
   token: ""
 
+runtimeSeed:
+  # -- Create/update runtime rows after install/upgrade through the admin API.
+  # -- This is disabled by default because production installs usually want to
+  # -- own bot/profile/config definitions explicitly in their environment repo.
+  # -- Use `helm install/upgrade --wait` when enabling this so the orchestrator
+  # -- is ready before the seed hook runs.
+  enabled: false
+  image:
+    repository: curlimages/curl
+    tag: "8.11.1"
+    pullPolicy: IfNotPresent
+  # -- Helm hook delete policy for the seed Job. Failed Jobs are intentionally
+  # -- kept so their logs remain available for troubleshooting.
+  hookDeletePolicy:
+    - before-hook-creation
+    - hook-succeeded
+  backoffLimit: 6
+  wait:
+    # -- Number of health-check attempts before the seed Job gives up.
+    attempts: 90
+    # -- Seconds between health-check attempts.
+    seconds: 2
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+  # -- DB-backed opencode config records. The default config only declares an
+  # -- opencode agent; set provider/model fields here for your own LLM backend.
+  opencodeConfigs:
+    - id: opencode-config-default
+      slug: default
+      displayName: Default
+      enabled: true
+      config:
+        agent:
+          agentbay:
+            prompt: You are running inside an isolated Kubernetes sandbox. Help the user with the requested coding task, keep them informed, and avoid touching unrelated files.
+        default_agent: agentbay
+  # -- DB-backed sandbox profile records. `templateName` must reference an
+  # -- existing SandboxTemplate in `claims.namespace` before this bot can run.
+  sandboxProfiles:
+    - id: sandbox-profile-default
+      slug: default
+      templateName: opencode-template
+      warmpool: none
+      enabled: true
+  # -- DB-backed agent profile records. `opencodeAgentName` must exist under
+  # -- the referenced opencode config's `agent` object.
+  agentProfiles:
+    - id: agent-profile-agentbay
+      slug: agentbay
+      displayName: agentbay
+      opencodeConfigID: opencode-config-default
+      opencodeAgentName: agentbay
+      enabled: true
+  # -- DB-backed bot records. Webhooks use `/agents/<slug>/webhooks/<adapter>`.
+  bots:
+    - id: bot-agentbay
+      slug: agentbay
+      displayName: agentbay
+      sandboxProfileID: sandbox-profile-default
+      defaultAgentProfileID: agent-profile-agentbay
+      enabled: true
+  # -- Additional bot/agent allow-list entries. Default bot mappings are added
+  # -- automatically when each bot is upserted.
+  botAgentProfiles: []
+
 # -- Adapter toggles. When an adapter is enabled, the orchestrator expects the
 # -- corresponding env vars to be available in `secrets.data` (or via
 # -- `secrets.existingSecret`). The chart sets AGENTBAY_<NAME>_ENABLED=true so
