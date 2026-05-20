@@ -5,6 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "db:generate": "drizzle-kit generate",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
@@ -37,6 +38,7 @@
     "@kubernetes/client-node": "^1.4.0",
     "@opencode-ai/sdk": "^1.14.50",
     "chat": "^4.28.1",
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.12.18",
     "pg": "^8.20.0"
   },
@@ -44,6 +46,7 @@
     "@testcontainers/k3s": "^11.14.0",
     "@types/node": "^25.8.0",
     "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
     "tsx": "^4.22.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.6"

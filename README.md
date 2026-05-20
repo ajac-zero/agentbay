@@ -41,7 +41,7 @@ pnpm dev
 | `AGENTBAY_OPENCODE_PORT` | `4096` | Port exposed by `opencode serve` in the sandbox. |
 | `AGENTBAY_OPENCODE_DIRECTORY` | `/workspace` | opencode instance directory. |
 | `REDIS_URL` | unset | Enables persistent Chat SDK state; otherwise in-memory state is used. |
-| `AGENTBAY_DATABASE_URL` / `DATABASE_URL` | required unless host vars are set | Postgres URL for bot/runtime/profile storage. Startup creates missing tables. |
+| `AGENTBAY_DATABASE_URL` / `DATABASE_URL` | required unless host vars are set | Postgres URL for bot/runtime/profile storage. Startup runs pending Drizzle migrations. |
 | `AGENTBAY_DATABASE_HOST` | unset | Alternative to URL-based config; pair with `AGENTBAY_DATABASE_USER`, `AGENTBAY_DATABASE_PASSWORD`, and `AGENTBAY_DATABASE_NAME`. |
 | `AGENTBAY_DATABASE_PORT` | `5432` | Postgres port when using `AGENTBAY_DATABASE_HOST`. |
 | `AGENTBAY_DATABASE_USER` | unset | Postgres user when using `AGENTBAY_DATABASE_HOST`. |
@@ -116,6 +116,8 @@ POST   /admin/runtime/bot-agent-profiles
 DELETE /admin/runtime/bot-agent-profiles/:botID/:agentProfileID
 ```
 
+Runtime database schema lives in `src/runtime/schema.ts`; generate new Drizzle migrations with `pnpm db:generate` after changing it.
+
 ## Deployment
 
 Build and push the orchestrator image:
@@ -134,7 +136,7 @@ docker push ghcr.io/your-org/opencode-sandbox:latest
 
 Update `deploy/orchestrator.yaml` and `deploy/examples/sandbox-template.yaml` with your pushed image names before applying them.
 
-A Postgres database must be configured before starting the orchestrator. Use `AGENTBAY_DATABASE_URL` / `DATABASE_URL`, or the discrete `AGENTBAY_DATABASE_HOST` settings. The Helm chart can deploy an in-cluster Postgres for small installs, or reference an external Postgres URL/Secret.
+A Postgres database must be configured before starting the orchestrator. Use `AGENTBAY_DATABASE_URL` / `DATABASE_URL`, or the discrete `AGENTBAY_DATABASE_HOST` settings. The orchestrator applies Drizzle migrations from `drizzle/` on startup. The Helm chart can deploy an in-cluster Postgres for small installs, or reference an external Postgres URL/Secret.
 
 The `deploy/` directory contains starter Kubernetes manifests:
 

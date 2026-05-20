@@ -1,6 +1,10 @@
+import path from "node:path";
+import { and, asc, eq, type InferSelectModel } from "drizzle-orm";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
 import type { ThreadState } from "../types.js";
-import type { AgentProfile, Bot, OpencodeConfig, OpencodeConfigRecord, SandboxProfile } from "./types.js";
+import type { AgentProfile, Bot, OpencodeConfigRecord, SandboxProfile } from "./types.js";
 import {
   hashConfig,
   resolveRuntime,
@@ -8,13 +12,18 @@ import {
   type RuntimeStoreSnapshot,
   type UpsertOpencodeConfigInput,
 } from "./store.js";
+import * as schema from "./schema.js";
+import { agentProfiles, botAgentProfiles, bots, opencodeConfigs, sandboxProfiles } from "./schema.js";
 
 const { Pool } = pg;
+
+type RuntimeDatabase = NodePgDatabase<typeof schema>;
 
 export type PostgresRuntimeStoreOptions = {
   connectionString?: string;
   database?: string;
   host?: string;
+  migrationsFolder?: string;
   password?: string;
   port?: number;
   ssl: boolean;
@@ -31,26 +40,21 @@ export async function createPostgresRuntimeStore(options: PostgresRuntimeStoreOp
     ssl: options.ssl ? { rejectUnauthorized: false } : undefined,
     user: options.user,
   });
-  const store = new PostgresRuntimeStore(pool);
+  const db = drizzle(pool, { schema });
+  const store = new PostgresRuntimeStore(pool, db, options.migrationsFolder ?? path.resolve(process.cwd(), "drizzle"));
   await store.initialize();
   return store;
 }
 
 export class PostgresRuntimeStore implements RuntimeStore {
-  constructor(private readonly pool: pg.Pool) {}
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly db: RuntimeDatabase,
+    private readonly migrationsFolder: string,
+  ) {}
 
   async initialize(): Promise<void> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("begin");
-      await createSchema(client);
-      await client.query("commit");
-    } catch (error) {
-      await client.query("rollback");
-      throw error;
-    } finally {
-      client.release();
-    }
+    await migrate(this.db, { migrationsFolder: this.migrationsFolder });
   }
 
   async close(): Promise<void> {
@@ -58,23 +62,18 @@ export class PostgresRuntimeStore implements RuntimeStore {
   }
 
   async addBotAgentProfile(entry: { botID: string; agentProfileID: string }): Promise<{ botID: string; agentProfileID: string }> {
-    await this.pool.query(
-      `insert into agentbay_bot_agent_profiles (bot_id, agent_profile_id)
-       values ($1, $2)
-       on conflict do nothing`,
-      [entry.botID, entry.agentProfileID],
-    );
+    await this.db.insert(botAgentProfiles).values(entry).onConflictDoNothing();
     return entry;
   }
 
   async deleteAgentProfile(id: string): Promise<boolean> {
-    const result = await this.pool.query("delete from agentbay_agent_profiles where id = $1", [id]);
-    return (result.rowCount ?? 0) > 0;
+    const rows = await this.db.delete(agentProfiles).where(eq(agentProfiles.id, id)).returning({ id: agentProfiles.id });
+    return rows.length > 0;
   }
 
   async deleteBot(id: string): Promise<boolean> {
-    const result = await this.pool.query("delete from agentbay_bots where id = $1", [id]);
-    return (result.rowCount ?? 0) > 0;
+    const rows = await this.db.delete(bots).where(eq(bots.id, id)).returning({ id: bots.id });
+    return rows.length > 0;
   }
 
   async deleteBotAgentProfile(botID: string, agentProfileID: string): Promise<boolean> {
@@ -83,95 +82,72 @@ export class PostgresRuntimeStore implements RuntimeStore {
       throw new Error(`Cannot delete default agent profile mapping for bot ${botID}`);
     }
 
-    const result = await this.pool.query("delete from agentbay_bot_agent_profiles where bot_id = $1 and agent_profile_id = $2", [
-      botID,
-      agentProfileID,
-    ]);
-    return (result.rowCount ?? 0) > 0;
+    const rows = await this.db
+      .delete(botAgentProfiles)
+      .where(and(eq(botAgentProfiles.botID, botID), eq(botAgentProfiles.agentProfileID, agentProfileID)))
+      .returning({ botID: botAgentProfiles.botID });
+    return rows.length > 0;
   }
 
   async deleteOpencodeConfig(id: string): Promise<boolean> {
-    const result = await this.pool.query("delete from agentbay_opencode_configs where id = $1", [id]);
-    return (result.rowCount ?? 0) > 0;
+    const rows = await this.db.delete(opencodeConfigs).where(eq(opencodeConfigs.id, id)).returning({ id: opencodeConfigs.id });
+    return rows.length > 0;
   }
 
   async deleteSandboxProfile(id: string): Promise<boolean> {
-    const result = await this.pool.query("delete from agentbay_sandbox_profiles where id = $1", [id]);
-    return (result.rowCount ?? 0) > 0;
+    const rows = await this.db.delete(sandboxProfiles).where(eq(sandboxProfiles.id, id)).returning({ id: sandboxProfiles.id });
+    return rows.length > 0;
   }
 
   async getAgentProfile(id: string): Promise<AgentProfile | undefined> {
-    const { rows } = await this.pool.query<AgentProfileRow>(
-      "select id, slug, display_name, opencode_config_id, opencode_agent_name, enabled from agentbay_agent_profiles where id = $1",
-      [id],
-    );
+    const rows = await this.db.select().from(agentProfiles).where(eq(agentProfiles.id, id)).limit(1);
     return rows[0] ? agentProfileFromRow(rows[0]) : undefined;
   }
 
   async getBot(id: string): Promise<Bot | undefined> {
-    const { rows } = await this.pool.query<BotRow>(
-      "select id, slug, display_name, sandbox_profile_id, default_agent_profile_id, enabled from agentbay_bots where id = $1",
-      [id],
-    );
+    const rows = await this.db.select().from(bots).where(eq(bots.id, id)).limit(1);
     return rows[0] ? botFromRow(rows[0]) : undefined;
   }
 
   async getOpencodeConfig(id: string): Promise<OpencodeConfigRecord | undefined> {
-    const { rows } = await this.pool.query<OpencodeConfigRow>(
-      "select id, slug, display_name, config, updated_at, enabled from agentbay_opencode_configs where id = $1",
-      [id],
-    );
+    const rows = await this.db.select().from(opencodeConfigs).where(eq(opencodeConfigs.id, id)).limit(1);
     return rows[0] ? opencodeConfigFromRow(rows[0]) : undefined;
   }
 
   async getSandboxProfile(id: string): Promise<SandboxProfile | undefined> {
-    const { rows } = await this.pool.query<SandboxProfileRow>(
-      "select id, slug, template_name, warmpool, enabled from agentbay_sandbox_profiles where id = $1",
-      [id],
-    );
+    const rows = await this.db.select().from(sandboxProfiles).where(eq(sandboxProfiles.id, id)).limit(1);
     return rows[0] ? sandboxProfileFromRow(rows[0]) : undefined;
   }
 
   async listAgentProfiles(): Promise<AgentProfile[]> {
-    const { rows } = await this.pool.query<AgentProfileRow>(
-      "select id, slug, display_name, opencode_config_id, opencode_agent_name, enabled from agentbay_agent_profiles order by slug",
-    );
+    const rows = await this.db.select().from(agentProfiles).orderBy(asc(agentProfiles.slug));
     return rows.map(agentProfileFromRow);
   }
 
   async listBotAgentProfiles(): Promise<Array<{ botID: string; agentProfileID: string }>> {
-    const { rows } = await this.pool.query<BotAgentProfileRow>(
-      "select bot_id, agent_profile_id from agentbay_bot_agent_profiles order by bot_id, agent_profile_id",
-    );
-    return rows.map((row) => ({ agentProfileID: row.agent_profile_id, botID: row.bot_id }));
+    return this.db
+      .select()
+      .from(botAgentProfiles)
+      .orderBy(asc(botAgentProfiles.botID), asc(botAgentProfiles.agentProfileID));
   }
 
   async listBots(): Promise<Bot[]> {
-    const { rows } = await this.pool.query<BotRow>(
-      "select id, slug, display_name, sandbox_profile_id, default_agent_profile_id, enabled from agentbay_bots order by slug",
-    );
+    const rows = await this.db.select().from(bots).orderBy(asc(bots.slug));
     return rows.map(botFromRow);
   }
 
   async listOpencodeConfigs(): Promise<OpencodeConfigRecord[]> {
-    const { rows } = await this.pool.query<OpencodeConfigRow>(
-      "select id, slug, display_name, config, updated_at, enabled from agentbay_opencode_configs order by slug",
-    );
+    const rows = await this.db.select().from(opencodeConfigs).orderBy(asc(opencodeConfigs.slug));
     return rows.map(opencodeConfigFromRow);
   }
 
   async listSandboxProfiles(): Promise<SandboxProfile[]> {
-    const { rows } = await this.pool.query<SandboxProfileRow>(
-      "select id, slug, template_name, warmpool, enabled from agentbay_sandbox_profiles order by slug",
-    );
+    const rows = await this.db.select().from(sandboxProfiles).orderBy(asc(sandboxProfiles.slug));
     return rows.map(sandboxProfileFromRow);
   }
 
   async botBySlug(slug: string): Promise<Bot | undefined> {
-    const { rows } = await this.pool.query<BotRow>(
-      "select id, slug, display_name, sandbox_profile_id, default_agent_profile_id, enabled from agentbay_bots where slug = $1",
-      [slug],
-    );
+    const rows = await this.db.select().from(bots).where(eq(bots.slug, slug)).limit(1);
     return rows[0] ? botFromRow(rows[0]) : undefined;
   }
 
@@ -190,211 +166,116 @@ export class PostgresRuntimeStore implements RuntimeStore {
   }
 
   async upsertAgentProfile(profile: AgentProfile): Promise<AgentProfile> {
-    const { rows } = await this.pool.query<AgentProfileRow>(
-      `insert into agentbay_agent_profiles (id, slug, display_name, opencode_config_id, opencode_agent_name, enabled)
-       values ($1, $2, $3, $4, $5, $6)
-       on conflict (id) do update set
-         slug = excluded.slug,
-         display_name = excluded.display_name,
-         opencode_config_id = excluded.opencode_config_id,
-         opencode_agent_name = excluded.opencode_agent_name,
-         enabled = excluded.enabled
-       returning id, slug, display_name, opencode_config_id, opencode_agent_name, enabled`,
-      [profile.id, profile.slug, profile.displayName, profile.opencodeConfigID, profile.opencodeAgentName, profile.enabled],
-    );
+    const rows = await this.db
+      .insert(agentProfiles)
+      .values(profile)
+      .onConflictDoUpdate({
+        set: {
+          displayName: profile.displayName,
+          enabled: profile.enabled,
+          opencodeAgentName: profile.opencodeAgentName,
+          opencodeConfigID: profile.opencodeConfigID,
+          slug: profile.slug,
+        },
+        target: agentProfiles.id,
+      })
+      .returning();
     return agentProfileFromRow(rows[0] ?? missingRow("agent profile", profile.id));
   }
 
   async upsertBot(bot: Bot): Promise<Bot> {
-    const client = await this.pool.connect();
-    try {
-      await client.query("begin");
-      const { rows } = await client.query<BotRow>(
-        `insert into agentbay_bots (id, slug, display_name, sandbox_profile_id, default_agent_profile_id, enabled)
-         values ($1, $2, $3, $4, $5, $6)
-         on conflict (id) do update set
-           slug = excluded.slug,
-           display_name = excluded.display_name,
-           sandbox_profile_id = excluded.sandbox_profile_id,
-           default_agent_profile_id = excluded.default_agent_profile_id,
-           enabled = excluded.enabled
-         returning id, slug, display_name, sandbox_profile_id, default_agent_profile_id, enabled`,
-        [bot.id, bot.slug, bot.displayName, bot.sandboxProfileID, bot.defaultAgentProfileID, bot.enabled],
-      );
-      await client.query(
-        `insert into agentbay_bot_agent_profiles (bot_id, agent_profile_id)
-         values ($1, $2)
-         on conflict do nothing`,
-        [bot.id, bot.defaultAgentProfileID],
-      );
-      await client.query("commit");
+    return this.db.transaction(async (tx) => {
+      const rows = await tx
+        .insert(bots)
+        .values(bot)
+        .onConflictDoUpdate({
+          set: {
+            defaultAgentProfileID: bot.defaultAgentProfileID,
+            displayName: bot.displayName,
+            enabled: bot.enabled,
+            sandboxProfileID: bot.sandboxProfileID,
+            slug: bot.slug,
+          },
+          target: bots.id,
+        })
+        .returning();
+      await tx
+        .insert(botAgentProfiles)
+        .values({ agentProfileID: bot.defaultAgentProfileID, botID: bot.id })
+        .onConflictDoNothing();
       return botFromRow(rows[0] ?? missingRow("bot", bot.id));
-    } catch (error) {
-      await client.query("rollback");
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
   }
 
   async upsertOpencodeConfig(input: UpsertOpencodeConfigInput): Promise<OpencodeConfigRecord> {
-    const updatedAt = input.updatedAt ?? new Date().toISOString();
+    const updatedAt = input.updatedAt ? new Date(input.updatedAt) : new Date();
     const configHash = hashConfig(input.config);
-    const { rows } = await this.pool.query<OpencodeConfigRow>(
-      `insert into agentbay_opencode_configs (id, slug, display_name, config, config_hash, updated_at, enabled)
-       values ($1, $2, $3, $4::jsonb, $5, $6, $7)
-       on conflict (id) do update set
-         slug = excluded.slug,
-         display_name = excluded.display_name,
-         config = excluded.config,
-         config_hash = excluded.config_hash,
-         updated_at = excluded.updated_at,
-         enabled = excluded.enabled
-       returning id, slug, display_name, config, updated_at, enabled`,
-      [input.id, input.slug, input.displayName, JSON.stringify(input.config), configHash, updatedAt, input.enabled],
-    );
+    const rows = await this.db
+      .insert(opencodeConfigs)
+      .values({ ...input, configHash, updatedAt })
+      .onConflictDoUpdate({
+        set: {
+          config: input.config,
+          configHash,
+          displayName: input.displayName,
+          enabled: input.enabled,
+          slug: input.slug,
+          updatedAt,
+        },
+        target: opencodeConfigs.id,
+      })
+      .returning();
     return opencodeConfigFromRow(rows[0] ?? missingRow("opencode config", input.id));
   }
 
   async upsertSandboxProfile(profile: SandboxProfile): Promise<SandboxProfile> {
-    const { rows } = await this.pool.query<SandboxProfileRow>(
-      `insert into agentbay_sandbox_profiles (id, slug, template_name, warmpool, enabled)
-       values ($1, $2, $3, $4, $5)
-       on conflict (id) do update set
-         slug = excluded.slug,
-         template_name = excluded.template_name,
-         warmpool = excluded.warmpool,
-         enabled = excluded.enabled
-       returning id, slug, template_name, warmpool, enabled`,
-      [profile.id, profile.slug, profile.templateName, profile.warmpool, profile.enabled],
-    );
+    const rows = await this.db
+      .insert(sandboxProfiles)
+      .values(profile)
+      .onConflictDoUpdate({
+        set: {
+          enabled: profile.enabled,
+          slug: profile.slug,
+          templateName: profile.templateName,
+          warmpool: profile.warmpool,
+        },
+        target: sandboxProfiles.id,
+      })
+      .returning();
     return sandboxProfileFromRow(rows[0] ?? missingRow("sandbox profile", profile.id));
   }
 
   private async snapshot(): Promise<RuntimeStoreSnapshot> {
-    const [bots, sandboxProfiles, opencodeConfigs, agentProfiles, botAgentProfiles] = await Promise.all([
-      this.pool.query<BotRow>(
-        "select id, slug, display_name, sandbox_profile_id, default_agent_profile_id, enabled from agentbay_bots",
-      ),
-      this.pool.query<SandboxProfileRow>("select id, slug, template_name, warmpool, enabled from agentbay_sandbox_profiles"),
-      this.pool.query<OpencodeConfigRow>("select id, slug, display_name, config, updated_at, enabled from agentbay_opencode_configs"),
-      this.pool.query<AgentProfileRow>(
-        "select id, slug, display_name, opencode_config_id, opencode_agent_name, enabled from agentbay_agent_profiles",
-      ),
-      this.pool.query<BotAgentProfileRow>("select bot_id, agent_profile_id from agentbay_bot_agent_profiles"),
+    const [botRows, sandboxProfileRows, opencodeConfigRows, agentProfileRows, botAgentProfileRows] = await Promise.all([
+      this.db.select().from(bots),
+      this.db.select().from(sandboxProfiles),
+      this.db.select().from(opencodeConfigs),
+      this.db.select().from(agentProfiles),
+      this.db.select().from(botAgentProfiles),
     ]);
 
     return {
-      agentProfiles: agentProfiles.rows.map(agentProfileFromRow),
-      botAgentProfiles: botAgentProfiles.rows.map((row) => ({ agentProfileID: row.agent_profile_id, botID: row.bot_id })),
-      bots: bots.rows.map(botFromRow),
-      opencodeConfigs: opencodeConfigs.rows.map(opencodeConfigFromRow),
-      sandboxProfiles: sandboxProfiles.rows.map(sandboxProfileFromRow),
+      agentProfiles: agentProfileRows.map(agentProfileFromRow),
+      botAgentProfiles: botAgentProfileRows,
+      bots: botRows.map(botFromRow),
+      opencodeConfigs: opencodeConfigRows.map(opencodeConfigFromRow),
+      sandboxProfiles: sandboxProfileRows.map(sandboxProfileFromRow),
     };
   }
 }
 
-type BotRow = {
-  id: string;
-  slug: string;
-  display_name: string;
-  sandbox_profile_id: string;
-  default_agent_profile_id: string;
-  enabled: boolean;
-};
-
-type SandboxProfileRow = {
-  id: string;
-  slug: string;
-  template_name: string;
-  warmpool: string;
-  enabled: boolean;
-};
-
-type OpencodeConfigRow = {
-  id: string;
-  slug: string;
-  display_name: string;
-  config: OpencodeConfig;
-  updated_at: Date;
-  enabled: boolean;
-};
-
-type AgentProfileRow = {
-  id: string;
-  slug: string;
-  display_name: string;
-  opencode_config_id: string;
-  opencode_agent_name: string;
-  enabled: boolean;
-};
-
-type BotAgentProfileRow = {
-  bot_id: string;
-  agent_profile_id: string;
-};
-
-async function createSchema(client: pg.PoolClient): Promise<void> {
-  await client.query(`
-    create table if not exists agentbay_sandbox_profiles (
-      id text primary key,
-      slug text not null unique,
-      template_name text not null,
-      warmpool text not null default 'none',
-      enabled boolean not null default true
-    )
-  `);
-
-  await client.query(`
-    create table if not exists agentbay_opencode_configs (
-      id text primary key,
-      slug text not null unique,
-      display_name text not null,
-      config jsonb not null default '{}'::jsonb,
-      config_hash text not null,
-      updated_at timestamptz not null default now(),
-      enabled boolean not null default true
-    )
-  `);
-
-  await client.query(`
-    create table if not exists agentbay_agent_profiles (
-      id text primary key,
-      slug text not null unique,
-      display_name text not null,
-      opencode_config_id text not null references agentbay_opencode_configs(id),
-      opencode_agent_name text not null,
-      enabled boolean not null default true
-    )
-  `);
-
-  await client.query(`
-    create table if not exists agentbay_bots (
-      id text primary key,
-      slug text not null unique,
-      display_name text not null,
-      sandbox_profile_id text not null references agentbay_sandbox_profiles(id),
-      default_agent_profile_id text not null references agentbay_agent_profiles(id),
-      enabled boolean not null default true
-    )
-  `);
-
-  await client.query(`
-    create table if not exists agentbay_bot_agent_profiles (
-      bot_id text not null references agentbay_bots(id) on delete cascade,
-      agent_profile_id text not null references agentbay_agent_profiles(id) on delete cascade,
-      primary key (bot_id, agent_profile_id)
-    )
-  `);
-}
+type BotRow = InferSelectModel<typeof bots>;
+type SandboxProfileRow = InferSelectModel<typeof sandboxProfiles>;
+type OpencodeConfigRow = InferSelectModel<typeof opencodeConfigs>;
+type AgentProfileRow = InferSelectModel<typeof agentProfiles>;
 
 function botFromRow(row: BotRow): Bot {
   return {
-    defaultAgentProfileID: row.default_agent_profile_id,
-    displayName: row.display_name,
+    defaultAgentProfileID: row.defaultAgentProfileID,
+    displayName: row.displayName,
     enabled: row.enabled,
     id: row.id,
-    sandboxProfileID: row.sandbox_profile_id,
+    sandboxProfileID: row.sandboxProfileID,
     slug: row.slug,
   };
 }
@@ -404,7 +285,7 @@ function sandboxProfileFromRow(row: SandboxProfileRow): SandboxProfile {
     enabled: row.enabled,
     id: row.id,
     slug: row.slug,
-    templateName: row.template_name,
+    templateName: row.templateName,
     warmpool: row.warmpool,
   };
 }
@@ -413,21 +294,21 @@ function opencodeConfigFromRow(row: OpencodeConfigRow): OpencodeConfigRecord {
   return {
     config: row.config,
     configHash: hashConfig(row.config),
-    displayName: row.display_name,
+    displayName: row.displayName,
     enabled: row.enabled,
     id: row.id,
     slug: row.slug,
-    updatedAt: row.updated_at.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 
 function agentProfileFromRow(row: AgentProfileRow): AgentProfile {
   return {
-    displayName: row.display_name,
+    displayName: row.displayName,
     enabled: row.enabled,
     id: row.id,
-    opencodeAgentName: row.opencode_agent_name,
-    opencodeConfigID: row.opencode_config_id,
+    opencodeAgentName: row.opencodeAgentName,
+    opencodeConfigID: row.opencodeConfigID,
     slug: row.slug,
   };
 }
