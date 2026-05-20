@@ -1,12 +1,12 @@
-import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { Config } from "../../src/config.js";
+import { createOpenApiApp } from "../../src/openapi.js";
 import { mountRuntimeAdmin } from "../../src/runtime/admin.js";
 import { defaultRuntimeSnapshot, TestRuntimeStore } from "./runtime-store-fixture.js";
 
 describe("runtime admin API", () => {
   it("is disabled when no admin token is configured", async () => {
-    const app = new Hono();
+    const app = createOpenApiApp();
     mountRuntimeAdmin(app, { ...testConfig(), adminToken: undefined }, new TestRuntimeStore());
 
     const response = await app.request("/admin/runtime/bots");
@@ -15,7 +15,7 @@ describe("runtime admin API", () => {
   });
 
   it("requires bearer token auth", async () => {
-    const app = new Hono();
+    const app = createOpenApiApp();
     mountRuntimeAdmin(app, testConfig(), new TestRuntimeStore());
 
     const response = await app.request("/admin/runtime/bots");
@@ -24,7 +24,7 @@ describe("runtime admin API", () => {
   });
 
   it("creates and reads runtime records through explicit CRUD endpoints", async () => {
-    const app = new Hono();
+    const app = createOpenApiApp();
     mountRuntimeAdmin(app, testConfig(), new TestRuntimeStore());
 
     const config = await requestJSON(app, "POST", "/admin/runtime/opencode-configs", {
@@ -80,7 +80,7 @@ describe("runtime admin API", () => {
   });
 
   it("rejects deleting a bot default agent-profile mapping", async () => {
-    const app = new Hono();
+    const app = createOpenApiApp();
     mountRuntimeAdmin(app, testConfig(), new TestRuntimeStore());
 
     const response = await requestJSON(app, "DELETE", "/admin/runtime/bot-agent-profiles/bot-default/agent-profile-default");
@@ -90,7 +90,7 @@ describe("runtime admin API", () => {
   });
 
   it("rejects agent profiles whose opencode agent is missing from the selected config", async () => {
-    const app = new Hono();
+    const app = createOpenApiApp();
     mountRuntimeAdmin(app, testConfig(), new TestRuntimeStore());
 
     const response = await requestJSON(app, "POST", "/admin/runtime/agent-profiles", {
@@ -109,7 +109,7 @@ describe("runtime admin API", () => {
   });
 
   it("rejects opencode config updates that remove agents used by existing profiles", async () => {
-    const app = new Hono();
+    const app = createOpenApiApp();
     mountRuntimeAdmin(app, testConfig(), new TestRuntimeStore());
 
     const response = await requestJSON(app, "PUT", "/admin/runtime/opencode-configs/opencode-config-default", {
@@ -127,7 +127,7 @@ describe("runtime admin API", () => {
   });
 
   it("rejects invalid runtime ids and slugs before calling the store", async () => {
-    const app = new Hono();
+    const app = createOpenApiApp();
     mountRuntimeAdmin(app, testConfig(), new TestRuntimeStore());
 
     const invalidID = await requestJSON(app, "POST", "/admin/runtime/opencode-configs", {
@@ -184,7 +184,7 @@ describe("runtime admin API", () => {
 });
 
 async function requestJSON(
-  app: Hono,
+  app: ReturnType<typeof createOpenApiApp>,
   method: string,
   path: string,
   body?: unknown,
