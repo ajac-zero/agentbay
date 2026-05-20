@@ -105,10 +105,6 @@ claims:
   # -- Convenience default SandboxWarmPool reference for chart-managed examples.
   # -- Runtime selection comes from DB-backed SandboxProfile.warmpool.
   warmpool: none
-  # -- Comma-separated list of orchestrator env vars to inject into each
-  # -- SandboxClaim when present. Mirrors AGENTBAY_CLAIM_ENV_KEYS.
-  envKeys: "ANTHROPIC_API_KEY,OPENAI_API_KEY,GITHUB_TOKEN"
-
 opencode:
   # -- Port exposed by `opencode serve` inside each sandbox Pod.
   port: 4096
@@ -135,6 +131,87 @@ admin:
   # -- creates its own Secret, Helm generates a token and preserves it across
   # -- upgrades. Existing Secrets should provide AGENTBAY_ADMIN_TOKEN directly.
   token: ""
+
+runtimeSeed:
+  # -- Create/update runtime rows after install/upgrade through the admin API.
+  # -- This is disabled by default because production installs usually want to
+  # -- own bot/profile/config definitions explicitly in their environment repo.
+  # -- Use `helm install/upgrade --wait` when enabling this so the orchestrator
+  # -- is ready before the seed hook runs.
+  enabled: false
+  image:
+    repository: curlimages/curl
+    tag: "8.11.1"
+    pullPolicy: IfNotPresent
+  # -- Helm hook delete policy for the seed Job. Failed Jobs are intentionally
+  # -- kept so their logs remain available for troubleshooting.
+  hookDeletePolicy:
+    - before-hook-creation
+    - hook-succeeded
+  backoffLimit: 6
+  wait:
+    # -- Number of health-check attempts before the seed Job gives up.
+    attempts: 90
+    # -- Seconds between health-check attempts.
+    seconds: 2
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+  # -- DB-backed opencode config records. The default config only declares an
+  # -- opencode agent; set provider/model fields here for your own LLM backend.
+  opencodeConfigs:
+    - id: opencode-config-default
+      slug: default
+      displayName: Default
+      enabled: true
+      config:
+        agent:
+          agentbay:
+            prompt: You are running inside an isolated Kubernetes sandbox. Help the user with the requested coding task, keep them informed, and avoid touching unrelated files.
+        default_agent: agentbay
+  # -- DB-backed sandbox profile records. `templateName` must reference an
+  # -- existing SandboxTemplate in `claims.namespace` before this bot can run.
+  sandboxProfiles:
+    - id: sandbox-profile-default
+      slug: default
+      templateName: opencode-template
+      warmpool: none
+      enabled: true
+  # -- DB-backed agent profile records. `opencodeAgentName` must exist under
+  # -- the referenced opencode config's `agent` object. Add `claimEnv` refs per
+  # -- agent to inject model/repo credentials into that agent's SandboxClaims.
+  agentProfiles:
+    - id: agent-profile-agentbay
+      slug: agentbay
+      displayName: agentbay
+      opencodeConfigID: opencode-config-default
+      opencodeAgentName: agentbay
+      claimEnv: []
+      #  - name: ANTHROPIC_API_KEY
+      #    valueFromEnv: ANTHROPIC_API_KEY_AGENTBAY
+      #  - name: OPENAI_API_KEY
+      #    valueFromEnv: OPENAI_API_KEY_AGENTBAY
+      #  - name: GITHUB_TOKEN
+      #    valueFromEnv: GITHUB_TOKEN_AGENTBAY
+      enabled: true
+  # -- DB-backed bot records. Webhooks use `/agents/<slug>/webhooks/<adapter>`.
+  bots:
+    - id: bot-agentbay
+      slug: agentbay
+      displayName: agentbay
+      adapters:
+        telegram:
+          botTokenEnv: TELEGRAM_BOT_TOKEN_AGENTBAY
+      sandboxProfileID: sandbox-profile-default
+      defaultAgentProfileID: agent-profile-agentbay
+      enabled: true
+  # -- Additional bot/agent allow-list entries. Default bot mappings are added
+  # -- automatically when each bot is upserted.
+  botAgentProfiles: []
 
 # -- Adapter toggles. When an adapter is enabled, the orchestrator expects the
 # -- corresponding env vars to be available in `secrets.data` (or via
@@ -169,7 +246,7 @@ secrets:
   # -- Name of an existing Secret to mount as `envFrom`. When set, the chart
   # -- will not create a Secret of its own. The Secret must live in the
   # -- release namespace and contain env vars under their canonical names
-  # -- (e.g. SLACK_BOT_TOKEN, ANTHROPIC_API_KEY, REDIS_URL, ...).
+  # -- (e.g. SLACK_BOT_TOKEN, ANTHROPIC_API_KEY_AGENTBAY, REDIS_URL, ...).
   existingSecret: ""
   # -- Inline secret data. Each key becomes an env var of the same name on
   # -- the orchestrator container via `envFrom`. Leave empty and reference
@@ -178,7 +255,10 @@ secrets:
   data: {}
   #  SLACK_BOT_TOKEN: xoxb-...
   #  SLACK_SIGNING_SECRET: ...
-  #  ANTHROPIC_API_KEY: sk-ant-...
+  #  TELEGRAM_BOT_TOKEN_AGENTBAY: ...
+  #  ANTHROPIC_API_KEY_AGENTBAY: sk-ant-...
+  #  OPENAI_API_KEY_AGENTBAY: sk-...
+  #  GITHUB_TOKEN_AGENTBAY: ghp_...
 
 redis:
   # -- Enable an in-cluster Redis Deployment for Chat SDK state. When false,

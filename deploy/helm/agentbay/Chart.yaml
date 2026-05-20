@@ -4,8 +4,9 @@ description: |
   agentbay is a chat-native orchestrator that connects Chat SDK webhooks to
   agent-sandbox SandboxClaims and drives a headless opencode server in each
   sandbox Pod. This chart installs the orchestrator Deployment, RBAC scoped
-  to SandboxClaim creation, an optional in-cluster Redis for Chat SDK state,
-  and an optional Ingress for chat platform webhooks.
+  to SandboxClaim creation, optional in-cluster Redis/Postgres components,
+  an optional runtime seed hook, and an optional Ingress for chat platform
+  webhooks.
 type: application
 version: 0.1.0
 appVersion: "1.0.0"

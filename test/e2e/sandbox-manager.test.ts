@@ -84,7 +84,10 @@ describe("SandboxManager e2e", () => {
     });
     await applyObject(objectApi, sandboxTemplate());
 
-    manager = new SandboxManager(customObjectsApi, testConfig(), { ANTHROPIC_API_KEY_CODER: "per-agent-anthropic-key" });
+    manager = new SandboxManager(customObjectsApi, testConfig(), {
+      ANTHROPIC_API_KEY_CODER: "per-agent-anthropic-key",
+      EXTRA_ENV_AGENT: "from-test",
+    });
   });
 
   afterAll(async () => {
@@ -201,7 +204,6 @@ function testConfig(): Config {
 
   return {
     botUserName: "agentbay",
-    claimEnv: [{ name: "EXTRA_ENV", value: "from-test" }],
     claimPollIntervalMs: 50,
     claimReadyTimeoutMs: 120_000,
     claimShutdownHours: 1,
@@ -225,7 +227,10 @@ function testConfig(): Config {
 async function testRuntime(): Promise<ResolvedRuntime> {
   return new TestRuntimeStore(
     runtimeSnapshot({
-      agentClaimEnv: [{ name: "ANTHROPIC_API_KEY", valueFromEnv: "ANTHROPIC_API_KEY_CODER" }],
+      agentClaimEnv: [
+        { name: "ANTHROPIC_API_KEY", valueFromEnv: "ANTHROPIC_API_KEY_CODER" },
+        { name: "EXTRA_ENV", valueFromEnv: "EXTRA_ENV_AGENT" },
+      ],
       agentProfileID: "agent/profile/default:invalid-and-far-too-long-for-a-kubernetes-label-value",
       botID: "bot/default:invalid-and-far-too-long-for-a-kubernetes-label-value",
       botSlug: "agentbay",

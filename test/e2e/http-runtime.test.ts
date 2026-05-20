@@ -391,7 +391,6 @@ function testConfig(opencodePort: number): Config {
   return {
     adminToken: "test-token",
     botUserName: "agentbay",
-    claimEnv: [],
     claimPollIntervalMs: 10,
     claimReadyTimeoutMs: 5_000,
     claimShutdownHours: 1,

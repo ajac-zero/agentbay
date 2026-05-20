@@ -362,7 +362,7 @@ This preserves the admin's `SandboxTemplate` policy (network, env injection, res
   - We will start with the **summary fallback** (simpler) and add PVCs only if it proves insufficient.
 
 ### D5b. opencode config is injected per claim and enforced.
-- The orchestrator forwards LLM provider credentials from its **own** environment into each `SandboxClaim.spec.env`. Global `AGENTBAY_CLAIM_ENV_KEYS` entries are defaults; `AgentProfile.claimEnv` can add or override env per agent without storing secret values in the database.
+- The orchestrator forwards LLM provider credentials from its **own** environment into each `SandboxClaim.spec.env` through `AgentProfile.claimEnv` references, without storing secret values in the database.
 - The resolved `OpencodeConfig` JSON is injected as `OPENCODE_CONFIG_CONTENT`. It contains the named opencode agent definitions that `AgentProfile` records point to.
 - On every prompt, the orchestrator passes `agent: opencodeAgentName` to `session.promptAsync()`. opencode's agent config owns prompt/model/tools/permission behavior.
 - In opencode's config merge order this injected layer sits **above** any `opencode.json` or `.opencode/` directory shipped inside the repo checked out into the sandbox, so a workspace cannot silently override the platform's chosen agent config.

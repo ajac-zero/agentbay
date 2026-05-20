@@ -70,7 +70,7 @@ The chart supports three modes, selected by `database.*`:
 | External Postgres URL | `database.enabled=false` + `database.external.url=postgres://...` | URL is rendered into the orchestrator Deployment env. |
 | External Postgres from existing Secret | `database.enabled=false` + `database.external.existingSecret=my-postgres` + `database.external.existingSecretKey=AGENTBAY_DATABASE_URL` | Recommended for production; keeps credentials out of values files. |
 
-On startup the orchestrator applies pending Drizzle migrations for the runtime tables. It does not seed runtime rows; create bots/profiles/configs through the admin API or your own SQL/bootstrap tooling.
+On startup the orchestrator applies pending Drizzle migrations for the runtime tables. Runtime rows are explicit: create bots/profiles/configs through the admin API, your own SQL/bootstrap tooling, or the chart's optional runtime seed hook.
 
 For production, prefer an existing Secret:
 
@@ -102,6 +102,60 @@ When the chart creates its own Secret, it also creates or preserves an
 `AGENTBAY_ADMIN_TOKEN` value so a fresh install can create the initial
 runtime records through `/admin/runtime/*`. If you use `secrets.existingSecret`,
 put `AGENTBAY_ADMIN_TOKEN` in that Secret yourself.
+
+## Runtime seed
+
+Set `runtimeSeed.enabled=true` to create/update runtime records after each
+install or upgrade. The chart renders a `post-install,post-upgrade` Job that
+waits for `/healthz`, reads `AGENTBAY_ADMIN_TOKEN` from the same Secret as the
+orchestrator, and upserts records through the admin API. It does not write SQL
+directly, so seed data goes through the same validation as manual admin API
+calls.
+
+The default seed data creates one bot at `/agents/agentbay/webhooks/<adapter>`
+using `opencode-template` and an opencode agent named `agentbay`. Override the
+opencode config to set your model/provider details:
+
+```yaml
+runtimeSeed:
+  enabled: true
+  opencodeConfigs:
+    - id: opencode-config-default
+      slug: default
+      displayName: Default
+      enabled: true
+      config:
+        model: azure-anthropic/claude-sonnet-4-5
+        provider:
+          azure-anthropic:
+            name: Azure AI Foundry (Anthropic)
+            npm: "@ai-sdk/anthropic"
+            options:
+              baseURL: https://example.openai.azure.com/anthropic/v1
+              apiKey: "{env:ANTHROPIC_API_KEY}"
+            models:
+              claude-sonnet-4-5:
+                id: claude-sonnet-4-5
+                name: Claude Sonnet 4.5
+                tool_call: true
+                attachment: true
+                reasoning: true
+                temperature: true
+        agent:
+          agentbay:
+            prompt: You are running inside an isolated Kubernetes sandbox. Help the user with the requested coding task.
+        default_agent: agentbay
+```
+
+The seed Job is intentionally idempotent. It uses `PUT` for bots, sandbox
+profiles, opencode configs, and agent profiles, and `POST` with conflict-ignore
+semantics for extra bot-agent allow-list entries.
+
+Use `helm install --wait` and `helm upgrade --wait` when runtime seed is
+enabled so the orchestrator is ready before the seed Job calls the admin API.
+For future upgrades that rename an opencode agent already referenced by an
+AgentProfile, seed a config containing both old and new agent names before
+switching the AgentProfile, then remove the old agent in a later upgrade.
 
 ## Adapter toggles
 
