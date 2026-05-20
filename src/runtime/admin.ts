@@ -1,68 +1,58 @@
 import { timingSafeEqual } from "node:crypto";
-import { Hono, type Context } from "hono";
+import { OpenAPIHono, type Hook } from "@hono/zod-openapi";
+import type { Context } from "hono";
 import type { Config } from "../config.js";
-import type { RuntimeStore, UpsertOpencodeConfigInput } from "./store.js";
-import type { AgentProfile, Bot, BotAdapterConfig, BotAgentProfile, EnvVarRef, OpencodeConfig, SandboxProfile } from "./types.js";
-import { validateEnvVarName, validateRuntimeID, validateRuntimeSlug } from "./validation.js";
+import {
+  createCreateRoute,
+  createDeleteRoute,
+  createGetRoute,
+  createListRoute,
+  createUpdateRoute,
+  deleteBotAgentProfileRoute,
+  runtimeAdminRelation,
+  runtimeAdminResources,
+} from "./admin-schema.js";
+import type { RuntimeStore } from "./store.js";
 
-export function mountRuntimeAdmin(app: Hono, config: Config, runtimeStore: RuntimeStore): void {
+export function mountRuntimeAdmin(app: OpenAPIHono<any>, config: Config, runtimeStore: RuntimeStore): void {
   if (!config.adminToken) return;
   const adminToken = config.adminToken;
 
-  const admin = new Hono();
+  const admin = new OpenAPIHono({ defaultHook: validationHook });
   admin.use("*", async (context, next) => {
     if (!isAuthorized(context, adminToken)) return context.text("Unauthorized", 401);
     await next();
   });
 
-  admin.get("/bots", (context) => json(context, () => runtimeStore.listBots()));
-  admin.post("/bots", (context) => json(context, async () => runtimeStore.upsertBot(readBot(await readBody(context))), 201));
-  admin.get("/bots/:id", (context) => getOne(context, () => runtimeStore.getBot(readPathID(context))));
-  admin.put("/bots/:id", (context) => json(context, async () => runtimeStore.upsertBot(readBot(await readBody(context), context.req.param("id")))));
-  admin.delete("/bots/:id", (context) => deleteOne(context, () => runtimeStore.deleteBot(readPathID(context))));
+  for (const resource of runtimeAdminResources) {
+    admin.openapi(createListRoute(resource), (context) => json(context, () => resource.list(runtimeStore)) as never);
+    admin.openapi(
+      createCreateRoute(resource, `Create or replace ${resource.tag}`),
+      (context) => json(context, async () => resource.upsert(runtimeStore, context.req.valid("json")), 201) as never,
+    );
+    admin.openapi(createGetRoute(resource), (context) => {
+      const { id } = context.req.valid("param") as { id: string };
+      return getOne(context, () => resource.get(runtimeStore, id)) as never;
+    });
+    admin.openapi(createUpdateRoute(resource), (context) => {
+      const { id } = context.req.valid("param") as { id: string };
+      return json(context, async () => resource.upsert(runtimeStore, withPathID(context.req.valid("json"), id))) as never;
+    });
+    admin.openapi(createDeleteRoute(resource), (context) => {
+      const { id } = context.req.valid("param") as { id: string };
+      return deleteOne(context, () => resource.delete(runtimeStore, id)) as never;
+    });
+  }
 
-  admin.get("/sandbox-profiles", (context) => json(context, () => runtimeStore.listSandboxProfiles()));
-  admin.post("/sandbox-profiles", (context) =>
-    json(context, async () => runtimeStore.upsertSandboxProfile(readSandboxProfile(await readBody(context))), 201),
+  admin.openapi(createListRoute(runtimeAdminRelation), (context) => json(context, () => runtimeAdminRelation.list(runtimeStore)) as never);
+  admin.openapi(
+    createCreateRoute(runtimeAdminRelation, "Allow an agent profile for a bot"),
+    (context) => json(context, async () => runtimeAdminRelation.add(runtimeStore, context.req.valid("json")), 201) as never,
   );
-  admin.get("/sandbox-profiles/:id", (context) => getOne(context, () => runtimeStore.getSandboxProfile(readPathID(context))));
-  admin.put("/sandbox-profiles/:id", (context) =>
-    json(context, async () => runtimeStore.upsertSandboxProfile(readSandboxProfile(await readBody(context), context.req.param("id")))),
-  );
-  admin.delete("/sandbox-profiles/:id", (context) => deleteOne(context, () => runtimeStore.deleteSandboxProfile(readPathID(context))));
-
-  admin.get("/opencode-configs", (context) => json(context, () => runtimeStore.listOpencodeConfigs()));
-  admin.post("/opencode-configs", (context) =>
-    json(context, async () => runtimeStore.upsertOpencodeConfig(readOpencodeConfig(await readBody(context))), 201),
-  );
-  admin.get("/opencode-configs/:id", (context) => getOne(context, () => runtimeStore.getOpencodeConfig(readPathID(context))));
-  admin.put("/opencode-configs/:id", (context) =>
-    json(context, async () => runtimeStore.upsertOpencodeConfig(readOpencodeConfig(await readBody(context), context.req.param("id")))),
-  );
-  admin.delete("/opencode-configs/:id", (context) => deleteOne(context, () => runtimeStore.deleteOpencodeConfig(readPathID(context))));
-
-  admin.get("/agent-profiles", (context) => json(context, () => runtimeStore.listAgentProfiles()));
-  admin.post("/agent-profiles", (context) =>
-    json(context, async () => runtimeStore.upsertAgentProfile(readAgentProfile(await readBody(context))), 201),
-  );
-  admin.get("/agent-profiles/:id", (context) => getOne(context, () => runtimeStore.getAgentProfile(readPathID(context))));
-  admin.put("/agent-profiles/:id", (context) =>
-    json(context, async () => runtimeStore.upsertAgentProfile(readAgentProfile(await readBody(context), context.req.param("id")))),
-  );
-  admin.delete("/agent-profiles/:id", (context) => deleteOne(context, () => runtimeStore.deleteAgentProfile(readPathID(context))));
-
-  admin.get("/bot-agent-profiles", (context) => json(context, () => runtimeStore.listBotAgentProfiles()));
-  admin.post("/bot-agent-profiles", (context) =>
-    json(context, async () => runtimeStore.addBotAgentProfile(readBotAgentProfile(await readBody(context))), 201),
-  );
-  admin.delete("/bot-agent-profiles/:botID/:agentProfileID", (context) =>
-    deleteOne(context, () =>
-      runtimeStore.deleteBotAgentProfile(
-        readPathID(context, "botID"),
-        readPathID(context, "agentProfileID"),
-      ),
-    ),
-  );
+  admin.openapi(deleteBotAgentProfileRoute, (context) => {
+    const { agentProfileID, botID } = context.req.valid("param") as { agentProfileID: string; botID: string };
+    return deleteOne(context, () => runtimeAdminRelation.delete(runtimeStore, botID, agentProfileID)) as never;
+  });
 
   app.route("/admin/runtime", admin);
 }
@@ -92,147 +82,14 @@ async function deleteOne(context: Context, run: () => Promise<boolean>): Promise
   }
 }
 
-async function readBody(context: Context): Promise<Record<string, unknown>> {
-  let body: unknown;
-  try {
-    body = await context.req.json();
-  } catch {
-    throw new Error("Request body must be valid JSON");
-  }
+const validationHook: Hook<unknown, any, any, any> = (result, context) => {
+  if (!result.success) return context.json({ error: result.error.issues.map((issue) => issue.message).join("; ") }, 400);
+};
 
-  if (!isRecord(body)) throw new Error("Request body must be a JSON object");
-  return body;
-}
-
-function readBot(body: Record<string, unknown>, pathID?: string): Bot {
-  return {
-    adapters: readBotAdapters(body),
-    defaultAgentProfileID: readReferenceID(body, "defaultAgentProfileID"),
-    displayName: readString(body, "displayName"),
-    enabled: readBoolean(body, "enabled"),
-    id: readID(body, pathID),
-    sandboxProfileID: readReferenceID(body, "sandboxProfileID"),
-    slug: readSlug(body, "slug"),
-  };
-}
-
-function readSandboxProfile(body: Record<string, unknown>, pathID?: string): SandboxProfile {
-  return {
-    enabled: readBoolean(body, "enabled"),
-    id: readID(body, pathID),
-    slug: readSlug(body, "slug"),
-    templateName: readString(body, "templateName"),
-    warmpool: readString(body, "warmpool"),
-  };
-}
-
-function readOpencodeConfig(body: Record<string, unknown>, pathID?: string): UpsertOpencodeConfigInput {
-  return {
-    config: readConfig(body),
-    displayName: readString(body, "displayName"),
-    enabled: readBoolean(body, "enabled"),
-    id: readID(body, pathID),
-    slug: readSlug(body, "slug"),
-  };
-}
-
-function readAgentProfile(body: Record<string, unknown>, pathID?: string): AgentProfile {
-  return {
-    claimEnv: readEnvVarRefs(body, "claimEnv"),
-    displayName: readString(body, "displayName"),
-    enabled: readBoolean(body, "enabled"),
-    id: readID(body, pathID),
-    opencodeAgentName: readString(body, "opencodeAgentName"),
-    opencodeConfigID: readReferenceID(body, "opencodeConfigID"),
-    slug: readSlug(body, "slug"),
-  };
-}
-
-function readBotAdapters(body: Record<string, unknown>): BotAdapterConfig {
-  const value = body.adapters;
-  if (value === undefined) return {};
-  if (!isRecord(value)) throw new Error("adapters must be a JSON object");
-
-  const adapters: BotAdapterConfig = {};
-  if (value.telegram !== undefined) {
-    if (!isRecord(value.telegram)) throw new Error("adapters.telegram must be a JSON object");
-    const telegram = value.telegram;
-    adapters.telegram = {
-      ...(telegram.botTokenEnv === undefined ? {} : { botTokenEnv: readEnvRefString(telegram, "botTokenEnv", "adapters.telegram.botTokenEnv") }),
-      ...(telegram.secretTokenEnv === undefined
-        ? {}
-        : { secretTokenEnv: readEnvRefString(telegram, "secretTokenEnv", "adapters.telegram.secretTokenEnv") }),
-      ...(telegram.userName === undefined ? {} : { userName: readString(telegram, "userName") }),
-    };
-  }
-
-  return adapters;
-}
-
-function readEnvVarRefs(body: Record<string, unknown>, field: string): EnvVarRef[] {
-  const value = body[field];
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
-
-  return value.map((entry, index) => {
-    if (!isRecord(entry)) throw new Error(`${field}[${index}] must be a JSON object`);
-    return {
-      name: readEnvRefString(entry, "name", `${field}[${index}].name`),
-      valueFromEnv: readEnvRefString(entry, "valueFromEnv", `${field}[${index}].valueFromEnv`),
-    };
-  });
-}
-
-function readEnvRefString(body: Record<string, unknown>, field: string, displayField: string): string {
-  const value = body[field];
-  if (typeof value !== "string" || value.length === 0) throw new Error(`${displayField} must be a non-empty string`);
-  return validateEnvVarName(value, displayField);
-}
-
-function readBotAgentProfile(body: Record<string, unknown>): BotAgentProfile {
-  return {
-    agentProfileID: readReferenceID(body, "agentProfileID"),
-    botID: readReferenceID(body, "botID"),
-  };
-}
-
-function readID(body: Record<string, unknown>, pathID: string | undefined): string {
-  const bodyID = body.id;
-  if (pathID && bodyID !== undefined && bodyID !== pathID) throw new Error("Body id must match path id");
-  if (pathID) return validateRuntimeID(pathID, "id");
-  return readReferenceID(body, "id");
-}
-
-function readPathID(context: Context, name = "id"): string {
-  const id = context.req.param(name);
-  if (!id) throw new Error(`${name} route parameter is required`);
-  return validateRuntimeID(id, name);
-}
-
-function readReferenceID(body: Record<string, unknown>, field: string): string {
-  return validateRuntimeID(readString(body, field), field);
-}
-
-function readSlug(body: Record<string, unknown>, field: string): string {
-  return validateRuntimeSlug(readString(body, field), field);
-}
-
-function readString(body: Record<string, unknown>, field: string): string {
-  const value = body[field];
-  if (typeof value !== "string" || value.length === 0) throw new Error(`${field} must be a non-empty string`);
-  return value;
-}
-
-function readBoolean(body: Record<string, unknown>, field: string): boolean {
-  const value = body[field];
-  if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
-  return value;
-}
-
-function readConfig(body: Record<string, unknown>): OpencodeConfig {
-  const value = body.config;
-  if (!isRecord(value)) throw new Error("config must be a JSON object");
-  return value;
+function withPathID(body: unknown, id: string): unknown {
+  if (!isRecord(body)) return body;
+  if (body.id !== undefined && body.id !== id) throw new Error("Body id must match path id");
+  return { ...body, id };
 }
 
 function isAuthorized(context: Context, token: string): boolean {

@@ -10,7 +10,7 @@ import type { BotChatRegistry } from "./bot.js";
 type ChatSource = Chat<Record<string, Adapter>, ThreadState> | BotChatRegistry;
 
 export function mountWebhooks(
-  app: Hono,
+  app: Hono<any>,
   chat: ChatSource,
   config: Config,
   runtimeStore: RuntimeStore,

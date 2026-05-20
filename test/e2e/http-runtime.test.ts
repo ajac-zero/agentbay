@@ -1,12 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
 import type { Adapter, Chat, Message, SentMessage, StateAdapter, Thread } from "chat";
-import { Hono } from "hono";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerHandlers } from "../../src/chat/handlers.js";
 import { mountWebhooks } from "../../src/chat/webhooks.js";
 import type { Config } from "../../src/config.js";
+import { createOpenApiApp } from "../../src/openapi.js";
 import { mountRuntimeAdmin } from "../../src/runtime/admin.js";
 import { createPostgresRuntimeStore, type PostgresRuntimeStore } from "../../src/runtime/postgres.js";
 import type { ResolvedRuntime } from "../../src/runtime/types.js";
@@ -41,7 +41,7 @@ describe("HTTP runtime e2e", () => {
     const chat = new HttpWebhookFakeChat();
     const sandboxManager = new FakeSandboxManager(opencode.endpoint("claim-http-thread"));
     const state = createMemoryState();
-    const app = new Hono();
+    const app = createOpenApiApp();
 
     registerHandlers(chat.asChat(), {
       config,
@@ -339,13 +339,13 @@ async function handleOpencodeRequest(input: {
   response.end("not found");
 }
 
-async function expectAdminCreated(app: Hono, path: string, body: Record<string, unknown>): Promise<void> {
+async function expectAdminCreated(app: ReturnType<typeof createOpenApiApp>, path: string, body: Record<string, unknown>): Promise<void> {
   const response = await requestJSON(app, "POST", path, body, true);
   expect(response.status).toBe(201);
 }
 
 async function requestJSON(
-  app: Hono,
+  app: ReturnType<typeof createOpenApiApp>,
   method: string,
   path: string,
   body?: unknown,
