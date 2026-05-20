@@ -1,4 +1,5 @@
-import { boolean, jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { boolean, check, jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
 import type { OpencodeConfig } from "./types.js";
 
 export const sandboxProfiles = pgTable("agentbay_sandbox_profiles", {
@@ -7,7 +8,10 @@ export const sandboxProfiles = pgTable("agentbay_sandbox_profiles", {
   slug: text("slug").notNull().unique(),
   templateName: text("template_name").notNull(),
   warmpool: text("warmpool").notNull().default("none"),
-});
+}, (table) => [
+  check("agentbay_sandbox_profiles_id_dns_label", sql`${table.id} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.id}) <= 63`),
+  check("agentbay_sandbox_profiles_slug_dns_label", sql`${table.slug} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.slug}) <= 63`),
+]);
 
 export const opencodeConfigs = pgTable("agentbay_opencode_configs", {
   config: jsonb("config").$type<OpencodeConfig>().notNull().default({}),
@@ -17,7 +21,10 @@ export const opencodeConfigs = pgTable("agentbay_opencode_configs", {
   id: text("id").primaryKey(),
   slug: text("slug").notNull().unique(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  check("agentbay_opencode_configs_id_dns_label", sql`${table.id} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.id}) <= 63`),
+  check("agentbay_opencode_configs_slug_dns_label", sql`${table.slug} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.slug}) <= 63`),
+]);
 
 export const agentProfiles = pgTable("agentbay_agent_profiles", {
   displayName: text("display_name").notNull(),
@@ -28,7 +35,10 @@ export const agentProfiles = pgTable("agentbay_agent_profiles", {
     .notNull()
     .references(() => opencodeConfigs.id),
   slug: text("slug").notNull().unique(),
-});
+}, (table) => [
+  check("agentbay_agent_profiles_id_dns_label", sql`${table.id} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.id}) <= 63`),
+  check("agentbay_agent_profiles_slug_dns_label", sql`${table.slug} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.slug}) <= 63`),
+]);
 
 export const bots = pgTable("agentbay_bots", {
   defaultAgentProfileID: text("default_agent_profile_id")
@@ -41,7 +51,10 @@ export const bots = pgTable("agentbay_bots", {
     .notNull()
     .references(() => sandboxProfiles.id),
   slug: text("slug").notNull().unique(),
-});
+}, (table) => [
+  check("agentbay_bots_id_dns_label", sql`${table.id} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.id}) <= 63`),
+  check("agentbay_bots_slug_dns_label", sql`${table.slug} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.slug}) <= 63`),
+]);
 
 export const botAgentProfiles = pgTable(
   "agentbay_bot_agent_profiles",

@@ -14,6 +14,12 @@ import {
 } from "./store.js";
 import * as schema from "./schema.js";
 import { agentProfiles, botAgentProfiles, bots, opencodeConfigs, sandboxProfiles } from "./schema.js";
+import {
+  assertOpencodeAgentExists,
+  assertOpencodeConfigSupportsProfiles,
+  validateRuntimeID,
+  validateRuntimeSlug,
+} from "./validation.js";
 
 const { Pool } = pg;
 
@@ -62,6 +68,8 @@ export class PostgresRuntimeStore implements RuntimeStore {
   }
 
   async addBotAgentProfile(entry: { botID: string; agentProfileID: string }): Promise<{ botID: string; agentProfileID: string }> {
+    validateRuntimeID(entry.botID, "botID");
+    validateRuntimeID(entry.agentProfileID, "agentProfileID");
     await this.db.insert(botAgentProfiles).values(entry).onConflictDoNothing();
     return entry;
   }
@@ -166,6 +174,14 @@ export class PostgresRuntimeStore implements RuntimeStore {
   }
 
   async upsertAgentProfile(profile: AgentProfile): Promise<AgentProfile> {
+    validateRuntimeID(profile.id, "id");
+    validateRuntimeSlug(profile.slug, "slug");
+    validateRuntimeID(profile.opencodeConfigID, "opencodeConfigID");
+
+    const opencodeConfig = await this.getOpencodeConfig(profile.opencodeConfigID);
+    if (!opencodeConfig) throw new Error(`Unknown opencode config: ${profile.opencodeConfigID}`);
+    assertOpencodeAgentExists(opencodeConfig.config, profile.opencodeAgentName, opencodeConfig.id);
+
     const rows = await this.db
       .insert(agentProfiles)
       .values(profile)
@@ -184,6 +200,11 @@ export class PostgresRuntimeStore implements RuntimeStore {
   }
 
   async upsertBot(bot: Bot): Promise<Bot> {
+    validateRuntimeID(bot.id, "id");
+    validateRuntimeSlug(bot.slug, "slug");
+    validateRuntimeID(bot.defaultAgentProfileID, "defaultAgentProfileID");
+    validateRuntimeID(bot.sandboxProfileID, "sandboxProfileID");
+
     return this.db.transaction(async (tx) => {
       const rows = await tx
         .insert(bots)
@@ -208,8 +229,16 @@ export class PostgresRuntimeStore implements RuntimeStore {
   }
 
   async upsertOpencodeConfig(input: UpsertOpencodeConfigInput): Promise<OpencodeConfigRecord> {
+    validateRuntimeID(input.id, "id");
+    validateRuntimeSlug(input.slug, "slug");
+
     const updatedAt = input.updatedAt ? new Date(input.updatedAt) : new Date();
     const configHash = hashConfig(input.config);
+    assertOpencodeConfigSupportsProfiles(
+      { ...input, configHash, updatedAt: updatedAt.toISOString() },
+      (await this.listAgentProfiles()).filter((profile) => profile.opencodeConfigID === input.id),
+    );
+
     const rows = await this.db
       .insert(opencodeConfigs)
       .values({ ...input, configHash, updatedAt })
@@ -229,6 +258,9 @@ export class PostgresRuntimeStore implements RuntimeStore {
   }
 
   async upsertSandboxProfile(profile: SandboxProfile): Promise<SandboxProfile> {
+    validateRuntimeID(profile.id, "id");
+    validateRuntimeSlug(profile.slug, "slug");
+
     const rows = await this.db
       .insert(sandboxProfiles)
       .values(profile)

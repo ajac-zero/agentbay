@@ -9,6 +9,7 @@ import type {
   ResolvedRuntime,
   SandboxProfile,
 } from "./types.js";
+import { assertOpencodeAgentExists } from "./validation.js";
 
 export type RuntimeStoreSnapshot = {
   bots: Bot[];
@@ -85,6 +86,7 @@ export function resolveRuntime(snapshot: RuntimeStoreSnapshot, bot: Bot, agentPr
   if (!opencodeConfig || !opencodeConfig.enabled) {
     throw new Error(`Unknown or disabled opencode config for agent profile ${agentProfile.id}: ${agentProfile.opencodeConfigID}`);
   }
+  assertOpencodeAgentExists(opencodeConfig.config, agentProfile.opencodeAgentName, opencodeConfig.id);
 
   return {
     agentProfile,

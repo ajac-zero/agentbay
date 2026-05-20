@@ -3,6 +3,7 @@ import { Hono, type Context } from "hono";
 import type { Config } from "../config.js";
 import type { RuntimeStore, UpsertOpencodeConfigInput } from "./store.js";
 import type { AgentProfile, Bot, BotAgentProfile, OpencodeConfig, SandboxProfile } from "./types.js";
+import { validateRuntimeID, validateRuntimeSlug } from "./validation.js";
 
 export function mountRuntimeAdmin(app: Hono, config: Config, runtimeStore: RuntimeStore): void {
   if (!config.adminToken) return;
@@ -16,46 +17,51 @@ export function mountRuntimeAdmin(app: Hono, config: Config, runtimeStore: Runti
 
   admin.get("/bots", (context) => json(context, () => runtimeStore.listBots()));
   admin.post("/bots", (context) => json(context, async () => runtimeStore.upsertBot(readBot(await readBody(context))), 201));
-  admin.get("/bots/:id", (context) => getOne(context, () => runtimeStore.getBot(context.req.param("id"))));
+  admin.get("/bots/:id", (context) => getOne(context, () => runtimeStore.getBot(readPathID(context))));
   admin.put("/bots/:id", (context) => json(context, async () => runtimeStore.upsertBot(readBot(await readBody(context), context.req.param("id")))));
-  admin.delete("/bots/:id", (context) => deleteOne(context, () => runtimeStore.deleteBot(context.req.param("id"))));
+  admin.delete("/bots/:id", (context) => deleteOne(context, () => runtimeStore.deleteBot(readPathID(context))));
 
   admin.get("/sandbox-profiles", (context) => json(context, () => runtimeStore.listSandboxProfiles()));
   admin.post("/sandbox-profiles", (context) =>
     json(context, async () => runtimeStore.upsertSandboxProfile(readSandboxProfile(await readBody(context))), 201),
   );
-  admin.get("/sandbox-profiles/:id", (context) => getOne(context, () => runtimeStore.getSandboxProfile(context.req.param("id"))));
+  admin.get("/sandbox-profiles/:id", (context) => getOne(context, () => runtimeStore.getSandboxProfile(readPathID(context))));
   admin.put("/sandbox-profiles/:id", (context) =>
     json(context, async () => runtimeStore.upsertSandboxProfile(readSandboxProfile(await readBody(context), context.req.param("id")))),
   );
-  admin.delete("/sandbox-profiles/:id", (context) => deleteOne(context, () => runtimeStore.deleteSandboxProfile(context.req.param("id"))));
+  admin.delete("/sandbox-profiles/:id", (context) => deleteOne(context, () => runtimeStore.deleteSandboxProfile(readPathID(context))));
 
   admin.get("/opencode-configs", (context) => json(context, () => runtimeStore.listOpencodeConfigs()));
   admin.post("/opencode-configs", (context) =>
     json(context, async () => runtimeStore.upsertOpencodeConfig(readOpencodeConfig(await readBody(context))), 201),
   );
-  admin.get("/opencode-configs/:id", (context) => getOne(context, () => runtimeStore.getOpencodeConfig(context.req.param("id"))));
+  admin.get("/opencode-configs/:id", (context) => getOne(context, () => runtimeStore.getOpencodeConfig(readPathID(context))));
   admin.put("/opencode-configs/:id", (context) =>
     json(context, async () => runtimeStore.upsertOpencodeConfig(readOpencodeConfig(await readBody(context), context.req.param("id")))),
   );
-  admin.delete("/opencode-configs/:id", (context) => deleteOne(context, () => runtimeStore.deleteOpencodeConfig(context.req.param("id"))));
+  admin.delete("/opencode-configs/:id", (context) => deleteOne(context, () => runtimeStore.deleteOpencodeConfig(readPathID(context))));
 
   admin.get("/agent-profiles", (context) => json(context, () => runtimeStore.listAgentProfiles()));
   admin.post("/agent-profiles", (context) =>
     json(context, async () => runtimeStore.upsertAgentProfile(readAgentProfile(await readBody(context))), 201),
   );
-  admin.get("/agent-profiles/:id", (context) => getOne(context, () => runtimeStore.getAgentProfile(context.req.param("id"))));
+  admin.get("/agent-profiles/:id", (context) => getOne(context, () => runtimeStore.getAgentProfile(readPathID(context))));
   admin.put("/agent-profiles/:id", (context) =>
     json(context, async () => runtimeStore.upsertAgentProfile(readAgentProfile(await readBody(context), context.req.param("id")))),
   );
-  admin.delete("/agent-profiles/:id", (context) => deleteOne(context, () => runtimeStore.deleteAgentProfile(context.req.param("id"))));
+  admin.delete("/agent-profiles/:id", (context) => deleteOne(context, () => runtimeStore.deleteAgentProfile(readPathID(context))));
 
   admin.get("/bot-agent-profiles", (context) => json(context, () => runtimeStore.listBotAgentProfiles()));
   admin.post("/bot-agent-profiles", (context) =>
     json(context, async () => runtimeStore.addBotAgentProfile(readBotAgentProfile(await readBody(context))), 201),
   );
   admin.delete("/bot-agent-profiles/:botID/:agentProfileID", (context) =>
-    deleteOne(context, () => runtimeStore.deleteBotAgentProfile(context.req.param("botID"), context.req.param("agentProfileID"))),
+    deleteOne(context, () =>
+      runtimeStore.deleteBotAgentProfile(
+        readPathID(context, "botID"),
+        readPathID(context, "agentProfileID"),
+      ),
+    ),
   );
 
   app.route("/admin/runtime", admin);
@@ -100,12 +106,12 @@ async function readBody(context: Context): Promise<Record<string, unknown>> {
 
 function readBot(body: Record<string, unknown>, pathID?: string): Bot {
   return {
-    defaultAgentProfileID: readString(body, "defaultAgentProfileID"),
+    defaultAgentProfileID: readReferenceID(body, "defaultAgentProfileID"),
     displayName: readString(body, "displayName"),
     enabled: readBoolean(body, "enabled"),
     id: readID(body, pathID),
-    sandboxProfileID: readString(body, "sandboxProfileID"),
-    slug: readString(body, "slug"),
+    sandboxProfileID: readReferenceID(body, "sandboxProfileID"),
+    slug: readSlug(body, "slug"),
   };
 }
 
@@ -113,7 +119,7 @@ function readSandboxProfile(body: Record<string, unknown>, pathID?: string): San
   return {
     enabled: readBoolean(body, "enabled"),
     id: readID(body, pathID),
-    slug: readString(body, "slug"),
+    slug: readSlug(body, "slug"),
     templateName: readString(body, "templateName"),
     warmpool: readString(body, "warmpool"),
   };
@@ -125,7 +131,7 @@ function readOpencodeConfig(body: Record<string, unknown>, pathID?: string): Ups
     displayName: readString(body, "displayName"),
     enabled: readBoolean(body, "enabled"),
     id: readID(body, pathID),
-    slug: readString(body, "slug"),
+    slug: readSlug(body, "slug"),
   };
 }
 
@@ -135,23 +141,37 @@ function readAgentProfile(body: Record<string, unknown>, pathID?: string): Agent
     enabled: readBoolean(body, "enabled"),
     id: readID(body, pathID),
     opencodeAgentName: readString(body, "opencodeAgentName"),
-    opencodeConfigID: readString(body, "opencodeConfigID"),
-    slug: readString(body, "slug"),
+    opencodeConfigID: readReferenceID(body, "opencodeConfigID"),
+    slug: readSlug(body, "slug"),
   };
 }
 
 function readBotAgentProfile(body: Record<string, unknown>): BotAgentProfile {
   return {
-    agentProfileID: readString(body, "agentProfileID"),
-    botID: readString(body, "botID"),
+    agentProfileID: readReferenceID(body, "agentProfileID"),
+    botID: readReferenceID(body, "botID"),
   };
 }
 
 function readID(body: Record<string, unknown>, pathID: string | undefined): string {
   const bodyID = body.id;
   if (pathID && bodyID !== undefined && bodyID !== pathID) throw new Error("Body id must match path id");
-  if (pathID) return pathID;
-  return readString(body, "id");
+  if (pathID) return validateRuntimeID(pathID, "id");
+  return readReferenceID(body, "id");
+}
+
+function readPathID(context: Context, name = "id"): string {
+  const id = context.req.param(name);
+  if (!id) throw new Error(`${name} route parameter is required`);
+  return validateRuntimeID(id, name);
+}
+
+function readReferenceID(body: Record<string, unknown>, field: string): string {
+  return validateRuntimeID(readString(body, field), field);
+}
+
+function readSlug(body: Record<string, unknown>, field: string): string {
+  return validateRuntimeSlug(readString(body, field), field);
 }
 
 function readString(body: Record<string, unknown>, field: string): string {

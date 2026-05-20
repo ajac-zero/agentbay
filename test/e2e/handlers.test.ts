@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerHandlers } from "../../src/chat/handlers.js";
 import type { Config } from "../../src/config.js";
 import { runWithBotSlug } from "../../src/runtime/context.js";
-import { resolveRuntime, sandboxProfileHash, type RuntimeStore } from "../../src/runtime/store.js";
+import { hashConfig, resolveRuntime, sandboxProfileHash, type RuntimeStore } from "../../src/runtime/store.js";
 import type { ResolvedRuntime } from "../../src/runtime/types.js";
 import type { SandboxManager } from "../../src/sandbox/manager.js";
 import { createMemoryState } from "../../src/state/memory.js";
@@ -100,6 +100,12 @@ describe("chat handlers e2e", () => {
     const thread = new FakeThread("thread-runtime-drift", existingState("claim-old-runtime"));
     const snapshot = defaultRuntimeSnapshot();
     snapshot.agentProfiles[0] = { ...snapshot.agentProfiles[0]!, opencodeAgentName: "reviewer" };
+    const reviewerConfig = { ...snapshot.opencodeConfigs[0]!.config, agent: { reviewer: { prompt: "review prompt" } } };
+    snapshot.opencodeConfigs[0] = {
+      ...snapshot.opencodeConfigs[0]!,
+      config: reviewerConfig,
+      configHash: hashConfig(reviewerConfig),
+    };
 
     registerHandlers(chat.asChat(), {
       config,
