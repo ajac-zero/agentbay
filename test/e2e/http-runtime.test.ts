@@ -126,6 +126,86 @@ describe("HTTP runtime e2e", () => {
       },
     ]);
   });
+
+  it("updates seeded Postgres runtime fields on repeated admin upsert", async () => {
+    postgres = await startPostgres();
+    runtimeStore = await createPostgresRuntimeStore({
+      connectionString: postgresConnectionString(postgres),
+      ssl: false,
+    });
+
+    const app = createOpenApiApp();
+    mountRuntimeAdmin(app, testConfig(4096), runtimeStore);
+
+    await expectAdminCreated(app, "/admin/runtime/opencode-configs", {
+      config: { agent: { agentbay: { prompt: "test prompt" } }, default_agent: "agentbay" },
+      displayName: "Default",
+      enabled: true,
+      id: "opencode-config-default",
+      slug: "default",
+    });
+    await expectAdminCreated(app, "/admin/runtime/sandbox-profiles", {
+      enabled: true,
+      id: "sandbox-profile-default",
+      slug: "default",
+      templateName: "opencode-template",
+      warmpool: "none",
+    });
+    await expectAdminCreated(app, "/admin/runtime/agent-profiles", {
+      claimEnv: [],
+      displayName: "agentbay",
+      enabled: true,
+      id: "agent-profile-agentbay",
+      opencodeAgentName: "agentbay",
+      opencodeConfigID: "opencode-config-default",
+      slug: "agentbay",
+    });
+    await expectAdminCreated(app, "/admin/runtime/bots", {
+      adapters: { telegram: { botTokenEnv: "TELEGRAM_BOT_TOKEN_AGENTBAY" } },
+      defaultAgentProfileID: "agent-profile-agentbay",
+      displayName: "agentbay",
+      enabled: true,
+      id: "bot-agentbay",
+      sandboxProfileID: "sandbox-profile-default",
+      slug: "agentbay",
+    });
+
+    const agent = await requestJSON(
+      app,
+      "PUT",
+      "/admin/runtime/agent-profiles/agent-profile-agentbay",
+      {
+        claimEnv: [{ name: "ANTHROPIC_API_KEY", valueFromEnv: "ANTHROPIC_API_KEY" }],
+        displayName: "agentbay",
+        enabled: true,
+        id: "agent-profile-agentbay",
+        opencodeAgentName: "agentbay",
+        opencodeConfigID: "opencode-config-default",
+        slug: "agentbay",
+      },
+      true,
+    );
+    expect(agent.status).toBe(200);
+    expect(agent.body).toMatchObject({ claimEnv: [{ name: "ANTHROPIC_API_KEY", valueFromEnv: "ANTHROPIC_API_KEY" }] });
+
+    const bot = await requestJSON(
+      app,
+      "PUT",
+      "/admin/runtime/bots/bot-agentbay",
+      {
+        adapters: { telegram: { botTokenEnv: "TELEGRAM_BOT_TOKEN" } },
+        defaultAgentProfileID: "agent-profile-agentbay",
+        displayName: "agentbay",
+        enabled: true,
+        id: "bot-agentbay",
+        sandboxProfileID: "sandbox-profile-default",
+        slug: "agentbay",
+      },
+      true,
+    );
+    expect(bot.status).toBe(200);
+    expect(bot.body).toMatchObject({ adapters: { telegram: { botTokenEnv: "TELEGRAM_BOT_TOKEN" } } });
+  });
 });
 
 type Handler = (thread: Thread<ThreadState>, message: Message) => Promise<void>;

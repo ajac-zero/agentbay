@@ -190,6 +190,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
       .values(profile)
       .onConflictDoUpdate({
         set: {
+          claimEnv: profile.claimEnv,
           displayName: profile.displayName,
           enabled: profile.enabled,
           opencodeAgentName: profile.opencodeAgentName,
@@ -215,6 +216,7 @@ export class PostgresRuntimeStore implements RuntimeStore {
         .values(bot)
         .onConflictDoUpdate({
           set: {
+            adapters: bot.adapters,
             defaultAgentProfileID: bot.defaultAgentProfileID,
             displayName: bot.displayName,
             enabled: bot.enabled,

@@ -112,9 +112,8 @@ orchestrator, and upserts records through the admin API. It does not write SQL
 directly, so seed data goes through the same validation as manual admin API
 calls.
 
-The default seed data creates one bot at `/agents/agentbay/webhooks/<adapter>`
-using `opencode-template` and an opencode agent named `agentbay`. Override the
-opencode config to set your model/provider details:
+Seed arrays are empty by default. Define the records that match your
+environment-specific bots, sandbox profiles, and model/provider config:
 
 ```yaml
 runtimeSeed:
@@ -145,6 +144,32 @@ runtimeSeed:
           agentbay:
             prompt: You are running inside an isolated Kubernetes sandbox. Help the user with the requested coding task.
         default_agent: agentbay
+  sandboxProfiles:
+    - id: sandbox-profile-default
+      slug: default
+      templateName: opencode-template
+      warmpool: none
+      enabled: true
+  agentProfiles:
+    - id: agent-profile-agentbay
+      slug: agentbay
+      displayName: agentbay
+      opencodeConfigID: opencode-config-default
+      opencodeAgentName: agentbay
+      claimEnv:
+        - name: ANTHROPIC_API_KEY
+          valueFromEnv: ANTHROPIC_API_KEY_AGENTBAY
+      enabled: true
+  bots:
+    - id: bot-agentbay
+      slug: agentbay
+      displayName: agentbay
+      adapters:
+        telegram:
+          botTokenEnv: TELEGRAM_BOT_TOKEN_AGENTBAY
+      sandboxProfileID: sandbox-profile-default
+      defaultAgentProfileID: agent-profile-agentbay
+      enabled: true
 ```
 
 The seed Job is intentionally idempotent. It uses `PUT` for bots, sandbox
