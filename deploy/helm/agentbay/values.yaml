@@ -161,54 +161,18 @@ runtimeSeed:
     limits:
       cpu: 100m
       memory: 128Mi
-  # -- DB-backed opencode config records. The default config only declares an
-  # -- opencode agent; set provider/model fields here for your own LLM backend.
-  opencodeConfigs:
-    - id: opencode-config-default
-      slug: default
-      displayName: Default
-      enabled: true
-      config:
-        agent:
-          agentbay:
-            prompt: You are running inside an isolated Kubernetes sandbox. Help the user with the requested coding task, keep them informed, and avoid touching unrelated files.
-        default_agent: agentbay
+  # -- DB-backed opencode config records. Empty by default; define these in an
+  # -- environment-specific values file when enabling runtime seed.
+  opencodeConfigs: []
   # -- DB-backed sandbox profile records. `templateName` must reference an
   # -- existing SandboxTemplate in `claims.namespace` before this bot can run.
-  sandboxProfiles:
-    - id: sandbox-profile-default
-      slug: default
-      templateName: opencode-template
-      warmpool: none
-      enabled: true
+  sandboxProfiles: []
   # -- DB-backed agent profile records. `opencodeAgentName` must exist under
   # -- the referenced opencode config's `agent` object. Add `claimEnv` refs per
   # -- agent to inject model/repo credentials into that agent's SandboxClaims.
-  agentProfiles:
-    - id: agent-profile-agentbay
-      slug: agentbay
-      displayName: agentbay
-      opencodeConfigID: opencode-config-default
-      opencodeAgentName: agentbay
-      claimEnv: []
-      #  - name: ANTHROPIC_API_KEY
-      #    valueFromEnv: ANTHROPIC_API_KEY_AGENTBAY
-      #  - name: OPENAI_API_KEY
-      #    valueFromEnv: OPENAI_API_KEY_AGENTBAY
-      #  - name: GITHUB_TOKEN
-      #    valueFromEnv: GITHUB_TOKEN_AGENTBAY
-      enabled: true
+  agentProfiles: []
   # -- DB-backed bot records. Webhooks use `/agents/<slug>/webhooks/<adapter>`.
-  bots:
-    - id: bot-agentbay
-      slug: agentbay
-      displayName: agentbay
-      adapters:
-        telegram:
-          botTokenEnv: TELEGRAM_BOT_TOKEN_AGENTBAY
-      sandboxProfileID: sandbox-profile-default
-      defaultAgentProfileID: agent-profile-agentbay
-      enabled: true
+  bots: []
   # -- Additional bot/agent allow-list entries. Default bot mappings are added
   # -- automatically when each bot is upserted.
   botAgentProfiles: []

@@ -47,7 +47,7 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).not.toMatch(/kind: Ingress/);
     });
 
-    it("renders an idempotent runtime seed hook when enabled", () => {
+    it("renders a runtime seed hook without opinionated records when enabled", () => {
       const result = helm([
         "template",
         "demo",
@@ -61,6 +61,71 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/name: demo-agentbay-runtime-seed/);
       expect(result.stdout).toMatch(/helm\.sh\/hook: post-install,post-upgrade/);
       expect(result.stdout).toMatch(/key: AGENTBAY_ADMIN_TOKEN/);
+      expect(result.stdout).not.toMatch(/\/admin\/runtime\/opencode-configs\/opencode-config-default/);
+      expect(result.stdout).not.toMatch(/\/admin\/runtime\/sandbox-profiles\/sandbox-profile-default/);
+      expect(result.stdout).not.toMatch(/\/admin\/runtime\/agent-profiles\/agent-profile-agentbay/);
+      expect(result.stdout).not.toMatch(/\/admin\/runtime\/bots\/bot-agentbay/);
+    });
+
+    it("renders explicit runtime seed records when configured", () => {
+      const result = helm([
+        "template",
+        "demo",
+        CHART_PATH,
+        "--namespace",
+        NAMESPACE,
+        "--set",
+        "runtimeSeed.enabled=true",
+        "--set",
+        "runtimeSeed.opencodeConfigs[0].id=opencode-config-default",
+        "--set",
+        "runtimeSeed.opencodeConfigs[0].slug=default",
+        "--set",
+        "runtimeSeed.opencodeConfigs[0].displayName=Default",
+        "--set",
+        "runtimeSeed.opencodeConfigs[0].enabled=true",
+        "--set",
+        "runtimeSeed.opencodeConfigs[0].config.default_agent=agentbay",
+        "--set",
+        "runtimeSeed.opencodeConfigs[0].config.agent.agentbay.prompt=Prompt",
+        "--set",
+        "runtimeSeed.sandboxProfiles[0].id=sandbox-profile-default",
+        "--set",
+        "runtimeSeed.sandboxProfiles[0].slug=default",
+        "--set",
+        "runtimeSeed.sandboxProfiles[0].templateName=opencode-template",
+        "--set",
+        "runtimeSeed.sandboxProfiles[0].warmpool=none",
+        "--set",
+        "runtimeSeed.sandboxProfiles[0].enabled=true",
+        "--set",
+        "runtimeSeed.agentProfiles[0].id=agent-profile-agentbay",
+        "--set",
+        "runtimeSeed.agentProfiles[0].slug=agentbay",
+        "--set",
+        "runtimeSeed.agentProfiles[0].displayName=agentbay",
+        "--set",
+        "runtimeSeed.agentProfiles[0].opencodeConfigID=opencode-config-default",
+        "--set",
+        "runtimeSeed.agentProfiles[0].opencodeAgentName=agentbay",
+        "--set",
+        "runtimeSeed.agentProfiles[0].enabled=true",
+        "--set",
+        "runtimeSeed.bots[0].id=bot-agentbay",
+        "--set",
+        "runtimeSeed.bots[0].slug=agentbay",
+        "--set",
+        "runtimeSeed.bots[0].displayName=agentbay",
+        "--set",
+        "runtimeSeed.bots[0].adapters.telegram.botTokenEnv=TELEGRAM_BOT_TOKEN",
+        "--set",
+        "runtimeSeed.bots[0].sandboxProfileID=sandbox-profile-default",
+        "--set",
+        "runtimeSeed.bots[0].defaultAgentProfileID=agent-profile-agentbay",
+        "--set",
+        "runtimeSeed.bots[0].enabled=true",
+      ]);
+      expect(result.status, formatStderr(result)).toBe(0);
       expect(result.stdout).toMatch(/PUT "\/admin\/runtime\/opencode-configs\/opencode-config-default"/);
       expect(result.stdout).toMatch(/PUT "\/admin\/runtime\/sandbox-profiles\/sandbox-profile-default"/);
       expect(result.stdout).toMatch(/PUT "\/admin\/runtime\/agent-profiles\/agent-profile-agentbay"/);
