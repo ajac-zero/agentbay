@@ -95,9 +95,15 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: {{ $t.workingDir | default "/workspace" }}
+          {{- with $t.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- with $t.containerOverrides }}
           {{- toYaml . | nindent 10 }}
           {{- end }}
+        {{- with $t.sidecars }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       volumes:
         - name: workspace
           {{- if eq (default "emptyDir" $t.workspace.type) "persistentVolumeClaim" }}
@@ -114,6 +120,9 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- with $t.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- with $t.podSpecOverrides }}
       {{- toYaml . | nindent 6 }}
       {{- end }}

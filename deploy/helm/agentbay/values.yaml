@@ -365,6 +365,14 @@ sandboxTemplates:
           extra: []
       # -- Extra container `env` entries appended to the opencode container.
       extraEnv: []
+      # -- Extra volume mounts appended to the opencode container.
+      extraVolumeMounts: []
+      # -- Additional containers appended to the sandbox Pod. Useful for local
+      # -- authz/proxy sidecars that expose model or MCP gateways on localhost.
+      sidecars: []
+      # -- Additional volumes appended to the sandbox Pod. Use with `sidecars`
+      # -- for projected tokens, config, or sidecar-specific state.
+      extraVolumes: []
       # -- Pod-level overrides applied verbatim under spec.podTemplate.spec.
       podSpecOverrides: {}
       # -- Container-level overrides applied verbatim under the opencode
