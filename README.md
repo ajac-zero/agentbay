@@ -41,13 +41,14 @@ pnpm dev
 | `AGENTBAY_OPENCODE_PORT` | `4096` | Port exposed by `opencode serve` in the sandbox. |
 | `AGENTBAY_OPENCODE_DIRECTORY` | `/workspace` | opencode instance directory. |
 | `REDIS_URL` | unset | Enables persistent Chat SDK state; otherwise in-memory state is used. |
-| `AGENTBAY_DATABASE_URL` / `DATABASE_URL` | required unless host vars are set | Postgres URL for bot/runtime/profile storage. Startup runs pending Drizzle migrations. |
+| `AGENTBAY_DATABASE_URL` / `DATABASE_URL` | required unless host vars are set | Postgres URL for bot/runtime/profile storage. Run pending Drizzle migrations with `pnpm db:migrate` or the Helm migration Job before serving traffic. |
 | `AGENTBAY_DATABASE_HOST` | unset | Alternative to URL-based config; pair with `AGENTBAY_DATABASE_USER`, `AGENTBAY_DATABASE_PASSWORD`, and `AGENTBAY_DATABASE_NAME`. |
 | `AGENTBAY_DATABASE_PORT` | `5432` | Postgres port when using `AGENTBAY_DATABASE_HOST`. |
 | `AGENTBAY_DATABASE_USER` | unset | Postgres user when using `AGENTBAY_DATABASE_HOST`. |
 | `AGENTBAY_DATABASE_PASSWORD` | unset | Postgres password when using `AGENTBAY_DATABASE_HOST`. |
 | `AGENTBAY_DATABASE_NAME` | unset | Postgres database when using `AGENTBAY_DATABASE_HOST`. |
 | `AGENTBAY_DATABASE_SSL` | `false` | Enables SSL for Postgres connections. |
+| `AGENTBAY_DATABASE_MIGRATIONS_FOLDER` | `drizzle` | Migration folder used by the explicit migration command. |
 | `AGENTBAY_ADMIN_TOKEN` | required for bootstrap | Enables bearer-token-protected runtime CRUD routes under `/admin/runtime`. |
 | `AGENTBAY_SLACK_ENABLED` | auto | Enables Slack when `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` are present. |
 | `AGENTBAY_TEAMS_ENABLED` | auto | Enables Teams when `TEAMS_APP_ID` and `TEAMS_APP_PASSWORD` are present. |
@@ -124,7 +125,7 @@ POST   /admin/runtime/bot-agent-profiles
 DELETE /admin/runtime/bot-agent-profiles/:botID/:agentProfileID
 ```
 
-Runtime database schema lives in `src/runtime/schema.ts`; generate new Drizzle migrations with `pnpm db:generate` after changing it.
+Runtime database schema lives in `src/runtime/schema.ts`; generate new Drizzle migrations with `pnpm db:generate` after changing it. Apply pending migrations with `pnpm build && pnpm db:migrate`.
 
 Bots can store adapter secret references without storing secret values. For Telegram, set `adapters.telegram.botTokenEnv` to the env var containing that bot's token, optionally `secretTokenEnv`, and optionally `userName`.
 
@@ -154,7 +155,7 @@ docker push ghcr.io/your-org/opencode-sandbox:latest
 
 Update `deploy/orchestrator.yaml` and `deploy/examples/sandbox-template.yaml` with your pushed image names before applying them.
 
-A Postgres database must be configured before starting the orchestrator. Use `AGENTBAY_DATABASE_URL` / `DATABASE_URL`, or the discrete `AGENTBAY_DATABASE_HOST` settings. The orchestrator applies Drizzle migrations from `drizzle/` on startup. The Helm chart can deploy an in-cluster Postgres for small installs, or reference an external Postgres URL/Secret.
+A Postgres database must be configured before starting the orchestrator. Use `AGENTBAY_DATABASE_URL` / `DATABASE_URL`, or the discrete `AGENTBAY_DATABASE_HOST` settings. Apply Drizzle migrations from `drizzle/` before serving traffic. The Helm chart can run migrations as a Job, deploy an in-cluster Postgres for small installs, or reference an external Postgres URL/Secret.
 
 The `deploy/` directory contains starter Kubernetes manifests:
 

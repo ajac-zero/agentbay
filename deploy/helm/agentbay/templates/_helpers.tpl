@@ -151,3 +151,67 @@ external-secret
 none
 {{- end -}}
 {{- end -}}
+
+{{/*
+Database environment variables shared by the orchestrator and migration Job.
+*/}}
+{{- define "agentbay.databaseEnv" -}}
+{{- $databaseMode := include "agentbay.database.mode" . -}}
+{{- if eq $databaseMode "in-cluster" }}
+- name: AGENTBAY_DATABASE_HOST
+  value: "{{ include "agentbay.postgres.fullname" . }}.{{ .Release.Namespace }}.svc"
+- name: AGENTBAY_DATABASE_PORT
+  value: "5432"
+- name: AGENTBAY_DATABASE_NAME
+  value: {{ .Values.database.auth.database | quote }}
+- name: AGENTBAY_DATABASE_USER
+  value: {{ .Values.database.auth.username | quote }}
+- name: AGENTBAY_DATABASE_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "agentbay.postgres.fullname" . }}
+      key: POSTGRES_PASSWORD
+{{- else if eq $databaseMode "external-url" }}
+- name: AGENTBAY_DATABASE_URL
+  value: {{ .Values.database.external.url | quote }}
+{{- else if eq $databaseMode "external-secret" }}
+- name: AGENTBAY_DATABASE_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.database.external.existingSecret }}
+      key: {{ .Values.database.external.existingSecretKey }}
+{{- end }}
+{{- if .Values.database.ssl }}
+- name: AGENTBAY_DATABASE_SSL
+  value: "true"
+{{- end }}
+{{- end -}}
+
+{{/*
+Default migration hook timing. External databases can migrate before install.
+Chart-managed Postgres migrations are rendered as a normal Job so the app can
+stay unready until the schema exists without deadlocking Helm post-install hooks.
+*/}}
+{{- define "agentbay.migrations.hookEvents" -}}
+{{- if .Values.migrations.hookEvents -}}
+{{- join "," .Values.migrations.hookEvents -}}
+{{- else if .Values.database.enabled -}}
+{{- else -}}
+pre-install,pre-upgrade
+{{- end -}}
+{{- end -}}
+
+{{/*
+Name for the migration Job. Hook Jobs can reuse a stable name because Helm
+deletes them before recreation; regular Jobs include the release revision so
+upgrades can create a new immutable Job spec.
+*/}}
+{{- define "agentbay.migrations.jobName" -}}
+{{- $hookEvents := include "agentbay.migrations.hookEvents" . | trim -}}
+{{- if $hookEvents -}}
+{{- printf "%s-migrate" (include "agentbay.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $base := printf "%s-migrate" (include "agentbay.fullname" .) | trunc 50 | trimSuffix "-" -}}
+{{- printf "%s-%d" $base .Release.Revision | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}

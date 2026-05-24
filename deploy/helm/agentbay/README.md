@@ -70,7 +70,13 @@ The chart supports three modes, selected by `database.*`:
 | External Postgres URL | `database.enabled=false` + `database.external.url=postgres://...` | URL is rendered into the orchestrator Deployment env. |
 | External Postgres from existing Secret | `database.enabled=false` + `database.external.existingSecret=my-postgres` + `database.external.existingSecretKey=AGENTBAY_DATABASE_URL` | Recommended for production; keeps credentials out of values files. |
 
-On startup the orchestrator applies pending Drizzle migrations for the runtime tables. Runtime rows are explicit: create bots/profiles/configs through the admin API, your own SQL/bootstrap tooling, or the chart's optional runtime seed hook.
+The chart runs pending Drizzle migrations with a migration Job when `migrations.enabled=true` (the default). External databases use a `pre-install,pre-upgrade` hook so migrations complete before the orchestrator rollout. The chart-managed Postgres default renders migrations as a normal Job; the orchestrator can start, but its readiness probe stays unready until the Job creates the runtime tables.
+
+Runtime rows are explicit: create bots/profiles/configs through the admin API, your own SQL/bootstrap tooling, or the chart's optional runtime seed hook.
+
+For production, prefer an external database so the migration Job can run before the app Deployment is created. The in-cluster Postgres mode is intended for small installs and development.
+
+When `migrations.enabled=true`, configure external database credentials through `database.external.url` or `database.external.existingSecret`. A generic `secrets.existingSecret` containing `AGENTBAY_DATABASE_URL` is also supported, but chart-managed `secrets.data.AGENTBAY_DATABASE_URL` is rejected because pre-install hooks cannot read normal chart resources before they are created.
 
 For production, prefer an existing Secret:
 
@@ -177,7 +183,8 @@ profiles, opencode configs, and agent profiles, and `POST` with conflict-ignore
 semantics for extra bot-agent allow-list entries.
 
 Use `helm install --wait` and `helm upgrade --wait` when runtime seed is
-enabled so the orchestrator is ready before the seed Job calls the admin API.
+enabled with an external database so the orchestrator is ready before the seed
+Job calls the admin API.
 For future upgrades that rename an opencode agent already referenced by an
 AgentProfile, seed a config containing both old and new agent names before
 switching the AgentProfile, then remove the old agent in a later upgrade.
