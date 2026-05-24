@@ -34,6 +34,7 @@ export type PostgresRuntimeStoreOptions = {
   migrationsFolder?: string;
   password?: string;
   port?: number;
+  runMigrations?: boolean;
   ssl: boolean;
   user?: string;
 };
@@ -50,8 +51,17 @@ export async function createPostgresRuntimeStore(options: PostgresRuntimeStoreOp
   });
   const db = drizzle(pool, { schema });
   const store = new PostgresRuntimeStore(pool, db, options.migrationsFolder ?? path.resolve(process.cwd(), "drizzle"));
-  await store.initialize();
+  if (options.runMigrations) await store.initialize();
   return store;
+}
+
+export async function migratePostgresRuntimeStore(options: PostgresRuntimeStoreOptions): Promise<void> {
+  const store = await createPostgresRuntimeStore({ ...options, runMigrations: false });
+  try {
+    await store.initialize();
+  } finally {
+    await store.close();
+  }
 }
 
 export class PostgresRuntimeStore implements RuntimeStore {

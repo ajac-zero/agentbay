@@ -1,0 +1,72 @@
+{{- if .Values.migrations.enabled -}}
+{{- $databaseEnv := include "agentbay.databaseEnv" . | trim -}}
+{{- $databaseMode := include "agentbay.database.mode" . | trim -}}
+{{- $hookEvents := include "agentbay.migrations.hookEvents" . | trim -}}
+{{- if and (eq $databaseMode "none") .Values.secrets.create (not .Values.secrets.existingSecret) (or (hasKey .Values.secrets.data "AGENTBAY_DATABASE_URL") (hasKey .Values.secrets.data "DATABASE_URL")) -}}
+{{- fail "migrations.enabled=true cannot use secrets.data.AGENTBAY_DATABASE_URL or secrets.data.DATABASE_URL because the migration Job may run before the chart-managed Secret exists; set database.external.url or database.external.existingSecret instead" -}}
+{{- end -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "agentbay.migrations.jobName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+  {{- if $hookEvents }}
+  annotations:
+    helm.sh/hook: {{ $hookEvents | quote }}
+    helm.sh/hook-weight: {{ .Values.migrations.hookWeight | quote }}
+    helm.sh/hook-delete-policy: {{ join "," .Values.migrations.hookDeletePolicy | quote }}
+  {{- end }}
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentbay.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrations
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command: ["node", "dist/migrate.js"]
+          {{- if or $databaseEnv .Values.migrations.extraEnv }}
+          env:
+            {{- with $databaseEnv }}
+            {{- . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.migrations.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- if or (and (eq $databaseMode "none") .Values.secrets.existingSecret) .Values.migrations.extraEnvFrom }}
+          envFrom:
+            {{- if and (eq $databaseMode "none") .Values.secrets.existingSecret }}
+            - secretRef:
+                name: {{ .Values.secrets.existingSecret }}
+                optional: false
+            {{- end }}
+            {{- with .Values.migrations.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- with .Values.migrations.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

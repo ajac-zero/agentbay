@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ThreadState } from "../types.js";
+import type { PostgresRuntimeStoreOptions } from "./postgres.js";
 import type {
   AgentProfile,
   Bot,
@@ -50,22 +51,32 @@ export type UpsertOpencodeConfigInput = Omit<OpencodeConfigRecord, "configHash" 
 };
 
 export async function createRuntimeStore(env: NodeJS.ProcessEnv = process.env): Promise<RuntimeStore> {
+  const { createPostgresRuntimeStore } = await import("./postgres.js");
+  return createPostgresRuntimeStore(readPostgresRuntimeStoreOptions(env));
+}
+
+export async function runRuntimeMigrations(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const { migratePostgresRuntimeStore } = await import("./postgres.js");
+  await migratePostgresRuntimeStore(readPostgresRuntimeStoreOptions(env));
+}
+
+function readPostgresRuntimeStoreOptions(env: NodeJS.ProcessEnv): PostgresRuntimeStoreOptions {
   const connectionString = env.AGENTBAY_DATABASE_URL ?? env.DATABASE_URL;
   const host = env.AGENTBAY_DATABASE_HOST;
   if (!connectionString && !host) {
     throw new Error("AGENTBAY_DATABASE_URL, DATABASE_URL, or AGENTBAY_DATABASE_HOST must be set");
   }
 
-  const { createPostgresRuntimeStore } = await import("./postgres.js");
-  return createPostgresRuntimeStore({
+  return {
     database: env.AGENTBAY_DATABASE_NAME,
     host,
+    migrationsFolder: env.AGENTBAY_DATABASE_MIGRATIONS_FOLDER,
     password: env.AGENTBAY_DATABASE_PASSWORD,
     port: readNumber(env.AGENTBAY_DATABASE_PORT, 5432),
     user: env.AGENTBAY_DATABASE_USER,
     ...(connectionString ? { connectionString } : {}),
     ssl: readBoolean(env.AGENTBAY_DATABASE_SSL, false),
-  });
+  };
 }
 
 export function resolveRuntime(snapshot: RuntimeStoreSnapshot, bot: Bot, agentProfileID: string): ResolvedRuntime {

@@ -33,6 +33,7 @@ describe("HTTP runtime e2e", () => {
     postgres = await startPostgres();
     runtimeStore = await createPostgresRuntimeStore({
       connectionString: postgresConnectionString(postgres),
+      runMigrations: true,
       ssl: false,
     });
     opencode = await startFakeOpencodeServer();
@@ -131,6 +132,7 @@ describe("HTTP runtime e2e", () => {
     postgres = await startPostgres();
     runtimeStore = await createPostgresRuntimeStore({
       connectionString: postgresConnectionString(postgres),
+      runMigrations: true,
       ssl: false,
     });
 

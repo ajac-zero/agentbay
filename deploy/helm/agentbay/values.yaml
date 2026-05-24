@@ -132,12 +132,43 @@ admin:
   # -- upgrades. Existing Secrets should provide AGENTBAY_ADMIN_TOKEN directly.
   token: ""
 
+migrations:
+  # -- Run Drizzle runtime database migrations from a Helm hook Job instead of
+  # -- from orchestrator startup.
+  enabled: true
+  # -- Override Helm hook events. By default, external databases use
+  # -- pre-install/pre-upgrade. The chart-managed Postgres default leaves this
+  # -- empty and renders migrations as a normal Job so app readiness can wait on
+  # -- the migrated schema without deadlocking Helm post-install hooks.
+  hookEvents: []
+  # -- Helm hook weight for the migration Job. Keep this before runtimeSeed.
+  hookWeight: -10
+  # -- Helm hook delete policy. Failed Jobs are intentionally kept so their
+  # -- logs remain available for troubleshooting.
+  hookDeletePolicy:
+    - before-hook-creation
+    - hook-succeeded
+  backoffLimit: 6
+  # -- Extra migration Job env vars expressed as a name/value list.
+  extraEnv: []
+  # -- Extra `envFrom` entries for externally managed ConfigMaps or Secrets.
+  # -- Pre-install migration hooks cannot read chart-managed Secrets because
+  # -- normal release resources do not exist yet.
+  extraEnvFrom: []
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
 runtimeSeed:
   # -- Create/update runtime rows after install/upgrade through the admin API.
   # -- This is disabled by default because production installs usually want to
   # -- own bot/profile/config definitions explicitly in their environment repo.
-  # -- Use `helm install/upgrade --wait` when enabling this so the orchestrator
-  # -- is ready before the seed hook runs.
+  # -- Use `helm install/upgrade --wait` with an external database when enabling
+  # -- this so the orchestrator is ready before the seed hook runs.
   enabled: false
   image:
     repository: curlimages/curl
@@ -298,6 +329,8 @@ database:
     # -- Full postgres:// URL passed to the orchestrator as AGENTBAY_DATABASE_URL.
     url: ""
     # -- Reference an existing Secret containing the Postgres URL.
+    # -- Use this instead of secrets.data.AGENTBAY_DATABASE_URL when migrations
+    # -- are enabled so the migration Job can read the URL before install.
     existingSecret: ""
     # -- Key inside `existingSecret` whose value is the Postgres URL.
     existingSecretKey: AGENTBAY_DATABASE_URL

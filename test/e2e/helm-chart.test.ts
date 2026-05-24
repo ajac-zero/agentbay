@@ -40,6 +40,9 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/name: demo-agentbay-postgres/);
       expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_HOST/);
       expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_PASSWORD/);
+      expect(result.stdout).toMatch(/name: demo-agentbay-migrate-1/);
+      expect(result.stdout).not.toMatch(/helm\.sh\/hook: "post-install,pre-upgrade"/);
+      expect(result.stdout).toMatch(/command: \["node", "dist\/migrate\.js"\]/);
       expect(result.stdout).not.toMatch(/name: demo-agentbay-runtime-seed/);
       // No SandboxTemplate / WarmPool / Ingress unless opted in
       expect(result.stdout).not.toMatch(/kind: SandboxTemplate/);
@@ -246,7 +249,43 @@ describe("agentbay Helm chart", () => {
       expect(result.status, formatStderr(result)).toBe(0);
       expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_URL/);
       expect(result.stdout).toMatch(/secretKeyRef:\s+name: my-postgres/);
+      expect(result.stdout).toMatch(/helm\.sh\/hook: "pre-install,pre-upgrade"/);
+      expect(result.stdout).not.toMatch(/name: demo-agentbay-migrate[\s\S]*envFrom:\s+- secretRef:\s+name: demo-agentbay/);
       expect(result.stdout).not.toMatch(/name: demo-agentbay-postgres/);
+    });
+
+    it("uses a generic existing Secret for migration database config when database mode is unset", () => {
+      const result = helm([
+        "template",
+        "demo",
+        CHART_PATH,
+        "--namespace",
+        NAMESPACE,
+        "--set",
+        "database.enabled=false",
+        "--set",
+        "secrets.existingSecret=agentbay-secrets",
+      ]);
+      expect(result.status, formatStderr(result)).toBe(0);
+      expect(result.stdout).toMatch(/name: demo-agentbay-migrate/);
+      expect(result.stdout).toMatch(/helm\.sh\/hook: "pre-install,pre-upgrade"/);
+      expect(result.stdout).toMatch(/name: demo-agentbay-migrate[\s\S]*envFrom:\s+- secretRef:\s+name: agentbay-secrets\s+optional: false/);
+    });
+
+    it("rejects chart-managed Secret database URLs for migration hooks", () => {
+      const result = helm([
+        "template",
+        "demo",
+        CHART_PATH,
+        "--namespace",
+        NAMESPACE,
+        "--set",
+        "database.enabled=false",
+        "--set-string",
+        "secrets.data.AGENTBAY_DATABASE_URL=postgres://agentbay:agentbay@example:5432/agentbay",
+      ]);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/migrations\.enabled=true cannot use secrets\.data\.AGENTBAY_DATABASE_URL/);
     });
 
     it("falls back to in-memory Chat SDK state when no Redis is configured", () => {
