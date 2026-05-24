@@ -252,8 +252,91 @@ Why enabling is usually the right call:
   remember to apply it."
 
 For full takeover of a template's spec (e.g. fields the chart does not
-expose), set `specOverride: { ... }` on that entry. For per-container or
-per-podSpec patches, use `containerOverrides` / `podSpecOverrides`.
+expose), set `specOverride: { ... }` on that entry. For common extensions,
+prefer `sidecars`, `extraVolumes`, `extraVolumeMounts`, `containerOverrides`,
+and `podSpecOverrides` so the chart still renders the standard opencode
+container, workspace volume, service, and NetworkPolicy.
+
+### Gateway sidecar pattern
+
+For deployments where a local sidecar authenticates to a shared model or MCP
+gateway, leave `agentProfiles[].claimEnv` empty and point opencode at the
+sidecar's localhost listener:
+
+```yaml
+runtimeSeed:
+  opencodeConfigs:
+    - id: opencode-config-default
+      config:
+        model: envoy-gateway/claude-sonnet-4-5
+        provider:
+          envoy-gateway:
+            name: Envoy AI Gateway
+            npm: "@ai-sdk/openai-compatible"
+            options:
+              baseURL: http://127.0.0.1:8080/v1
+              apiKey: unused
+            models:
+              claude-sonnet-4-5:
+                id: claude-sonnet-4-5
+                tool_call: true
+        agent:
+          agentbay:
+            prompt: You are running inside an isolated Kubernetes sandbox.
+        default_agent: agentbay
+  agentProfiles:
+    - id: agent-profile-agentbay
+      slug: agentbay
+      displayName: agentbay
+      opencodeConfigID: opencode-config-default
+      opencodeAgentName: agentbay
+      claimEnv: []
+      enabled: true
+
+sandboxTemplates:
+  enabled: true
+  templates:
+    - name: opencode-template
+      networkPolicy:
+        egress:
+          allowInternetExceptPrivate: false
+          extra:
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: ai-gateway
+                  podSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: envoy-ai-gateway
+              ports:
+                - protocol: TCP
+                  port: 8080
+      sidecars:
+        - name: agentbay-authz
+          image: ghcr.io/your-org/agentbay-authz:latest
+          args:
+            - "--listen=127.0.0.1:8080"
+            - "--gateway=http://envoy-ai-gateway.ai-gateway.svc.cluster.local:8080"
+          ports:
+            - containerPort: 8080
+              name: authz
+          volumeMounts:
+            - name: agentbay-authz-token
+              mountPath: /var/run/secrets/agentbay-authz
+              readOnly: true
+      extraVolumes:
+        - name: agentbay-authz-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: envoy-ai-gateway
+                  expirationSeconds: 3600
+```
+
+The orchestrator still injects `OPENCODE_SERVER_PASSWORD` and
+`OPENCODE_CONFIG_CONTENT` through each `SandboxClaim`, so keep
+`envVarsInjectionPolicy: Allowed` unless you also change that runtime contract.
 
 The legacy examples in [`deploy/examples/`](../../examples) remain as a
 reference for clusters that prefer applying YAML directly.

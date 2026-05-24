@@ -152,6 +152,68 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/app\.kubernetes\.io\/instance: demo/);
     });
 
+    it("renders SandboxTemplate sidecars and extra volumes", async () => {
+      const workDir = await mkdtemp(join(tmpdir(), "agentbay-helm-values-"));
+      try {
+        const valuesPath = join(workDir, "values.yaml");
+        await writeFile(
+          valuesPath,
+          `sandboxTemplates:
+  enabled: true
+  templates:
+    - name: opencode-template
+      image:
+        repository: ghcr.io/example/opencode-sandbox
+        tag: latest
+      port: 4096
+      workingDir: /workspace
+      command: ["opencode"]
+      args: ["serve", "--hostname", "0.0.0.0", "--port", "4096"]
+      workspace:
+        type: emptyDir
+      networkPolicy:
+        ingressFromOrchestrator: true
+        extraIngress: []
+        egress:
+          allowDNS: true
+          allowInternetExceptPrivate: false
+          extra: []
+      extraVolumeMounts:
+        - name: opencode-cache
+          mountPath: /tmp/opencode-cache
+      sidecars:
+        - name: agentbay-authz
+          image: example/agentbay-authz:latest
+          ports:
+            - name: authz
+              containerPort: 8080
+          volumeMounts:
+            - name: agentbay-authz-token
+              mountPath: /var/run/secrets/agentbay-authz
+              readOnly: true
+      extraVolumes:
+        - name: opencode-cache
+          emptyDir: {}
+        - name: agentbay-authz-token
+          emptyDir:
+            medium: Memory
+`,
+        );
+        const result = helm(["template", "demo", CHART_PATH, "--namespace", NAMESPACE, "-f", valuesPath]);
+        expect(result.status, formatStderr(result)).toBe(0);
+        expect(result.stdout).toMatch(/name: opencode/);
+        expect(result.stdout).toMatch(/mountPath: \/tmp\/opencode-cache/);
+        expect(result.stdout).toMatch(/name: agentbay-authz/);
+        expect(result.stdout).toMatch(/image: example\/agentbay-authz:latest/);
+        expect(result.stdout).toMatch(/containerPort: 8080/);
+        expect(result.stdout).toMatch(/mountPath: \/var\/run\/secrets\/agentbay-authz/);
+        expect(result.stdout).toMatch(/name: agentbay-authz-token/);
+        expect(result.stdout).toMatch(/medium: Memory/);
+      } finally {
+        await rm(workDir, { force: true, recursive: true });
+      }
+    });
+
     it("uses an external Redis URL from an existing Secret when configured", () => {
       const result = helm([
         "template",
