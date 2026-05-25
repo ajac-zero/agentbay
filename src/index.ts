@@ -15,7 +15,7 @@ const chats = createBotRegistry(config, sandboxManager, runtimeStore);
 const app = createOpenApiApp();
 
 mountHealthRoute(app, config, runtimeStore);
-mountWebhooks(app, chats, config, runtimeStore);
+mountWebhooks(app, chats, runtimeStore);
 mountRuntimeAdmin(app, config, runtimeStore);
 mountOpenApiDocs(app);
 

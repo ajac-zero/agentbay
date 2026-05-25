@@ -116,7 +116,7 @@ function registerWebhookDocs(app: OpenAPIHono): void {
     path: "/agents/{botSlug}/webhooks/{adapterName}",
     tags: ["webhooks"],
     summary: "Handle adapter webhook verification requests",
-    description: "Pass-through route for enabled Chat SDK adapter webhooks. The exact request and response shapes are adapter-specific.",
+    description: "Pass-through route for bot-configured Chat SDK adapter webhooks. The exact request and response shapes are adapter-specific.",
     request,
     responses: webhookResponses,
   });
@@ -125,7 +125,7 @@ function registerWebhookDocs(app: OpenAPIHono): void {
     path: "/agents/{botSlug}/webhooks/{adapterName}",
     tags: ["webhooks"],
     summary: "Handle adapter webhook event requests",
-    description: "Pass-through route for enabled Chat SDK adapter webhooks. The exact request and response shapes are adapter-specific.",
+    description: "Pass-through route for bot-configured Chat SDK adapter webhooks. The exact request and response shapes are adapter-specific.",
     request: {
       ...request,
       body: {

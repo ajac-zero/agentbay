@@ -80,7 +80,7 @@ function createBotChat(
     adapters.discord = createDiscordAdapter({ userName: config.botUserName });
   }
 
-  if (config.telegram.enabled) {
+  if (config.telegram.enabled || bot?.adapters.telegram) {
     const telegram = bot?.adapters.telegram;
     if (!telegram?.botTokenEnv && !process.env.TELEGRAM_BOT_TOKEN) {
       throw new Error(

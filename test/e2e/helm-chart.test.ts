@@ -134,6 +134,8 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/PUT "\/admin\/runtime\/agent-profiles\/agent-profile-agentbay"/);
       expect(result.stdout).toMatch(/PUT "\/admin\/runtime\/bots\/bot-agentbay"/);
       expect(result.stdout).toMatch(/"slug":"agentbay"/);
+      expect(result.stdout).toMatch(/"adapters":\{"telegram":\{"botTokenEnv":"TELEGRAM_BOT_TOKEN"\}\}/);
+      expect(result.stdout).not.toMatch(/AGENTBAY_TELEGRAM_ENABLED/);
     });
 
     it("renders SandboxTemplates with a NetworkPolicy ingress selector that matches the orchestrator", () => {

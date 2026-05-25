@@ -297,31 +297,6 @@ runtimeSeed:
   # -- automatically when each bot is upserted.
   botAgentProfiles: []
 
-# -- Adapter toggles. When an adapter is enabled, the orchestrator expects the
-# -- corresponding env vars to be available in `secrets.data` (or via
-# -- `secrets.existingSecret`). The chart sets AGENTBAY_<NAME>_ENABLED=true so
-# -- the orchestrator surfaces a clear error if any required variable is
-# -- missing at startup.
-adapters:
-  slack:
-    enabled: false
-  teams:
-    enabled: false
-  gchat:
-    enabled: false
-  discord:
-    enabled: false
-  telegram:
-    enabled: false
-  github:
-    enabled: false
-  linear:
-    enabled: false
-  whatsapp:
-    enabled: false
-  messenger:
-    enabled: false
-
 secrets:
   # -- Whether the chart should create a Secret containing the orchestrator
   # -- env vars listed in `secrets.data`. Set to false to use an existing
