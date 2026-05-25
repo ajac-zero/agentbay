@@ -1,0 +1,193 @@
+{{- if .Values.aiGatewayAuthz.enabled -}}
+{{- $authzName := printf "%s-authz" (include "agentbay.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- $claimsNamespace := include "agentbay.claimsNamespace" . -}}
+{{- if .Values.aiGatewayAuthz.sandboxServiceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "agentbay.aiGatewayAuthz.sandboxServiceAccountName" . }}
+  namespace: {{ $claimsNamespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-runtime
+  {{- with .Values.aiGatewayAuthz.sandboxServiceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+{{- if .Values.aiGatewayAuthz.authz.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "agentbay.aiGatewayAuthz.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ai-gateway-authz
+  {{- with .Values.aiGatewayAuthz.authz.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $authzName }}-policy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ai-gateway-authz
+data:
+  policy.yaml: |
+{{ .Values.aiGatewayAuthz.authz.policy | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $authzName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ai-gateway-authz
+spec:
+  replicas: {{ .Values.aiGatewayAuthz.authz.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "agentbay.aiGatewayAuthz.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentbay.aiGatewayAuthz.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "agentbay.aiGatewayAuthz.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: agentbay-authz
+          image: "{{ .Values.aiGatewayAuthz.authz.image.repository }}:{{ .Values.aiGatewayAuthz.authz.image.tag }}"
+          imagePullPolicy: {{ .Values.aiGatewayAuthz.authz.image.pullPolicy }}
+          env:
+            - name: BIND_ADDR
+              value: {{ .Values.aiGatewayAuthz.authz.bindAddr | quote }}
+            - name: HTTP_ADDR
+              value: {{ .Values.aiGatewayAuthz.authz.httpAddr | quote }}
+            - name: TOKEN_AUDIENCE
+              value: {{ .Values.aiGatewayAuthz.tokenAudience | quote }}
+            - name: SANDBOX_NAMESPACES
+              value: {{ $claimsNamespace | quote }}
+            - name: SANDBOX_SERVICE_ACCOUNT
+              value: {{ include "agentbay.aiGatewayAuthz.sandboxServiceAccountName" . | quote }}
+            - name: REQUIRE_POD_BINDING
+              value: {{ .Values.aiGatewayAuthz.authz.requirePodBinding | quote }}
+            - name: REQUIRE_SANDBOX_OWNER
+              value: {{ .Values.aiGatewayAuthz.authz.requireSandboxOwner | quote }}
+            - name: REQUIRE_SANDBOX_CLAIM
+              value: {{ .Values.aiGatewayAuthz.authz.requireSandboxClaim | quote }}
+            - name: REQUIRE_CLAIM_UID
+              value: {{ .Values.aiGatewayAuthz.authz.requireClaimUID | quote }}
+            - name: TRUST_CLAIM_METADATA
+              value: {{ .Values.aiGatewayAuthz.authz.trustClaimMetadata | quote }}
+            - name: TRUST_POD_METADATA
+              value: {{ .Values.aiGatewayAuthz.authz.trustPodMetadata | quote }}
+            - name: REQUIRED_POD_LABELS
+              value: {{ .Values.aiGatewayAuthz.authz.requiredPodLabels | quote }}
+            - name: SANDBOX_CLAIM_API_VERSION
+              value: {{ .Values.aiGatewayAuthz.authz.sandboxClaimAPIVersion | quote }}
+            - name: SANDBOX_API_VERSION
+              value: {{ .Values.aiGatewayAuthz.authz.sandboxAPIVersion | quote }}
+            - name: DEFAULT_ACTION
+              value: {{ .Values.aiGatewayAuthz.authz.defaultAction | quote }}
+            - name: POLICY_FILE
+              value: /etc/agentbay-authz/policy.yaml
+          ports:
+            - name: grpc
+              containerPort: 9000
+              protocol: TCP
+            - name: http
+              containerPort: 9001
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          volumeMounts:
+            - name: policy
+              mountPath: /etc/agentbay-authz
+              readOnly: true
+          {{- with .Values.aiGatewayAuthz.authz.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: policy
+          configMap:
+            name: {{ $authzName }}-policy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $authzName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ai-gateway-authz
+spec:
+  selector:
+    {{- include "agentbay.aiGatewayAuthz.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: grpc
+      port: 9000
+      targetPort: grpc
+      protocol: TCP
+    - name: http
+      port: 9001
+      targetPort: http
+      protocol: TCP
+{{- if .Values.aiGatewayAuthz.authz.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $authzName }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ai-gateway-authz
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxclaims"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $authzName }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ai-gateway-authz
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $authzName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agentbay.aiGatewayAuthz.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

@@ -217,6 +217,69 @@ describe("agentbay Helm chart", () => {
       }
     });
 
+    it("renders aiGatewayAuthz resources and sandbox proxy wiring", async () => {
+      const workDir = await mkdtemp(join(tmpdir(), "agentbay-helm-values-"));
+      try {
+        const valuesPath = join(workDir, "values.yaml");
+        await writeFile(
+          valuesPath,
+          `aiGatewayAuthz:
+  enabled: true
+  upstreamBaseURL: http://envoy-ai-gateway.ai-gateway.svc.cluster.local:8080
+  networkPolicy:
+    egress:
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ai-gateway
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: envoy-ai-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+sandboxTemplates:
+  enabled: true
+  templates:
+    - name: opencode-template
+      image:
+        repository: ghcr.io/example/opencode-sandbox
+        tag: latest
+      port: 4096
+      workingDir: /workspace
+      command: ["opencode"]
+      args: ["serve", "--hostname", "0.0.0.0", "--port", "4096"]
+      workspace:
+        type: emptyDir
+      networkPolicy:
+        ingressFromOrchestrator: true
+        extraIngress: []
+        egress:
+          allowDNS: true
+          allowInternetExceptPrivate: false
+          extra: []
+`,
+        );
+        const result = helm(["template", "demo", CHART_PATH, "--namespace", NAMESPACE, "-f", valuesPath]);
+        expect(result.status, formatStderr(result)).toBe(0);
+        expect(result.stdout).toMatch(/name: demo-agentbay-authz/);
+        expect(result.stdout).toMatch(/kind: ClusterRole/);
+        expect(result.stdout).toMatch(/resources: \["tokenreviews"\]/);
+        expect(result.stdout).toMatch(/name: sandbox-runtime/);
+        expect(result.stdout).toMatch(/serviceAccountName: sandbox-runtime/);
+        expect(result.stdout).toMatch(/name: agentbay-gateway-proxy/);
+        expect(result.stdout).toMatch(/name: UPSTREAM_BASE_URL/);
+        expect(result.stdout).toMatch(/http:\/\/envoy-ai-gateway\.ai-gateway\.svc\.cluster\.local:8080/);
+        expect(result.stdout).toMatch(/name: agentbay-ai-gateway-token/);
+        expect(result.stdout).toMatch(/audience: "ai-gateway"/);
+        expect(result.stdout).toMatch(/agentbay-gateway/);
+        expect(result.stdout).toMatch(/app\.kubernetes\.io\/name: envoy-ai-gateway/);
+        expect(result.stdout).toMatch(/name: SANDBOX_CLAIM_API_VERSION/);
+        expect(result.stdout).toMatch(/value: "v1alpha1"/);
+      } finally {
+        await rm(workDir, { force: true, recursive: true });
+      }
+    });
+
     it("uses an external Redis URL from an existing Secret when configured", () => {
       const result = helm([
         "template",

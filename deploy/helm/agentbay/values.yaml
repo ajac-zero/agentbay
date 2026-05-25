@@ -111,6 +111,89 @@ opencode:
   # -- Working directory used by the opencode instance inside the sandbox.
   directory: /workspace
 
+# -- Optional Envoy AI Gateway integration. When enabled, the chart deploys
+# -- the central agentbay-authz ext_authz service and adds a localhost proxy
+# -- sidecar plus a projected service account token to chart-managed
+# -- SandboxTemplates. Leave disabled to use the simpler direct `claimEnv`
+# -- credential injection model.
+aiGatewayAuthz:
+  enabled: false
+  # -- Envoy AI Gateway base URL used by the sandbox-local proxy sidecar.
+  upstreamBaseURL: http://ai-gateway.default.svc.cluster.local
+  # -- Optional Host header sent by the proxy. Empty uses the host from
+  # -- `upstreamBaseURL`.
+  upstreamHost: ""
+  # -- Audience for projected sandbox service account tokens and TokenReview.
+  tokenAudience: ai-gateway
+  # -- Projected token lifetime in seconds.
+  tokenExpirationSeconds: 600
+  # -- Optional loopback hostnames added to sandbox Pods via hostAliases.
+  # -- This permits URLs such as `http://agentbay-gateway:8080/v1`.
+  localhostHostnames:
+    - agentbay-gateway
+  networkPolicy:
+    egress:
+      # -- Add an egress rule from chart-managed sandbox templates to Envoy AI Gateway.
+      enabled: true
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: default
+      podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+  # -- ServiceAccount used by sandbox Pods for projected gateway tokens.
+  sandboxServiceAccount:
+    create: true
+    name: sandbox-runtime
+    annotations: {}
+  proxy:
+    image:
+      repository: ghcr.io/example/agentbay-gateway-proxy
+      tag: latest
+      pullPolicy: IfNotPresent
+    # -- Loopback listener inside each sandbox Pod.
+    listenAddr: 127.0.0.1:8080
+    port: 8080
+    tokenMountPath: /var/run/agentbay-ai-gateway
+    stripHeaders: []
+    resources: {}
+  authz:
+    image:
+      repository: ghcr.io/example/agentbay-authz
+      tag: latest
+      pullPolicy: IfNotPresent
+    replicaCount: 2
+    bindAddr: ":9000"
+    httpAddr: ":9001"
+    serviceAccount:
+      create: true
+      name: ""
+      annotations: {}
+    rbac:
+      create: true
+    requirePodBinding: true
+    requireSandboxOwner: true
+    requireSandboxClaim: true
+    requireClaimUID: true
+    trustClaimMetadata: false
+    trustPodMetadata: false
+    requiredPodLabels: agentbay.dev/managed-by=agentbay
+    sandboxClaimAPIVersion: v1alpha1
+    sandboxAPIVersion: v1alpha1
+    defaultAction: deny
+    policy: |
+      defaultAction: deny
+      rules:
+        - name: allow-agentbay-managed-sandboxes
+          namespaces:
+            - "*"
+          serviceAccounts:
+            - sandbox-runtime
+    resources: {}
+
 orchestrator:
   # -- Port the orchestrator HTTP server listens on.
   port: 3000
