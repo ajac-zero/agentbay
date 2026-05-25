@@ -55,7 +55,7 @@ pnpm dev
 | `AGENTBAY_TEAMS_ENABLED` | auto | Enables Teams when `TEAMS_APP_ID` and `TEAMS_APP_PASSWORD` are present. |
 | `AGENTBAY_GOOGLE_CHAT_ENABLED` | auto | Enables Google Chat when auth and webhook verification env vars are present. |
 | `AGENTBAY_DISCORD_ENABLED` | auto | Enables Discord when `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, and `DISCORD_APPLICATION_ID` are present. |
-| `AGENTBAY_TELEGRAM_ENABLED` | auto | Enables Telegram when `TELEGRAM_BOT_TOKEN` is present. Set `true` to use per-bot Telegram token env refs instead. |
+| `AGENTBAY_TELEGRAM_ENABLED` | auto | Enables Telegram when `TELEGRAM_BOT_TOKEN` is present. Per-bot Telegram token env refs in bot records also enable Telegram for that bot. |
 | `AGENTBAY_GITHUB_ENABLED` | auto | Enables GitHub when `GITHUB_WEBHOOK_SECRET` and GitHub token or app credentials are present. |
 | `AGENTBAY_LINEAR_ENABLED` | auto | Enables Linear when `LINEAR_WEBHOOK_SECRET` and a Linear auth method are present. |
 | `AGENTBAY_WHATSAPP_ENABLED` | auto | Enables WhatsApp when `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_APP_SECRET`, `WHATSAPP_PHONE_NUMBER_ID`, and `WHATSAPP_VERIFY_TOKEN` are present. |
@@ -63,19 +63,14 @@ pnpm dev
 
 ## Webhooks
 
-Enabled adapter webhooks are mounted at:
+Bot adapter webhooks are handled through the bot-scoped route:
 
 ```text
-ANY /agents/:botSlug/webhooks/slack
-ANY /agents/:botSlug/webhooks/teams
-ANY /agents/:botSlug/webhooks/gchat
-ANY /agents/:botSlug/webhooks/discord
-ANY /agents/:botSlug/webhooks/telegram
-ANY /agents/:botSlug/webhooks/github
-ANY /agents/:botSlug/webhooks/linear
-ANY /agents/:botSlug/webhooks/whatsapp
-ANY /agents/:botSlug/webhooks/messenger
+ANY /agents/:botSlug/webhooks/:adapter
 ```
+
+Requests return 404 when the bot does not exist or that adapter is not
+configured for the bot.
 
 Health is mounted at:
 
@@ -187,6 +182,5 @@ helm install agentbay deploy/helm/agentbay \
   --namespace agents --create-namespace \
   --set image.repository=ghcr.io/your-org/agentbay \
   --set image.tag=latest \
-  --set adapters.slack.enabled=true \
   --set secrets.existingSecret=agentbay-secrets
 ```

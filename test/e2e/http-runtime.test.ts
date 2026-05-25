@@ -51,7 +51,7 @@ describe("HTTP runtime e2e", () => {
       state,
     });
     mountRuntimeAdmin(app, config, runtimeStore);
-    mountWebhooks(app, chat.asChat(), config, runtimeStore);
+    mountWebhooks(app, chat.asChat(), runtimeStore);
 
     const missingBot = await app.request("/agents/httpbot/webhooks/slack", { method: "POST" });
     expect(missingBot.status).toBe(404);
@@ -91,6 +91,10 @@ describe("HTTP runtime e2e", () => {
       sandboxProfileID: "sandbox-profile-http",
       slug: "httpbot",
     });
+
+    const disabledAdapter = await app.request("/agents/httpbot/webhooks/telegram", { method: "POST" });
+    expect(disabledAdapter.status).toBe(404);
+    expect(await disabledAdapter.text()).toContain("telegram adapter is not enabled for bot httpbot");
 
     const response = await requestJSON(app, "POST", "/agents/httpbot/webhooks/slack", {
       messageId: "message-http",
@@ -487,7 +491,7 @@ function testConfig(opencodePort: number): Config {
     github: disabled,
     linear: disabled,
     messenger: disabled,
-    slack: { enabled: true },
+    slack: disabled,
     teams: disabled,
     telegram: disabled,
     whatsapp: disabled,

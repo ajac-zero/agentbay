@@ -32,11 +32,7 @@ flow used for tests.
 helm install agentbay deploy/helm/agentbay \
   --namespace agents --create-namespace \
   --set image.repository=ghcr.io/your-org/agentbay \
-  --set image.tag=latest \
-  --set adapters.slack.enabled=true \
-  --set-string secrets.data.SLACK_BOT_TOKEN=xoxb-... \
-  --set-string secrets.data.SLACK_SIGNING_SECRET=... \
-  --set-string secrets.data.ANTHROPIC_API_KEY=sk-ant-...
+  --set image.tag=latest
 ```
 
 For production, reference an existing `Secret` instead of inlining values:
@@ -44,9 +40,7 @@ For production, reference an existing `Secret` instead of inlining values:
 ```bash
 helm install agentbay deploy/helm/agentbay \
   --namespace agents --create-namespace \
-  --set secrets.existingSecret=agentbay-secrets \
-  --set adapters.slack.enabled=true \
-  --set adapters.github.enabled=true
+  --set secrets.existingSecret=agentbay-secrets
 ```
 
 ## Redis (Chat SDK state)
@@ -189,14 +183,19 @@ For future upgrades that rename an opencode agent already referenced by an
 AgentProfile, seed a config containing both old and new agent names before
 switching the AgentProfile, then remove the old agent in a later upgrade.
 
-## Adapter toggles
+## Adapter configuration
 
-Setting `adapters.<name>.enabled=true` causes the chart to emit
-`AGENTBAY_<NAME>_ENABLED=true` so the orchestrator fails fast at startup if
-any required credential is missing. The orchestrator's auto-detection
-behaviour from the [project README](../../../README.md) still applies — you
-can leave the toggles off and let the orchestrator enable an adapter
-whenever its credentials are present in the mounted Secret.
+Adapter selection belongs to runtime bot records, not chart-wide values. Set
+per-bot adapter config under `runtimeSeed.bots[].adapters` when using the seed
+hook, or manage bot records through the admin API/SQL outside Helm. For
+example, a Telegram bot can reference its token with
+`runtimeSeed.bots[0].adapters.telegram.botTokenEnv=TELEGRAM_BOT_TOKEN_AGENTBAY`.
+
+Global adapter env vars such as `AGENTBAY_SLACK_ENABLED` are still supported by
+the orchestrator for deployments that intentionally use shared process-level
+credentials, but this chart does not expose them as top-level adapter values.
+Set them via `orchestrator.extraEnv` only when you explicitly need that legacy
+process-wide behavior.
 
 ## RBAC and namespaces
 
