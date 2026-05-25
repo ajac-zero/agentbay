@@ -38,6 +38,7 @@ pnpm dev
 |---|---:|---|
 | `PORT` | `3000` | HTTP port for health and webhooks. |
 | `AGENTBAY_KUBE_NAMESPACE` | `agents` | Namespace where `SandboxClaim`s are created. |
+| `AGENTBAY_SANDBOX_CLAIM_API_VERSION` | `v1alpha1` | agent-sandbox extensions API version for `SandboxClaim`s. Set `v1beta1` only on clusters serving beta CRDs. |
 | `AGENTBAY_OPENCODE_PORT` | `4096` | Port exposed by `opencode serve` in the sandbox. |
 | `AGENTBAY_OPENCODE_DIRECTORY` | `/workspace` | opencode instance directory. |
 | `REDIS_URL` | unset | Enables persistent Chat SDK state; otherwise in-memory state is used. |

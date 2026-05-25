@@ -203,6 +203,9 @@ whenever its credentials are present in the mounted Secret.
 - The orchestrator runs in the **release namespace**.
 - `SandboxClaim` objects are created in `claims.namespace` (defaults to the
   release namespace).
+- `claims.apiVersion` defaults to `v1alpha1` for compatibility with the latest
+  public agent-sandbox release. Set it to `v1beta1` only when the cluster
+  serves beta agent-sandbox CRDs.
 - A `Role` + `RoleBinding` granting `create/delete/get/list/watch` on
   `sandboxclaims.extensions.agents.x-k8s.io` is installed in
   `claims.namespace`.

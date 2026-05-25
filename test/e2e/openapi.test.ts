@@ -72,6 +72,7 @@ function testConfig(): Config {
     opencodeDirectory: "/workspace",
     opencodePort: 4096,
     port: 3000,
+    sandboxClaimApiVersion: "v1alpha1",
     discord: disabled,
     gchat: disabled,
     github: disabled,

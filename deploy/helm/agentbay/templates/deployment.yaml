@@ -52,6 +52,8 @@ spec:
               value: {{ .Values.orchestrator.port | quote }}
             - name: AGENTBAY_KUBE_NAMESPACE
               value: {{ include "agentbay.claimsNamespace" . | quote }}
+            - name: AGENTBAY_SANDBOX_CLAIM_API_VERSION
+              value: {{ .Values.claims.apiVersion | quote }}
             - name: AGENTBAY_OPENCODE_PORT
               value: {{ .Values.opencode.port | quote }}
             - name: AGENTBAY_OPENCODE_DIRECTORY
