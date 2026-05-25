@@ -5,7 +5,7 @@
 {{- $ns := default (include "agentbay.claimsNamespace" $root) $t.namespace -}}
 {{- $gatewayEnabled := $root.Values.aiGatewayAuthz.enabled -}}
 ---
-apiVersion: extensions.agents.x-k8s.io/v1alpha1
+apiVersion: extensions.agents.x-k8s.io/{{ $root.Values.claims.apiVersion }}
 kind: SandboxTemplate
 metadata:
   name: {{ required "sandboxTemplates.templates[].name is required" $t.name }}

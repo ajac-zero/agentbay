@@ -9,7 +9,6 @@ import { claimNameForThread } from "./naming.js";
 import type { ClaimedSandbox, SandboxClaim } from "./types.js";
 
 const GROUP = "extensions.agents.x-k8s.io";
-const VERSION = "v1alpha1";
 const PLURAL = "sandboxclaims";
 
 export class SandboxManager {
@@ -43,7 +42,7 @@ export class SandboxManager {
     const claim = this.buildClaim({ claimName, password, runtime, threadId });
     const created = (await this.api.createNamespacedCustomObject({
       group: GROUP,
-      version: VERSION,
+      version: this.config.sandboxClaimApiVersion,
       namespace: this.config.kubeNamespace,
       plural: PLURAL,
       body: claim,
@@ -61,7 +60,7 @@ export class SandboxManager {
     try {
       await this.api.deleteNamespacedCustomObject({
         group: GROUP,
-        version: VERSION,
+        version: this.config.sandboxClaimApiVersion,
         namespace: this.config.kubeNamespace,
         plural: PLURAL,
         name: claimName,
@@ -89,7 +88,7 @@ export class SandboxManager {
     try {
       return (await this.api.getNamespacedCustomObject({
         group: GROUP,
-        version: VERSION,
+        version: this.config.sandboxClaimApiVersion,
         namespace: this.config.kubeNamespace,
         plural: PLURAL,
         name: claimName,
@@ -119,7 +118,7 @@ export class SandboxManager {
     }
 
     return {
-      apiVersion: "extensions.agents.x-k8s.io/v1alpha1",
+      apiVersion: `extensions.agents.x-k8s.io/${this.config.sandboxClaimApiVersion}`,
       kind: "SandboxClaim",
       metadata: {
         name: input.claimName,
@@ -186,7 +185,7 @@ export class SandboxManager {
       await sleep(this.config.claimPollIntervalMs);
       claim = (await this.api.getNamespacedCustomObject({
         group: GROUP,
-        version: VERSION,
+        version: this.config.sandboxClaimApiVersion,
         namespace: this.config.kubeNamespace,
         plural: PLURAL,
         name: claim.metadata.name,

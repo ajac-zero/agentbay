@@ -1,5 +1,7 @@
 import type { EnvVar } from "../types.js";
 
+export type SandboxClaimAPIVersion = "v1alpha1" | "v1beta1";
+
 export type SandboxClaimCondition = {
   lastTransitionTime: string;
   message: string;
@@ -10,7 +12,7 @@ export type SandboxClaimCondition = {
 };
 
 export type SandboxClaim = {
-  apiVersion: "extensions.agents.x-k8s.io/v1alpha1";
+  apiVersion: `extensions.agents.x-k8s.io/${SandboxClaimAPIVersion}`;
   kind: "SandboxClaim";
   metadata: {
     annotations?: Record<string, string>;

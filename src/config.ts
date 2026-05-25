@@ -1,3 +1,5 @@
+import type { SandboxClaimAPIVersion } from "./sandbox/types.js";
+
 export type Config = {
   adminToken?: string;
   botUserName: string;
@@ -10,6 +12,7 @@ export type Config = {
   opencodePort: number;
   port: number;
   redisUrl?: string;
+  sandboxClaimApiVersion: SandboxClaimAPIVersion;
   discord: AdapterToggle;
   gchat: AdapterToggle;
   github: AdapterToggle;
@@ -38,6 +41,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     opencodePort: readNumber(env.AGENTBAY_OPENCODE_PORT, 4096),
     port: readNumber(env.PORT, 3000),
     redisUrl: emptyToUndefined(env.REDIS_URL),
+    sandboxClaimApiVersion: readSandboxClaimApiVersion(env.AGENTBAY_SANDBOX_CLAIM_API_VERSION),
     discord: {
       enabled: readAdapterEnabled(
         env,
@@ -208,6 +212,12 @@ function readNumber(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`Expected numeric env value, got ${value}`);
   return parsed;
+}
+
+function readSandboxClaimApiVersion(value: string | undefined): SandboxClaimAPIVersion {
+  if (value === undefined || value === "") return "v1alpha1";
+  if (value === "v1alpha1" || value === "v1beta1") return value;
+  throw new Error(`Expected AGENTBAY_SANDBOX_CLAIM_API_VERSION to be v1alpha1 or v1beta1, got ${value}`);
 }
 
 function emptyToUndefined(value: string | undefined): string | undefined {

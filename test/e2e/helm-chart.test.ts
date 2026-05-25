@@ -280,6 +280,27 @@ sandboxTemplates:
       }
     });
 
+    it("renders beta agent-sandbox API versions when configured", () => {
+      const result = helm([
+        "template",
+        "demo",
+        CHART_PATH,
+        "--namespace",
+        NAMESPACE,
+        "--set",
+        "claims.apiVersion=v1beta1",
+        "--set",
+        "sandboxTemplates.enabled=true",
+        "--set",
+        "sandboxWarmPools.enabled=true",
+      ]);
+      expect(result.status, formatStderr(result)).toBe(0);
+      expect(result.stdout).toMatch(/name: AGENTBAY_SANDBOX_CLAIM_API_VERSION\s+value: "v1beta1"/);
+      expect(result.stdout).toMatch(/apiVersion: extensions\.agents\.x-k8s\.io\/v1beta1/);
+      expect(result.stdout).toMatch(/kind: SandboxTemplate/);
+      expect(result.stdout).toMatch(/kind: SandboxWarmPool/);
+    });
+
     it("uses an external Redis URL from an existing Secret when configured", () => {
       const result = helm([
         "template",

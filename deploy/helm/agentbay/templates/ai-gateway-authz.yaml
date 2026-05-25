@@ -96,7 +96,7 @@ spec:
             - name: REQUIRED_POD_LABELS
               value: {{ .Values.aiGatewayAuthz.authz.requiredPodLabels | quote }}
             - name: SANDBOX_CLAIM_API_VERSION
-              value: {{ .Values.aiGatewayAuthz.authz.sandboxClaimAPIVersion | quote }}
+              value: {{ default .Values.claims.apiVersion .Values.aiGatewayAuthz.authz.sandboxClaimAPIVersion | quote }}
             - name: SANDBOX_API_VERSION
               value: {{ .Values.aiGatewayAuthz.authz.sandboxAPIVersion | quote }}
             - name: DEFAULT_ACTION

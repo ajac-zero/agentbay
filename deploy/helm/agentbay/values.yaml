@@ -95,6 +95,10 @@ rbac:
   create: true
 
 claims:
+  # -- agent-sandbox extensions API version used by the orchestrator and
+  # -- chart-managed SandboxTemplate / SandboxWarmPool resources. Use
+  # -- `v1beta1` only when the cluster serves beta agent-sandbox CRDs.
+  apiVersion: v1alpha1
   # -- Namespace where SandboxClaims are created by the orchestrator.
   # -- Defaults to the release namespace. The orchestrator's RBAC is scoped
   # -- to this namespace.
@@ -181,7 +185,9 @@ aiGatewayAuthz:
     trustClaimMetadata: false
     trustPodMetadata: false
     requiredPodLabels: agentbay.dev/managed-by=agentbay
-    sandboxClaimAPIVersion: v1alpha1
+    # -- SandboxClaim API version passed to the authz sidecar. Empty uses `claims.apiVersion`.
+    sandboxClaimAPIVersion: ""
+    # -- Core Sandbox API version passed to the authz sidecar.
     sandboxAPIVersion: v1alpha1
     defaultAction: deny
     policy: |

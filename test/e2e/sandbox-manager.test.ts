@@ -37,8 +37,15 @@ type ManifestObject = KubernetesObject & {
   [key: string]: unknown;
 };
 
+type CrdVersion = {
+  name: string;
+  served?: boolean;
+  storage?: boolean;
+  [key: string]: unknown;
+};
+
 const GROUP = "extensions.agents.x-k8s.io";
-const VERSION = "v1alpha1";
+const VERSION = "v1beta1";
 const PLURAL = "sandboxclaims";
 const CRD_NAME = `${PLURAL}.${GROUP}`;
 const AGENT_SANDBOX_NAMESPACE = "agent-sandbox-system";
@@ -212,6 +219,7 @@ function testConfig(): Config {
     opencodeDirectory: "/workspace",
     opencodePort: 4096,
     port: 3000,
+    sandboxClaimApiVersion: VERSION,
     discord: disabled,
     gchat: disabled,
     github: disabled,
@@ -272,14 +280,31 @@ async function fetchAgentSandboxObjects(): Promise<ManifestObject[]> {
     if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
 
     objects.push(
-      ...loadAllYaml(nonEmptyYamlDocuments(await response.text())).filter(
-        (object): object is ManifestObject =>
+      ...loadAllYaml(nonEmptyYamlDocuments(await response.text()))
+        .filter((object): object is ManifestObject =>
           Boolean(object?.apiVersion && object?.kind && object?.metadata?.name),
-      ),
+        )
+        .map(withBetaCrdVersion),
     );
   }
 
   return objects;
+}
+
+function withBetaCrdVersion(object: ManifestObject): ManifestObject {
+  if (object.apiVersion !== "apiextensions.k8s.io/v1" || object.kind !== "CustomResourceDefinition") return object;
+
+  const spec = object.spec as { versions?: CrdVersion[] } | undefined;
+  const alphaVersion = spec?.versions?.find((version) => version.name === "v1alpha1");
+  if (!spec?.versions || !alphaVersion || spec.versions.some((version) => version.name === VERSION)) return object;
+
+  // The pinned released controller is still alpha-only; serving both versions lets this test exercise beta clients.
+  spec.versions = [
+    { ...alphaVersion, name: "v1alpha1", served: true, storage: false },
+    { ...alphaVersion, name: VERSION, served: true, storage: true },
+  ];
+
+  return object;
 }
 
 async function applyObject(api: KubernetesObjectApi, object: ManifestObject): Promise<void> {
@@ -459,7 +484,7 @@ function isNotFound(error: unknown): boolean {
 
 function sandboxTemplate(): ManifestObject {
   return {
-    apiVersion: "extensions.agents.x-k8s.io/v1alpha1",
+    apiVersion: "extensions.agents.x-k8s.io/v1beta1",
     kind: "SandboxTemplate",
     metadata: {
       name: "opencode-template",

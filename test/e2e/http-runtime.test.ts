@@ -481,6 +481,7 @@ function testConfig(opencodePort: number): Config {
     opencodeDirectory: "/workspace",
     opencodePort,
     port: 3000,
+    sandboxClaimApiVersion: "v1alpha1",
     discord: disabled,
     gchat: disabled,
     github: disabled,
