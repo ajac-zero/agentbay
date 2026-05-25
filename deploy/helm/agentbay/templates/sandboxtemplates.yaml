@@ -3,6 +3,7 @@
 {{- range .Values.sandboxTemplates.templates }}
 {{- $t := . -}}
 {{- $ns := default (include "agentbay.claimsNamespace" $root) $t.namespace -}}
+{{- $gatewayEnabled := $root.Values.aiGatewayAuthz.enabled -}}
 ---
 apiVersion: extensions.agents.x-k8s.io/v1alpha1
 kind: SandboxTemplate
@@ -61,12 +62,32 @@ spec:
                 - 192.168.0.0/16
                 - 169.254.0.0/16
       {{- end }}
+      {{- if and $gatewayEnabled $root.Values.aiGatewayAuthz.networkPolicy.egress.enabled }}
+      - to:
+          - namespaceSelector:
+              {{- toYaml $root.Values.aiGatewayAuthz.networkPolicy.egress.namespaceSelector | nindent 14 }}
+            {{- with $root.Values.aiGatewayAuthz.networkPolicy.egress.podSelector }}
+            podSelector:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+        ports:
+          {{- toYaml $root.Values.aiGatewayAuthz.networkPolicy.egress.ports | nindent 10 }}
+      {{- end }}
       {{- with $t.networkPolicy.egress.extra }}
       {{- toYaml . | nindent 6 }}
       {{- end }}
   podTemplate:
     spec:
       automountServiceAccountToken: false
+      {{- if $gatewayEnabled }}
+      serviceAccountName: {{ include "agentbay.aiGatewayAuthz.sandboxServiceAccountName" $root }}
+      {{- with $root.Values.aiGatewayAuthz.localhostHostnames }}
+      hostAliases:
+        - ip: "127.0.0.1"
+          hostnames:
+            {{- toYaml . | nindent 12 }}
+      {{- end }}
+      {{- end }}
       restartPolicy: Never
       containers:
         - name: opencode
@@ -101,6 +122,37 @@ spec:
           {{- with $t.containerOverrides }}
           {{- toYaml . | nindent 10 }}
           {{- end }}
+        {{- if $gatewayEnabled }}
+        - name: agentbay-gateway-proxy
+          image: "{{ $root.Values.aiGatewayAuthz.proxy.image.repository }}:{{ $root.Values.aiGatewayAuthz.proxy.image.tag }}"
+          imagePullPolicy: {{ $root.Values.aiGatewayAuthz.proxy.image.pullPolicy }}
+          env:
+            - name: LISTEN_ADDR
+              value: {{ $root.Values.aiGatewayAuthz.proxy.listenAddr | quote }}
+            - name: UPSTREAM_BASE_URL
+              value: {{ $root.Values.aiGatewayAuthz.upstreamBaseURL | quote }}
+            {{- with $root.Values.aiGatewayAuthz.upstreamHost }}
+            - name: UPSTREAM_HOST
+              value: {{ . | quote }}
+            {{- end }}
+            - name: TOKEN_FILE
+              value: {{ printf "%s/token" $root.Values.aiGatewayAuthz.proxy.tokenMountPath | quote }}
+            {{- with $root.Values.aiGatewayAuthz.proxy.stripHeaders }}
+            - name: STRIP_HEADERS
+              value: {{ join "," . | quote }}
+            {{- end }}
+          ports:
+            - containerPort: {{ $root.Values.aiGatewayAuthz.proxy.port }}
+              name: gateway-proxy
+          volumeMounts:
+            - name: agentbay-ai-gateway-token
+              mountPath: {{ $root.Values.aiGatewayAuthz.proxy.tokenMountPath }}
+              readOnly: true
+          {{- with $root.Values.aiGatewayAuthz.proxy.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
         {{- with $t.sidecars }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -120,6 +172,15 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- if $gatewayEnabled }}
+        - name: agentbay-ai-gateway-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: {{ $root.Values.aiGatewayAuthz.tokenAudience | quote }}
+                  expirationSeconds: {{ $root.Values.aiGatewayAuthz.tokenExpirationSeconds }}
+        {{- end }}
         {{- with $t.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

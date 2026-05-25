@@ -264,13 +264,33 @@ prefer `sidecars`, `extraVolumes`, `extraVolumeMounts`, `containerOverrides`,
 and `podSpecOverrides` so the chart still renders the standard opencode
 container, workspace volume, service, and NetworkPolicy.
 
-### Gateway sidecar pattern
+### Envoy AI Gateway authz pattern
 
-For deployments where a local sidecar authenticates to a shared model or MCP
-gateway, leave `agentProfiles[].claimEnv` empty and point opencode at the
-sidecar's localhost listener:
+For deployments where sandbox Pods should not receive model-provider API keys,
+enable the chart's `aiGatewayAuthz` integration. The chart deploys the central
+`agentbay-authz` Envoy `ext_authz` service, adds an `agentbay-gateway-proxy`
+sidecar to chart-managed `SandboxTemplate`s, and projects a short-lived
+Kubernetes service account token only into that sidecar.
+
+Leave `agentProfiles[].claimEnv` empty and point opencode at the sidecar's
+localhost listener:
 
 ```yaml
+aiGatewayAuthz:
+  enabled: true
+  upstreamBaseURL: http://envoy-ai-gateway.ai-gateway.svc.cluster.local:8080
+  networkPolicy:
+    egress:
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ai-gateway
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: envoy-ai-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+
 runtimeSeed:
   opencodeConfigs:
     - id: opencode-config-default
@@ -281,7 +301,7 @@ runtimeSeed:
             name: Envoy AI Gateway
             npm: "@ai-sdk/openai-compatible"
             options:
-              baseURL: http://127.0.0.1:8080/v1
+              baseURL: http://agentbay-gateway:8080/v1
               apiKey: unused
             models:
               claude-sonnet-4-5:
@@ -307,39 +327,13 @@ sandboxTemplates:
       networkPolicy:
         egress:
           allowInternetExceptPrivate: false
-          extra:
-            - to:
-                - namespaceSelector:
-                    matchLabels:
-                      kubernetes.io/metadata.name: ai-gateway
-                  podSelector:
-                    matchLabels:
-                      app.kubernetes.io/name: envoy-ai-gateway
-              ports:
-                - protocol: TCP
-                  port: 8080
-      sidecars:
-        - name: agentbay-authz
-          image: ghcr.io/your-org/agentbay-authz:latest
-          args:
-            - "--listen=127.0.0.1:8080"
-            - "--gateway=http://envoy-ai-gateway.ai-gateway.svc.cluster.local:8080"
-          ports:
-            - containerPort: 8080
-              name: authz
-          volumeMounts:
-            - name: agentbay-authz-token
-              mountPath: /var/run/secrets/agentbay-authz
-              readOnly: true
-      extraVolumes:
-        - name: agentbay-authz-token
-          projected:
-            sources:
-              - serviceAccountToken:
-                  path: token
-                  audience: envoy-ai-gateway
-                  expirationSeconds: 3600
 ```
+
+The `agentbay-gateway` hostname is rendered as a Pod `hostAliases` entry
+pointing at `127.0.0.1`. Use `http://127.0.0.1:8080/v1` if you prefer not to
+rely on that alias. A URL without a port, such as `http://agentbay-gateway/v1`,
+would require the sidecar to bind port 80; the default non-root proxy image
+listens on 8080 instead.
 
 The orchestrator still injects `OPENCODE_SERVER_PASSWORD` and
 `OPENCODE_CONFIG_CONTENT` through each `SandboxClaim`, so keep

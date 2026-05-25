@@ -73,6 +73,33 @@ Name of the ServiceAccount used by the orchestrator.
 {{- end -}}
 
 {{/*
+Name of the ServiceAccount used by the optional agentbay-authz Deployment.
+*/}}
+{{- define "agentbay.aiGatewayAuthz.serviceAccountName" -}}
+{{- if .Values.aiGatewayAuthz.authz.serviceAccount.create -}}
+{{- default (printf "%s-authz" (include "agentbay.fullname" .)) .Values.aiGatewayAuthz.authz.serviceAccount.name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- default "default" .Values.aiGatewayAuthz.authz.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Selector labels for the optional agentbay-authz Deployment.
+*/}}
+{{- define "agentbay.aiGatewayAuthz.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "agentbay.name" . }}-authz
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: ai-gateway-authz
+{{- end -}}
+
+{{/*
+Name of the ServiceAccount used by sandbox Pods for projected gateway tokens.
+*/}}
+{{- define "agentbay.aiGatewayAuthz.sandboxServiceAccountName" -}}
+{{- default "sandbox-runtime" .Values.aiGatewayAuthz.sandboxServiceAccount.name -}}
+{{- end -}}
+
+{{/*
 Namespace where SandboxClaims are created. Defaults to the release namespace.
 */}}
 {{- define "agentbay.claimsNamespace" -}}
