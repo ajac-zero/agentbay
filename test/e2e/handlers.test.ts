@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { AddressInfo } from "node:net";
-import type { Adapter, Chat, Message, SentMessage, StateAdapter, Thread } from "chat";
+import type { Adapter, Chat, Message, StateAdapter, Thread } from "chat";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerHandlers } from "../../src/chat/handlers.js";
 import type { Config } from "../../src/config.js";
@@ -11,6 +11,7 @@ import type { SandboxManager } from "../../src/sandbox/manager.js";
 import { createMemoryState } from "../../src/state/memory.js";
 import type { ClaimedSandbox } from "../../src/sandbox/types.js";
 import type { ThreadState } from "../../src/types.js";
+import { FakeThread } from "./fake-thread.js";
 import { defaultRuntimeSnapshot, TestRuntimeStore } from "./runtime-store-fixture.js";
 
 describe("chat handlers e2e", () => {
@@ -207,49 +208,6 @@ class FakeChat {
   }
 }
 
-class FakeThread {
-  readonly posts: string[] = [];
-  readonly typing: string[] = [];
-  subscribed = false;
-
-  constructor(
-    readonly id: string,
-    public currentState: ThreadState | null = null,
-  ) {}
-
-  asThread(): Thread<ThreadState> {
-    const thisThread = this;
-
-    return {
-      get id() {
-        return thisThread.id;
-      },
-      get state() {
-        return Promise.resolve(thisThread.currentState);
-      },
-      post: async (content: string | AsyncIterable<string>) => {
-        if (typeof content === "string") {
-          thisThread.posts.push(content);
-        } else if (isAsyncIterable(content)) {
-          let streamed = "";
-          for await (const chunk of content) streamed += chunk;
-          thisThread.posts.push(streamed);
-        }
-
-        return {} as SentMessage;
-      },
-      setState: async (next: ThreadState) => {
-        thisThread.currentState = next;
-      },
-      startTyping: async (message: string) => {
-        thisThread.typing.push(message);
-      },
-      subscribe: async () => {
-        thisThread.subscribed = true;
-      },
-    } as unknown as Thread<ThreadState>;
-  }
-}
 
 class FakeSandboxManager {
   readonly claims: Array<{ agentProfileID: string; botID: string; threadId: string }> = [];
@@ -409,9 +367,6 @@ function message(id: string, threadId: string, text: string): Message {
   return { id, text, threadId } as Message;
 }
 
-function isAsyncIterable(value: unknown): value is AsyncIterable<string> {
-  return Boolean(value && typeof value === "object" && Symbol.asyncIterator in value);
-}
 
 function isAuthorized(request: IncomingMessage, password: string): boolean {
   return request.headers.authorization === `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
