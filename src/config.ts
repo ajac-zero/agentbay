@@ -1,4 +1,5 @@
 import type { SandboxClaimAPIVersion } from "./sandbox/types.js";
+import { readBoolean, readNumber } from "./util.js";
 
 export type Config = {
   adminToken?: string;
@@ -202,17 +203,6 @@ function hasEnv(env: NodeJS.ProcessEnv, name: string): boolean {
   return emptyToUndefined(env[name]) !== undefined;
 }
 
-function readBoolean(value: string | undefined, fallback: boolean): boolean {
-  if (value === undefined || value === "") return fallback;
-  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
-}
-
-function readNumber(value: string | undefined, fallback: number): number {
-  if (value === undefined || value === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) throw new Error(`Expected numeric env value, got ${value}`);
-  return parsed;
-}
 
 function readSandboxClaimApiVersion(value: string | undefined): SandboxClaimAPIVersion {
   if (value === undefined || value === "") return "v1alpha1";

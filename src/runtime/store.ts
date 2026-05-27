@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readBoolean, readNumber } from "../util.js";
 import type { ThreadState } from "../types.js";
 import type { PostgresRuntimeStoreOptions } from "./postgres.js";
 import type {
@@ -76,6 +77,7 @@ function readPostgresRuntimeStoreOptions(env: NodeJS.ProcessEnv): PostgresRuntim
     user: env.AGENTBAY_DATABASE_USER,
     ...(connectionString ? { connectionString } : {}),
     ssl: readBoolean(env.AGENTBAY_DATABASE_SSL, false),
+    sslRejectUnauthorized: readBoolean(env.AGENTBAY_DATABASE_SSL_REJECT_UNAUTHORIZED, false),
   };
 }
 
@@ -145,17 +147,6 @@ export function sandboxProfileHash(profile: SandboxProfile): string {
     .digest("hex");
 }
 
-function readBoolean(value: string | undefined, fallback: boolean): boolean {
-  if (value === undefined || value === "") return fallback;
-  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
-}
-
-function readNumber(value: string | undefined, fallback: number): number {
-  if (value === undefined || value === "") return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) throw new Error(`Expected numeric env value, got ${value}`);
-  return parsed;
-}
 
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(",")}]`;

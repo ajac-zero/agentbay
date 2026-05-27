@@ -36,6 +36,7 @@ export type PostgresRuntimeStoreOptions = {
   port?: number;
   runMigrations?: boolean;
   ssl: boolean;
+  sslRejectUnauthorized: boolean;
   user?: string;
 };
 
@@ -46,7 +47,7 @@ export async function createPostgresRuntimeStore(options: PostgresRuntimeStoreOp
     host: options.host,
     password: options.password,
     port: options.port,
-    ssl: options.ssl ? { rejectUnauthorized: false } : undefined,
+    ssl: options.ssl ? { rejectUnauthorized: options.sslRejectUnauthorized } : undefined,
     user: options.user,
   });
   const db = drizzle(pool, { schema });
@@ -342,7 +343,7 @@ function sandboxProfileFromRow(row: SandboxProfileRow): SandboxProfile {
 function opencodeConfigFromRow(row: OpencodeConfigRow): OpencodeConfigRecord {
   return {
     config: row.config,
-    configHash: hashConfig(row.config),
+    configHash: row.configHash,
     displayName: row.displayName,
     enabled: row.enabled,
     id: row.id,

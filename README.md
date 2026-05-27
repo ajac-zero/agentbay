@@ -49,6 +49,7 @@ pnpm dev
 | `AGENTBAY_DATABASE_PASSWORD` | unset | Postgres password when using `AGENTBAY_DATABASE_HOST`. |
 | `AGENTBAY_DATABASE_NAME` | unset | Postgres database when using `AGENTBAY_DATABASE_HOST`. |
 | `AGENTBAY_DATABASE_SSL` | `false` | Enables SSL for Postgres connections. |
+| `AGENTBAY_DATABASE_SSL_REJECT_UNAUTHORIZED` | `false` | When SSL is enabled, reject connections whose server certificate cannot be verified. Set to `true` in production to enforce strict certificate validation. |
 | `AGENTBAY_DATABASE_MIGRATIONS_FOLDER` | `drizzle` | Migration folder used by the explicit migration command. |
 | `AGENTBAY_ADMIN_TOKEN` | required for bootstrap | Enables bearer-token-protected runtime CRUD routes under `/admin/runtime`. |
 | `AGENTBAY_SLACK_ENABLED` | auto | Enables Slack when `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` are present. |
