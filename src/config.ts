@@ -4,7 +4,6 @@ import { readBoolean, readNumber } from "./util.js";
 export type Config = {
   adminToken?: string;
   botUserName: string;
-  claimPollIntervalMs: number;
   claimReadyTimeoutMs: number;
   claimShutdownHours: number;
   claimTtlSecondsAfterFinished: number;
@@ -33,7 +32,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     adminToken: emptyToUndefined(env.AGENTBAY_ADMIN_TOKEN),
     botUserName: env.AGENTBAY_BOT_USER_NAME ?? "agentbay",
-    claimPollIntervalMs: readNumber(env.AGENTBAY_CLAIM_POLL_INTERVAL_MS, 1_000),
     claimReadyTimeoutMs: readNumber(env.AGENTBAY_CLAIM_READY_TIMEOUT_MS, 180_000),
     claimShutdownHours: readNumber(env.AGENTBAY_CLAIM_SHUTDOWN_HOURS, 4),
     claimTtlSecondsAfterFinished: readNumber(env.AGENTBAY_CLAIM_TTL_SECONDS, 1_800),
