@@ -48,6 +48,11 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).not.toMatch(/kind: SandboxTemplate/);
       expect(result.stdout).not.toMatch(/kind: SandboxWarmPool/);
       expect(result.stdout).not.toMatch(/kind: Ingress/);
+      // Reconciler CronJob is on by default
+      expect(result.stdout).toMatch(/kind: CronJob/);
+      expect(result.stdout).toMatch(/command: \["node", "dist\/reconcile\.js"\]/);
+      expect(result.stdout).toMatch(/name: demo-agentbay-reconciler/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_RECONCILER_GRACE_MINUTES/);
     });
 
     it("renders a runtime seed hook without opinionated records when enabled", () => {
@@ -394,6 +399,43 @@ sandboxTemplates:
       expect(result.status, formatStderr(result)).toBe(0);
       expect(result.stdout).toMatch(/name: demo-agentbay-test-connection/);
       expect(result.stdout).toMatch(/helm\.sh\/hook: test/);
+    });
+
+    it("omits the reconciler CronJob, ServiceAccount, and RBAC when disabled", () => {
+      const result = helm([
+        "template",
+        "demo",
+        CHART_PATH,
+        "--namespace",
+        NAMESPACE,
+        "--set",
+        "reconciler.enabled=false",
+      ]);
+      expect(result.status, formatStderr(result)).toBe(0);
+      expect(result.stdout).not.toMatch(/kind: CronJob/);
+      expect(result.stdout).not.toMatch(/demo-agentbay-reconciler/);
+    });
+
+    it("reconciler CronJob uses claims.namespace, claims.apiVersion, and graceMinutes", () => {
+      const result = helm([
+        "template",
+        "demo",
+        CHART_PATH,
+        "--namespace",
+        NAMESPACE,
+        "--set",
+        "claims.namespace=sandbox-claims",
+        "--set",
+        "claims.apiVersion=v1beta1",
+        "--set",
+        "reconciler.graceMinutes=60",
+      ]);
+      expect(result.status, formatStderr(result)).toBe(0);
+      // CronJob and its RBAC must land in the claims namespace
+      expect(result.stdout).toMatch(/namespace: sandbox-claims/);
+      // API version and grace period must be threaded into the container env
+      expect(result.stdout).toMatch(/name: AGENTBAY_SANDBOX_CLAIM_API_VERSION\s+value: "v1beta1"/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_RECONCILER_GRACE_MINUTES\s+value: "60"/);
     });
   });
 
