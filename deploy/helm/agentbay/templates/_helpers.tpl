@@ -242,3 +242,14 @@ upgrades can create a new immutable Job spec.
 {{- printf "%s-%d" $base .Release.Revision | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Name of the ServiceAccount used by the reconciler CronJob.
+*/}}
+{{- define "agentbay.reconciler.serviceAccountName" -}}
+{{- if .Values.reconciler.serviceAccount.create -}}
+{{- default (printf "%s-reconciler" (include "agentbay.fullname" .)) .Values.reconciler.serviceAccount.name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- default "default" .Values.reconciler.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}

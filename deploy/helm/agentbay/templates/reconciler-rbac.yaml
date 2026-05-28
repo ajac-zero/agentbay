@@ -1,0 +1,31 @@
+{{- if and .Values.reconciler.enabled .Values.reconciler.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "agentbay.fullname" . }}-reconciler-sandboxclaims
+  namespace: {{ include "agentbay.claimsNamespace" . }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reconciler
+rules:
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxclaims"]
+    verbs: ["list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "agentbay.fullname" . }}-reconciler-sandboxclaims
+  namespace: {{ include "agentbay.claimsNamespace" . }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reconciler
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agentbay.reconciler.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "agentbay.fullname" . }}-reconciler-sandboxclaims
+{{- end }}
