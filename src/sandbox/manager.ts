@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { CustomObjectsApi } from "@kubernetes/client-node";
+import { CustomObjectsApi, KubeConfig, Watch } from "@kubernetes/client-node";
 import { buildOpencodeConfigContent } from "../agent/config.js";
 import type { Config } from "../config.js";
 import { logger } from "../logger.js";
@@ -13,11 +13,17 @@ const GROUP = "extensions.agents.x-k8s.io";
 const PLURAL = "sandboxclaims";
 
 export class SandboxManager {
+  private readonly api: CustomObjectsApi;
+  private readonly watch: Watch;
+
   constructor(
-    private readonly api: CustomObjectsApi,
+    kubeConfig: KubeConfig,
     private readonly config: Config,
     private readonly env: NodeJS.ProcessEnv = process.env,
-  ) {}
+  ) {
+    this.api = kubeConfig.makeApiClient(CustomObjectsApi);
+    this.watch = new Watch(kubeConfig);
+  }
 
   async claimFor(threadId: string, runtime: ResolvedRuntime): Promise<ClaimedSandbox> {
     const claimName = claimNameForThread(threadId);
@@ -178,45 +184,193 @@ export class SandboxManager {
     return password;
   }
 
-  private async waitForReady(initial: SandboxClaim, password: string, log: ReturnType<typeof logger.child>): Promise<ClaimedSandbox> {
-    const deadline = Date.now() + this.config.claimReadyTimeoutMs;
-    let claim = initial;
-
-    while (Date.now() <= deadline) {
-      if (isReady(claim)) {
-        const podFQDN = this.podFQDN(claim);
-        log.info("sandbox claim ready", { podFQDN });
-        return { claimName: claim.metadata.name, password, podFQDN };
-      }
-
-      await sleep(this.config.claimPollIntervalMs);
-      claim = (await this.api.getNamespacedCustomObject({
-        group: GROUP,
-        version: this.config.sandboxClaimApiVersion,
-        namespace: this.config.kubeNamespace,
-        plural: PLURAL,
-        name: claim.metadata.name,
-      })) as SandboxClaim;
+  /**
+   * Wait for the SandboxClaim to reach the Ready condition using a Kubernetes
+   * watch stream instead of polling. The watch delivers an initial ADDED event
+   * with the current object state, then subsequent MODIFIED events as the
+   * controller updates the claim, so no periodic GET requests are needed.
+   *
+   * If the watch connection closes before the claim is ready (e.g. the API
+   * server closes long-running watches), it is automatically re-opened until
+   * the deadline is reached.
+   */
+  private waitForReady(
+    initial: SandboxClaim,
+    password: string,
+    log: ReturnType<typeof logger.child>,
+  ): Promise<ClaimedSandbox> {
+    // Fast path: the claim object we already have is ready (common when reusing
+    // an existing claim that the controller has already processed).
+    if (isReady(initial)) {
+      const podFQDN = this.podFQDN(initial);
+      log.info("sandbox claim ready", { podFQDN });
+      return Promise.resolve({ claimName: initial.metadata.name, password, podFQDN });
     }
 
-    const reason = claim.status?.conditions
-      ?.map((condition) => {
-        const details = [condition.reason, condition.message].filter(Boolean).join(": ");
-        return `${condition.type}=${condition.status}${details ? ` (${details})` : ""}`;
-      })
-      .join(", ");
-    throw new Error(`Timed out waiting for SandboxClaim ${claim.metadata.name} to become Ready${reason ? ` (${reason})` : ""}`);
+    const claimName = initial.metadata.name;
+
+    return new Promise<ClaimedSandbox>((resolve, reject) => {
+      let settled = false;
+      let abortCtrl: AbortController | undefined;
+      let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+
+      const deadline = Date.now() + this.config.claimReadyTimeoutMs;
+
+      const settle = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(reconnectTimer);
+        clearTimeout(deadlineTimer);
+        abortCtrl?.abort();
+        fn();
+      };
+
+      deadlineTimer = setTimeout(
+        () => settle(() => reject(new Error(`Timed out waiting for SandboxClaim ${claimName} to become Ready`))),
+        this.config.claimReadyTimeoutMs,
+      );
+
+      const onEvent = (phase: string, obj: unknown): void => {
+        const claim = obj as SandboxClaim;
+        if (phase === "ADDED" || phase === "MODIFIED") {
+          if (isReady(claim)) {
+            try {
+              const podFQDN = this.podFQDN(claim);
+              log.info("sandbox claim ready", { podFQDN });
+              settle(() => resolve({ claimName, password, podFQDN }));
+            } catch (err) {
+              settle(() => reject(err instanceof Error ? err : new Error(String(err))));
+            }
+          }
+        } else if (phase === "DELETED") {
+          settle(() => reject(new Error(`SandboxClaim ${claimName} was deleted before becoming Ready`)));
+        }
+      };
+
+      const onDone = (err: unknown): void => {
+        if (settled) return;
+        if (err) log.debug("watch ended with error, will reconnect", { claim: claimName });
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return;
+        reconnectTimer = setTimeout(() => void startWatch(), Math.min(1_000, remaining));
+      };
+
+      const startWatch = async (): Promise<void> => {
+        if (settled) return;
+        try {
+          abortCtrl = await this.watch.watch(
+            this.claimsWatchPath(),
+            { fieldSelector: `metadata.name=${claimName}` },
+            onEvent,
+            onDone,
+          );
+          if (settled) abortCtrl.abort();
+        } catch (err) {
+          onDone(err);
+        }
+      };
+
+      void startWatch();
+    });
   }
 
-  private async waitForDeleted(claimName: string): Promise<void> {
-    const deadline = Date.now() + this.config.claimReadyTimeoutMs;
+  /**
+   * Wait for the SandboxClaim to disappear using a Kubernetes watch stream.
+   *
+   * An initial GET is performed first so that an already-deleted claim is
+   * detected immediately without opening a watch. When the watch closes
+   * before a DELETED event is observed (e.g. the server closes the
+   * connection), a GET re-checks whether the claim is gone before
+   * reconnecting.
+   */
+  private waitForDeleted(claimName: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let abortCtrl: AbortController | undefined;
+      let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
 
-    while (Date.now() <= deadline) {
-      if (!(await this.getClaim(claimName))) return;
-      await sleep(this.config.claimPollIntervalMs);
-    }
+      const deadline = Date.now() + this.config.claimReadyTimeoutMs;
 
-    throw new Error(`Timed out waiting for SandboxClaim ${claimName} to be deleted`);
+      const settle = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(reconnectTimer);
+        clearTimeout(deadlineTimer);
+        abortCtrl?.abort();
+        fn();
+      };
+
+      deadlineTimer = setTimeout(
+        () => settle(() => reject(new Error(`Timed out waiting for SandboxClaim ${claimName} to be deleted`))),
+        this.config.claimReadyTimeoutMs,
+      );
+
+      const onEvent = (phase: string): void => {
+        if (phase === "DELETED") settle(() => resolve());
+      };
+
+      // When the watch stream closes (normally or with error), verify current
+      // state via GET before reconnecting. This handles the race where the
+      // resource is deleted between the initial check and the watch starting,
+      // and the case where the watch closes before the DELETED event arrives.
+      const onDone = (err: unknown): void => {
+        if (settled) return;
+        void this.getClaim(claimName)
+          .then((claim) => {
+            if (!claim) {
+              settle(() => resolve());
+              return;
+            }
+            if (settled) return;
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) return;
+            reconnectTimer = setTimeout(() => void startWatch(), Math.min(1_000, remaining));
+          })
+          .catch(() => {
+            if (settled) return;
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) return;
+            reconnectTimer = setTimeout(() => void startWatch(), Math.min(1_000, remaining));
+          });
+        if (err) logger.debug("watch ended with error while waiting for deletion", { claim: claimName });
+      };
+
+      const startWatch = async (): Promise<void> => {
+        if (settled) return;
+        try {
+          abortCtrl = await this.watch.watch(
+            this.claimsWatchPath(),
+            { fieldSelector: `metadata.name=${claimName}` },
+            onEvent,
+            onDone,
+          );
+          if (settled) abortCtrl.abort();
+        } catch (err) {
+          onDone(err);
+        }
+      };
+
+      // Initial check: if the claim is already gone, resolve immediately.
+      void this.getClaim(claimName)
+        .then((claim) => {
+          if (!claim) {
+            settle(() => resolve());
+            return;
+          }
+          void startWatch();
+        })
+        .catch(() => {
+          // GET failed for an unexpected reason; start the watch anyway and
+          // let onDone's GET re-verify when the stream closes.
+          void startWatch();
+        });
+    });
+  }
+
+  private claimsWatchPath(): string {
+    return `/apis/${GROUP}/${this.config.sandboxClaimApiVersion}/namespaces/${this.config.kubeNamespace}/${PLURAL}`;
   }
 
   private podFQDN(claim: SandboxClaim): string {
@@ -264,8 +418,4 @@ function resolveEnvVarRefs(refs: EnvVarRef[], env: NodeJS.ProcessEnv): EnvVar[] 
     if (!value) throw new Error(`Missing environment variable ${ref.valueFromEnv} for claim env ${ref.name}`);
     return { name: ref.name, value };
   });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -61,6 +61,7 @@ const AGENT_SANDBOX_MANIFEST_URLS = [
 describe("SandboxManager e2e", () => {
   let k3s: StartedK3sContainer | undefined;
   let rawKubeConfig: string;
+  let kubeConfig: KubeConfig;
   let coreApi: CoreV1Api;
   let customObjectsApi: CustomObjectsApi;
   let manager: SandboxManager;
@@ -69,7 +70,7 @@ describe("SandboxManager e2e", () => {
     k3s = await new K3sContainer(K3S_IMAGE).start();
     rawKubeConfig = k3s.getKubeConfig();
 
-    const kubeConfig = new KubeConfig();
+    kubeConfig = new KubeConfig();
     kubeConfig.loadFromString(rawKubeConfig);
 
     coreApi = kubeConfig.makeApiClient(CoreV1Api);
@@ -91,7 +92,7 @@ describe("SandboxManager e2e", () => {
     });
     await applyObject(objectApi, sandboxTemplate());
 
-    manager = new SandboxManager(customObjectsApi, testConfig(), {
+    manager = new SandboxManager(kubeConfig, testConfig(), {
       ANTHROPIC_API_KEY_CODER: "per-agent-anthropic-key",
       EXTRA_ENV_AGENT: "from-test",
     });
