@@ -1,4 +1,5 @@
 import type { Event, OpencodeClient } from "@opencode-ai/sdk/client";
+import { logger } from "../logger.js";
 
 export async function createSession(client: OpencodeClient, title: string): Promise<string> {
   const { data } = await client.session.create({
@@ -6,6 +7,7 @@ export async function createSession(client: OpencodeClient, title: string): Prom
     throwOnError: true,
   });
 
+  logger.info("opencode session created", { sessionId: data.id, title });
   return data.id;
 }
 
@@ -15,6 +17,8 @@ export async function* runPrompt(input: {
   sessionID: string;
   text: string;
 }): AsyncIterable<string> {
+  const log = logger.child({ sessionId: input.sessionID, agentName: input.agentName });
+
   await assertSessionIdle(input.client, input.sessionID);
 
   const events = await input.client.event.subscribe({});
@@ -26,6 +30,7 @@ export async function* runPrompt(input: {
     },
     throwOnError: true,
   });
+  log.info("prompt submitted");
 
   for await (const event of events.stream) {
     if (!isSessionEvent(event, input.sessionID)) continue;
@@ -34,6 +39,7 @@ export async function* runPrompt(input: {
     if (delta) yield delta;
 
     if (event.type === "permission.updated") {
+      log.debug("auto-approving tool permission", { permissionId: event.properties.id });
       await input.client.postSessionIdPermissionsPermissionId({
         path: { id: input.sessionID, permissionID: event.properties.id },
         body: { response: "always" },
@@ -42,10 +48,15 @@ export async function* runPrompt(input: {
     }
 
     if (event.type === "session.error") {
-      throw new Error(`opencode session ${input.sessionID} error: ${formatOpencodeError(event.properties.error)}`);
+      const msg = formatOpencodeError(event.properties.error);
+      log.error("opencode session error", { error: msg });
+      throw new Error(`opencode session ${input.sessionID} error: ${msg}`);
     }
 
-    if (event.type === "session.idle") return;
+    if (event.type === "session.idle") {
+      log.info("opencode session completed");
+      return;
+    }
   }
 }
 

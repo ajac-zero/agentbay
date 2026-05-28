@@ -1,10 +1,10 @@
+import { logger, toErrCtx } from "./logger.js";
 import { runRuntimeMigrations } from "./runtime/store.js";
 
 try {
   await runRuntimeMigrations();
-  console.log("agentbay runtime migrations applied");
+  logger.info("runtime migrations applied");
 } catch (error) {
-  console.error("agentbay runtime migrations failed");
-  console.error(error);
+  logger.error("runtime migrations failed", { err: toErrCtx(error) });
   process.exitCode = 1;
 }

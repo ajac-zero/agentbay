@@ -9,6 +9,7 @@ import { createTelegramAdapter } from "@chat-adapter/telegram";
 import { createWhatsAppAdapter } from "@chat-adapter/whatsapp";
 import { Chat, type Adapter } from "chat";
 import type { Config } from "../config.js";
+import { logger } from "../logger.js";
 import type { RuntimeStore } from "../runtime/store.js";
 import { botAdaptersHash } from "../runtime/store.js";
 import type { Bot } from "../runtime/types.js";
@@ -43,7 +44,13 @@ export function createBotRegistry(
       const cached = chats.get(bot.slug);
       if (cached?.hash === hash) return cached.chat;
 
-      await cached?.chat.shutdown();
+      if (cached) {
+        logger.info("recycling bot chat (adapter config changed)", { botSlug: bot.slug });
+        await cached.chat.shutdown();
+      } else {
+        logger.info("creating bot chat", { botSlug: bot.slug });
+      }
+
       const chat = createBotChat(config, sandboxManager, runtimeStore, bot);
       chats.set(bot.slug, { chat, hash });
       return chat;

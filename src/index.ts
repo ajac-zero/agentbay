@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { createBotRegistry } from "./chat/bot.js";
 import { mountWebhooks } from "./chat/webhooks.js";
 import { loadConfig } from "./config.js";
+import { logger } from "./logger.js";
 import { createOpenApiApp, mountHealthRoute, mountOpenApiDocs } from "./openapi.js";
 import { mountRuntimeAdmin } from "./runtime/admin.js";
 import { createRuntimeStore } from "./runtime/store.js";
@@ -20,11 +21,11 @@ mountRuntimeAdmin(app, config, runtimeStore);
 mountOpenApiDocs(app);
 
 const server = serve({ fetch: (request) => app.fetch(request), port: config.port }, (info) => {
-  console.log(`agentbay listening on http://0.0.0.0:${info.port}`);
+  logger.info("agentbay listening", { port: info.port });
 });
 
 async function shutdown(signal: string): Promise<void> {
-  console.log(`received ${signal}, shutting down`);
+  logger.info("shutdown received", { signal });
   await chats.shutdown();
   await runtimeStore.close?.();
   server.close();

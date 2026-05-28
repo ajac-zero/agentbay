@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { CustomObjectsApi } from "@kubernetes/client-node";
 import { buildOpencodeConfigContent } from "../agent/config.js";
 import type { Config } from "../config.js";
+import { logger } from "../logger.js";
 import { agentProfileHash, sandboxProfileHash } from "../runtime/store.js";
 import type { EnvVarRef, ResolvedRuntime } from "../runtime/types.js";
 import type { EnvVar } from "../types.js";
@@ -20,15 +21,21 @@ export class SandboxManager {
 
   async claimFor(threadId: string, runtime: ResolvedRuntime): Promise<ClaimedSandbox> {
     const claimName = claimNameForThread(threadId);
+    const log = logger.child({ threadId, claimName });
+    log.info("claiming sandbox");
+
     const existing = await this.getClaim(claimName);
 
     if (existing) {
       if (!claimMatchesRuntime(existing, runtime)) {
+        log.info("existing claim does not match current runtime; releasing");
         await this.releaseClaim(claimName);
       } else {
+        log.info("reusing existing sandbox claim");
         try {
-          return await this.waitForReady(existing, this.passwordFromClaim(existing));
+          return await this.waitForReady(existing, this.passwordFromClaim(existing), log);
         } catch {
+          log.warn("existing claim failed readiness check; releasing");
           await this.releaseClaim(claimName);
         }
       }
@@ -38,6 +45,7 @@ export class SandboxManager {
       } catch {}
     }
 
+    log.info("creating new sandbox claim");
     const password = randomBytes(24).toString("base64url");
     const claim = this.buildClaim({ claimName, password, runtime, threadId });
     const created = (await this.api.createNamespacedCustomObject({
@@ -49,7 +57,7 @@ export class SandboxManager {
     })) as SandboxClaim;
 
     try {
-      return await this.waitForReady(created, password);
+      return await this.waitForReady(created, password, log);
     } catch (error) {
       await this.releaseClaim(claimName);
       throw error;
@@ -57,6 +65,7 @@ export class SandboxManager {
   }
 
   async releaseClaim(claimName: string): Promise<void> {
+    logger.info("releasing sandbox claim", { claimName });
     try {
       await this.api.deleteNamespacedCustomObject({
         group: GROUP,
@@ -169,17 +178,15 @@ export class SandboxManager {
     return password;
   }
 
-  private async waitForReady(initial: SandboxClaim, password: string): Promise<ClaimedSandbox> {
+  private async waitForReady(initial: SandboxClaim, password: string, log: ReturnType<typeof logger.child>): Promise<ClaimedSandbox> {
     const deadline = Date.now() + this.config.claimReadyTimeoutMs;
     let claim = initial;
 
     while (Date.now() <= deadline) {
       if (isReady(claim)) {
-        return {
-          claimName: claim.metadata.name,
-          password,
-          podFQDN: this.podFQDN(claim),
-        };
+        const podFQDN = this.podFQDN(claim);
+        log.info("sandbox claim ready", { podFQDN });
+        return { claimName: claim.metadata.name, password, podFQDN };
       }
 
       await sleep(this.config.claimPollIntervalMs);
