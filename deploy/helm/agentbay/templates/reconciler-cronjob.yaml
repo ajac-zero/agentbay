@@ -1,0 +1,61 @@
+{{- if .Values.reconciler.enabled -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "agentbay.fullname" . }}-reconciler
+  namespace: {{ include "agentbay.claimsNamespace" . }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reconciler
+spec:
+  schedule: {{ .Values.reconciler.schedule | quote }}
+  concurrencyPolicy: {{ .Values.reconciler.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.reconciler.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.reconciler.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "agentbay.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: reconciler
+        spec:
+          serviceAccountName: {{ include "agentbay.reconciler.serviceAccountName" . }}
+          restartPolicy: OnFailure
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.podSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: reconciler
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              {{- with .Values.securityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              command: ["node", "dist/reconcile.js"]
+              env:
+                - name: AGENTBAY_KUBE_NAMESPACE
+                  value: {{ include "agentbay.claimsNamespace" . | quote }}
+                - name: AGENTBAY_SANDBOX_CLAIM_API_VERSION
+                  value: {{ .Values.claims.apiVersion | quote }}
+                - name: AGENTBAY_RECONCILER_GRACE_MINUTES
+                  value: {{ .Values.reconciler.graceMinutes | quote }}
+                {{- with .Values.reconciler.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              {{- with .Values.reconciler.extraEnvFrom }}
+              envFrom:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              {{- with .Values.reconciler.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+{{- end }}

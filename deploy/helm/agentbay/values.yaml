@@ -494,6 +494,40 @@ sandboxWarmPools:
       updateStrategy:
         type: OnReplenish
 
+reconciler:
+  # -- Whether to deploy the reconciler CronJob. The reconciler lists
+  # -- agentbay-managed SandboxClaims and deletes any that have exceeded their
+  # -- shutdownTime plus the configured grace period.
+  enabled: true
+  # -- CronJob schedule expression. Runs every 30 minutes by default.
+  schedule: "*/30 * * * *"
+  # -- concurrencyPolicy for the CronJob. Forbid prevents overlapping runs.
+  concurrencyPolicy: Forbid
+  # -- Minutes of grace time added to spec.lifecycle.shutdownTime before a
+  # -- claim is eligible for deletion. Corresponds to AGENTBAY_RECONCILER_GRACE_MINUTES.
+  graceMinutes: 30
+  # -- Number of successful CronJob runs to retain in history.
+  successfulJobsHistoryLimit: 3
+  # -- Number of failed CronJob runs to retain in history.
+  failedJobsHistoryLimit: 3
+  serviceAccount:
+    # -- Whether to create the reconciler ServiceAccount.
+    create: true
+    # -- Name of the reconciler ServiceAccount. Defaults to <fullname>-reconciler.
+    name: ""
+    # -- Annotations applied to the reconciler ServiceAccount.
+    annotations: {}
+  rbac:
+    # -- Whether to create the Role and RoleBinding granting the reconciler
+    # -- list and delete access to SandboxClaims in claims.namespace.
+    create: true
+  # -- Resource requests and limits for the reconciler container. Empty means no limits.
+  resources: {}
+  # -- Extra env vars appended to the reconciler container.
+  extraEnv: []
+  # -- Extra envFrom entries for the reconciler container.
+  extraEnvFrom: []
+
 # -- Readiness probe configuration for the orchestrator container.
 readinessProbe:
   httpGet:
