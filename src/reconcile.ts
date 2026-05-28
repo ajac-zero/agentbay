@@ -18,7 +18,7 @@ const GROUP = "extensions.agents.x-k8s.io";
 const PLURAL = "sandboxclaims";
 const LABEL_SELECTOR = "app.kubernetes.io/managed-by=agentbay";
 
-function readApiVersion(value: string | undefined): SandboxClaimAPIVersion {
+export function readApiVersion(value: string | undefined): SandboxClaimAPIVersion {
   if (value === undefined || value === "") return "v1alpha1";
   if (value === "v1alpha1" || value === "v1beta1") return value;
   throw new Error(
@@ -26,23 +26,55 @@ function readApiVersion(value: string | undefined): SandboxClaimAPIVersion {
   );
 }
 
-function isNotFound(error: unknown): boolean {
+export function isNotFound(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const maybe = error as { code?: number; response?: { statusCode?: number; status?: number } };
   return maybe.code === 404 || maybe.response?.statusCode === 404 || maybe.response?.status === 404;
 }
 
-async function reconcile(): Promise<void> {
-  const namespace = process.env.AGENTBAY_KUBE_NAMESPACE ?? process.env.POD_NAMESPACE ?? "agents";
-  const apiVersion = readApiVersion(process.env.AGENTBAY_SANDBOX_CLAIM_API_VERSION);
-  const graceMinutes = readNumber(process.env.AGENTBAY_RECONCILER_GRACE_MINUTES, 30);
+/** Minimal API surface required by reconcileOnce; satisfied by CustomObjectsApi. */
+type ReconcileApi = {
+  listNamespacedCustomObject(opts: {
+    group: string;
+    version: string;
+    namespace: string;
+    plural: string;
+    labelSelector?: string;
+  }): Promise<unknown>;
+  deleteNamespacedCustomObject(opts: {
+    group: string;
+    version: string;
+    namespace: string;
+    plural: string;
+    name: string;
+    propagationPolicy?: string;
+  }): Promise<unknown>;
+};
+
+export type ReconcileOpts = {
+  namespace: string;
+  apiVersion: SandboxClaimAPIVersion;
+  graceMinutes: number;
+  /** Millisecond timestamp used as "now"; pass Date.now() in production. */
+  now: number;
+};
+
+export type ReconcileResult = {
+  deleted: number;
+  errors: number;
+  total: number;
+};
+
+/**
+ * Core reconciliation logic.  Exported for unit testing; the reconcile()
+ * entrypoint below wires this up with the real Kubernetes API and env vars.
+ */
+export async function reconcileOnce(api: ReconcileApi, opts: ReconcileOpts): Promise<ReconcileResult> {
+  const { namespace, apiVersion, graceMinutes, now } = opts;
   const graceMs = graceMinutes * 60 * 1_000;
-  const now = Date.now();
 
   const log = logger.child({ namespace, apiVersion, graceMinutes });
   log.info("reconciler starting");
-
-  const api = createCustomObjectsApi();
 
   const response = (await api.listNamespacedCustomObject({
     group: GROUP,
@@ -50,7 +82,7 @@ async function reconcile(): Promise<void> {
     namespace,
     plural: PLURAL,
     labelSelector: LABEL_SELECTOR,
-  })) as { items: SandboxClaim[] };
+  })) as { items?: SandboxClaim[] };
 
   const claims = response.items ?? [];
   log.info("listed sandbox claims", { count: claims.length });
@@ -103,8 +135,18 @@ async function reconcile(): Promise<void> {
   }
 
   log.info("reconciler finished", { deleted, errors, total: claims.length });
+  return { deleted, errors, total: claims.length };
+}
 
-  if (errors > 0) {
+async function reconcile(): Promise<void> {
+  const namespace = process.env.AGENTBAY_KUBE_NAMESPACE ?? process.env.POD_NAMESPACE ?? "agents";
+  const apiVersion = readApiVersion(process.env.AGENTBAY_SANDBOX_CLAIM_API_VERSION);
+  const graceMinutes = readNumber(process.env.AGENTBAY_RECONCILER_GRACE_MINUTES, 30);
+
+  const api = createCustomObjectsApi();
+  const result = await reconcileOnce(api, { namespace, apiVersion, graceMinutes, now: Date.now() });
+
+  if (result.errors > 0) {
     process.exit(1);
   }
 }
