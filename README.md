@@ -52,6 +52,7 @@ pnpm dev
 | `AGENTBAY_DATABASE_SSL_REJECT_UNAUTHORIZED` | `false` | When SSL is enabled, reject connections whose server certificate cannot be verified. Set to `true` in production to enforce strict certificate validation. |
 | `AGENTBAY_DATABASE_MIGRATIONS_FOLDER` | `drizzle` | Migration folder used by the explicit migration command. |
 | `AGENTBAY_ADMIN_TOKEN` | required for bootstrap | Enables bearer-token-protected runtime CRUD routes under `/admin/runtime`. |
+| `LOG_LEVEL` | `info` | Minimum log level to emit (`debug`, `info`, `warn`, `error`). All output is newline-delimited JSON to stdout. |
 | `AGENTBAY_SLACK_ENABLED` | auto | Enables Slack when `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` are present. |
 | `AGENTBAY_TEAMS_ENABLED` | auto | Enables Teams when `TEAMS_APP_ID` and `TEAMS_APP_PASSWORD` are present. |
 | `AGENTBAY_GOOGLE_CHAT_ENABLED` | auto | Enables Google Chat when auth and webhook verification env vars are present. |

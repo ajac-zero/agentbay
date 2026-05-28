@@ -1,6 +1,7 @@
 import type { Adapter, Chat, Lock, Message, StateAdapter, Thread } from "chat";
 import type { Config } from "../config.js";
 import { createAgentClient, waitForOpencodeReady } from "../agent/client.js";
+import { logger, toErrCtx } from "../logger.js";
 import { createSession, runPrompt } from "../agent/runner.js";
 import { resolveInitialRuntime, resolveThreadRuntime } from "../runtime/resolver.js";
 import { agentProfileHash, sandboxProfileHash, type RuntimeStore } from "../runtime/store.js";
@@ -62,6 +63,9 @@ async function waitForPromptLock(state: StateAdapter, lockKey: string): Promise<
 }
 
 async function handlePrompt(thread: Thread<ThreadState>, message: Message, deps: HandlerDeps): Promise<void> {
+  const log = logger.child({ threadId: thread.id, messageId: message.id });
+  log.info("prompt received");
+
   try {
     await thread.startTyping("Preparing sandbox");
 
@@ -69,22 +73,27 @@ async function handlePrompt(thread: Thread<ThreadState>, message: Message, deps:
     if (isThreadState(state)) {
       const runtime = await resolveThreadRuntime(deps.runtimeStore, state);
       if (isStateExpired(state, deps.config)) {
+        log.info("sandbox lifetime reached; restarting", { claimName: state.claimName });
         await restartSession(thread, message, deps, state, runtime, "Previous sandbox reached its configured lifetime; starting a fresh one...");
         return;
       }
 
       const sandbox = await deps.sandboxManager.currentReadyClaim(state.claimName, state.password);
       if (!sandbox) {
+        log.info("sandbox claim no longer available; restarting", { claimName: state.claimName });
         await restartSession(thread, message, deps, state, runtime, "Previous sandbox is no longer available; starting a fresh one...");
         return;
       }
 
+      log.info("continuing existing session", { claimName: state.claimName, sessionId: state.sessionID });
       await continueSession(thread, message, deps, { ...state, podFQDN: sandbox.podFQDN });
       return;
     }
 
+    log.info("no existing state; starting new session");
     await startSession(thread, message, deps);
   } catch (error) {
+    log.error("prompt handler failed", { err: toErrCtx(error) });
     await thread.post(`agentbay error: ${formatError(error)}`);
   }
 }
@@ -159,8 +168,10 @@ async function continueSession(
   deps: HandlerDeps,
   state: ThreadState,
 ): Promise<void> {
+  const log = logger.child({ threadId: thread.id, claimName: state.claimName, sessionId: state.sessionID });
   const runtime = await resolveThreadRuntime(deps.runtimeStore, state);
   if (hasRuntimeDrift(state, runtime)) {
+    log.info("runtime drift detected; restarting sandbox");
     await restartSession(
       thread,
       message,
@@ -178,6 +189,7 @@ async function continueSession(
   try {
     await waitForOpencodeReady(endpoint, deps.config);
   } catch {
+    log.warn("opencode server unreachable; restarting sandbox");
     await restartSession(
       thread,
       message,
