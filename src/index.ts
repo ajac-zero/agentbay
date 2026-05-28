@@ -6,12 +6,12 @@ import { logger } from "./logger.js";
 import { createOpenApiApp, mountHealthRoute, mountOpenApiDocs } from "./openapi.js";
 import { mountRuntimeAdmin } from "./runtime/admin.js";
 import { createRuntimeStore } from "./runtime/store.js";
-import { createCustomObjectsApi } from "./sandbox/client.js";
+import { createKubeConfig } from "./sandbox/client.js";
 import { SandboxManager } from "./sandbox/manager.js";
 
 const config = loadConfig();
 const runtimeStore = await createRuntimeStore();
-const sandboxManager = new SandboxManager(createCustomObjectsApi(), config);
+const sandboxManager = new SandboxManager(createKubeConfig(), config);
 const chats = createBotRegistry(config, sandboxManager, runtimeStore);
 const app = createOpenApiApp();
 

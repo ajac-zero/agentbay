@@ -1,6 +1,6 @@
 import { CustomObjectsApi, KubeConfig } from "@kubernetes/client-node";
 
-export function createCustomObjectsApi(): CustomObjectsApi {
+export function createKubeConfig(): KubeConfig {
   const kubeConfig = new KubeConfig();
 
   if (process.env.KUBECONFIG) {
@@ -13,5 +13,9 @@ export function createCustomObjectsApi(): CustomObjectsApi {
     }
   }
 
-  return kubeConfig.makeApiClient(CustomObjectsApi);
+  return kubeConfig;
+}
+
+export function createCustomObjectsApi(): CustomObjectsApi {
+  return createKubeConfig().makeApiClient(CustomObjectsApi);
 }
