@@ -64,7 +64,6 @@ function testConfig(): Config {
     return {
       adminToken: "test-token",
       botUserName: "agentbay",
-      claimPollIntervalMs: 10,
     claimReadyTimeoutMs: 5_000,
     claimShutdownHours: 1,
     claimTtlSecondsAfterFinished: 60,

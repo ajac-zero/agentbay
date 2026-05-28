@@ -316,7 +316,6 @@ function testConfig(opencodePort: number): Config {
 
   return {
     botUserName: "agentbay",
-    claimPollIntervalMs: 10,
     claimReadyTimeoutMs: 5_000,
     claimShutdownHours: 1,
     claimTtlSecondsAfterFinished: 60,
