@@ -100,6 +100,67 @@ describe("execution persistence", () => {
     expect((await pool.query("select count(*)::int as count from agentbay_events")).rows[0]).toEqual({ count: before });
     expect((await pool.query("select count(*)::int as count from agentbay_executions where id = $1", [existing.id])).rows[0]).toEqual({ count: 1 });
   });
+
+  it("claims available outbox messages without overlapping concurrent publishers", async () => {
+    await pool.query("delete from agentbay_outbox");
+    const ready = await Promise.all(Array.from({ length: 4 }, () => insertOutbox(pool)));
+    await insertOutbox(pool, { available: false });
+
+    const [first, second] = await Promise.all([
+      store.claimAvailable({ claimToken: "publisher-a", limit: 2, leaseDurationMs: 60_000 }),
+      store.claimAvailable({ claimToken: "publisher-b", limit: 2, leaseDurationMs: 60_000 }),
+    ]);
+    const claimed = [...first, ...second];
+
+    expect(first).toHaveLength(2);
+    expect(second).toHaveLength(2);
+    expect(new Set(claimed.map((entry) => entry.id))).toEqual(new Set(ready));
+    expect(new Set(claimed.map((entry) => entry.claimToken))).toEqual(new Set(["publisher-a", "publisher-b"]));
+    expect((await pool.query(
+      "select count(*)::int as count from agentbay_outbox where publish_attempts = 1 and lease_expires_at > now()",
+    )).rows[0]).toEqual({ count: 4 });
+  });
+
+  it("publishes and retries outbox messages through fenced leases", async () => {
+    await pool.query("delete from agentbay_outbox");
+    const publishedID = await insertOutbox(pool);
+    const [published] = await store.claimAvailable({ claimToken: "publisher-success", limit: 1, leaseDurationMs: 60_000 });
+    if (!published) throw new Error("Expected outbox message to be claimed");
+    expect(published.id).toBe(publishedID);
+    expect(await store.markPublished({ id: published.id, claimToken: published.claimToken })).toBe(true);
+    expect(await store.claimAvailable({ claimToken: "publisher-other", limit: 1, leaseDurationMs: 60_000 })).toEqual([]);
+
+    const failedID = await insertOutbox(pool);
+    const [failed] = await store.claimAvailable({ claimToken: "publisher-failure", limit: 1, leaseDurationMs: 60_000 });
+    if (!failed) throw new Error("Expected outbox message to be claimed");
+    expect(failed.id).toBe(failedID);
+    expect(await store.markFailed({
+      id: failed.id,
+      claimToken: failed.claimToken,
+      error: "broker unavailable",
+      retryDelayMs: 60_000,
+    })).toBe(true);
+    expect(await store.claimAvailable({ claimToken: "publisher-early", limit: 1, leaseDurationMs: 60_000 })).toEqual([]);
+
+    await pool.query("update agentbay_outbox set available_at = now() - interval '1 second' where id = $1", [failedID]);
+    const [retried] = await store.claimAvailable({ claimToken: "publisher-retry", limit: 1, leaseDurationMs: 60_000 });
+    expect(retried).toMatchObject({ id: failedID, claimToken: "publisher-retry", publishAttempts: 2 });
+  });
+
+  it("reclaims expired outbox leases and rejects stale publishers", async () => {
+    await pool.query("delete from agentbay_outbox");
+    const id = await insertOutbox(pool);
+    const [stale] = await store.claimAvailable({ claimToken: "publisher-stale", limit: 1, leaseDurationMs: 60_000 });
+    if (!stale) throw new Error("Expected outbox message to be claimed");
+    await pool.query("update agentbay_outbox set lease_expires_at = now() - interval '1 second' where id = $1", [id]);
+
+    const [current] = await store.claimAvailable({ claimToken: "publisher-current", limit: 1, leaseDurationMs: 60_000 });
+    if (!current) throw new Error("Expected expired outbox message to be reclaimed");
+    expect(current).toMatchObject({ id, claimToken: "publisher-current", publishAttempts: 2 });
+    expect(await store.markPublished({ id, claimToken: stale.claimToken })).toBe(false);
+    expect(await store.markFailed({ id, claimToken: stale.claimToken, error: "late", retryDelayMs: 0 })).toBe(false);
+    expect(await store.markPublished({ id, claimToken: current.claimToken })).toBe(true);
+  });
 });
 
 function executionCommand(createdAt: string) {
@@ -121,6 +182,19 @@ function executionCommand(createdAt: string) {
     tenantId: "default",
     workspace: { type: "empty" as const },
   };
+}
+
+async function insertOutbox(pool: pg.Pool, options: { available?: boolean } = {}): Promise<string> {
+  const id = randomUUID();
+  const aggregateID = randomUUID();
+  await pool.query(`
+    insert into agentbay_outbox (
+      id, tenant_id, topic, aggregate_type, aggregate_id, payload, headers, available_at, created_at
+    ) values ($1, 'default', 'execution.requested', 'execution', $2, $3, '{}',
+      case when $4 then now() - interval '1 minute' else now() + interval '1 hour' end,
+      now() - interval '2 minutes')
+  `, [id, aggregateID, { schemaVersion: 1, executionId: aggregateID }, options.available ?? true]);
+  return id;
 }
 
 async function startPostgres(): Promise<StartedTestContainer> {

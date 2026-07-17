@@ -221,14 +221,20 @@ export const outboxEntries = pgTable("agentbay_outbox", {
   headers: jsonb("headers").$type<Record<string, string>>().notNull().default({}),
   id: text("id").primaryKey(),
   lastError: text("last_error"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  leaseToken: text("lease_token"),
   payload: jsonb("payload").$type<unknown>().notNull(),
   publishAttempts: integer("publish_attempts").notNull().default(0),
   publishedAt: timestamp("published_at", { withTimezone: true }),
   tenantID: text("tenant_id").notNull(),
   topic: text("topic").notNull(),
 }, (table) => [
+  check("agentbay_outbox_lease_complete", sql`(${table.leaseToken} IS NULL) = (${table.leaseExpiresAt} IS NULL)`),
+  check("agentbay_outbox_published_unleased", sql`${table.publishedAt} IS NULL OR ${table.leaseToken} IS NULL`),
   check("agentbay_outbox_publish_attempts_nonnegative", sql`${table.publishAttempts} >= 0`),
   uniqueIndex("agentbay_outbox_topic_aggregate_unique").on(table.topic, table.aggregateType, table.aggregateID),
-  index("agentbay_outbox_publish_idx").on(table.publishedAt, table.availableAt),
+  index("agentbay_outbox_claim_idx")
+    .on(table.availableAt, table.leaseExpiresAt)
+    .where(sql`${table.publishedAt} IS NULL`),
   index("agentbay_outbox_tenant_aggregate_idx").on(table.tenantID, table.aggregateType, table.aggregateID),
 ]);
