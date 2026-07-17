@@ -1,0 +1,7 @@
+DROP INDEX "agentbay_execution_attempts_lease_idx";--> statement-breakpoint
+ALTER TABLE "agentbay_executions" ADD COLUMN "available_at" timestamp with time zone DEFAULT now() NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "agentbay_execution_attempts_one_active_unique" ON "agentbay_execution_attempts" USING btree ("execution_id") WHERE "agentbay_execution_attempts"."state" IN ('LEASED', 'RUNNING');--> statement-breakpoint
+CREATE INDEX "agentbay_execution_attempts_expired_active_lease_idx" ON "agentbay_execution_attempts" USING btree ("lease_expires_at","execution_id") WHERE "agentbay_execution_attempts"."state" IN ('LEASED', 'RUNNING');--> statement-breakpoint
+CREATE INDEX "agentbay_executions_dispatch_idx" ON "agentbay_executions" USING btree ("available_at","created_at","id") WHERE "agentbay_executions"."state" = 'QUEUED';--> statement-breakpoint
+ALTER TABLE "agentbay_execution_attempts" ADD CONSTRAINT "agentbay_execution_attempts_active_lease_consistent" CHECK (("agentbay_execution_attempts"."lease_owner" IS NULL) = ("agentbay_execution_attempts"."lease_expires_at" IS NULL) AND ("agentbay_execution_attempts"."state" IN ('LEASED', 'RUNNING')) = ("agentbay_execution_attempts"."lease_owner" IS NOT NULL));--> statement-breakpoint
+ALTER TABLE "agentbay_execution_attempts" ADD CONSTRAINT "agentbay_execution_attempts_terminal_consistent" CHECK (("agentbay_execution_attempts"."state" IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')) = ("agentbay_execution_attempts"."finished_at" IS NOT NULL));
