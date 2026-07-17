@@ -122,6 +122,10 @@ describe("dispatcher persistence", () => {
       leaseOwner: claimed.lease.leaseOwner,
       leaseDurationMs: 120_000,
     })).toBe(false);
+    await pool.query(
+      "update agentbay_execution_attempts set lease_expires_at = now() + interval '1 hour' where execution_id = $1",
+      [executionId],
+    );
   });
 
   it("starts and succeeds an execution under the active fence", async () => {
@@ -197,6 +201,142 @@ describe("dispatcher persistence", () => {
     expect(await executionSnapshot(executionId)).toEqual(before);
   });
 
+  it("recovers an expired lease and creates a newly fenced retry attempt", async () => {
+    const executionId = await queueExecution();
+    const first = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-stale", leaseDurationMs: 60_000 });
+    if (!first) throw new Error("Expected first execution attempt");
+    await pool.query(
+      "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      [executionId],
+    );
+
+    expect(await store.recoverExpiredExecutionLeases({ limit: 10, maxAttempts: 3, retryDelayMs: 60_000 })).toEqual([
+      expect.objectContaining({ attempt: 1, executionId, executionState: "RETRY_WAIT" }),
+    ]);
+    let persisted = await executionSnapshot(executionId);
+    expect(persisted.execution).toMatchObject({ state: "RETRY_WAIT", completed_at: null });
+    expect(persisted.attempts[0]).toMatchObject({
+      attempt: 1,
+      state: "FAILED",
+      lease_owner: null,
+      lease_expires_at: null,
+    });
+    expect(persisted.attempts[0]?.finished_at).toBeInstanceOf(Date);
+
+    expect(await store.promoteDueExecutionRetries({ limit: 10 })).toEqual([]);
+    await pool.query(
+      "update agentbay_executions set available_at = now() - interval '1 second' where id = $1",
+      [executionId],
+    );
+    expect(await store.promoteDueExecutionRetries({ limit: 10 })).toEqual([
+      expect.objectContaining({ executionId }),
+    ]);
+
+    const second = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-current", leaseDurationMs: 60_000 });
+    expect(second).toMatchObject({ executionId, lease: { attempt: 2, leaseOwner: "dispatcher-current" } });
+    expect(second?.lease.fencingToken).not.toBe(first.lease.fencingToken);
+
+    const beforeStaleWrite = await executionSnapshot(executionId);
+    await expect(store.transitionLeasedExecution({
+      executionId,
+      tenantId: "default",
+      attempt: 1,
+      fencingToken: first.lease.fencingToken,
+      leaseOwner: first.lease.leaseOwner,
+      expectedExecutionState: "PROVISIONING",
+      expectedAttemptState: "LEASED",
+      targetExecutionState: "RUNNING",
+      targetAttemptState: "RUNNING",
+      actor: "dispatcher-stale",
+      reason: "late attempt result",
+    })).resolves.toEqual({ applied: false, reason: "LEASE_MISMATCH" });
+    expect(await executionSnapshot(executionId)).toEqual(beforeStaleWrite);
+
+    persisted = await executionSnapshot(executionId);
+    expect(persisted.transitions.map((transition) => ({
+      attempt: transition.attempt,
+      from: transition.from_state,
+      to: transition.to_state,
+    }))).toEqual([
+      { attempt: null, from: null, to: "RECEIVED" },
+      { attempt: null, from: "RECEIVED", to: "PLANNED" },
+      { attempt: null, from: "PLANNED", to: "QUEUED" },
+      { attempt: 1, from: "QUEUED", to: "PROVISIONING" },
+      { attempt: 1, from: "PROVISIONING", to: "RETRY_WAIT" },
+      { attempt: null, from: "RETRY_WAIT", to: "QUEUED" },
+      { attempt: 2, from: "QUEUED", to: "PROVISIONING" },
+    ]);
+  });
+
+  it("fails an execution when its expired lease exhausts attempts", async () => {
+    const executionId = await queueExecution();
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-a", leaseDurationMs: 60_000 });
+    if (!claimed) throw new Error("Expected execution attempt");
+    await pool.query(
+      "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      [executionId],
+    );
+
+    expect(await store.recoverExpiredExecutionLeases({ limit: 10, maxAttempts: 1, retryDelayMs: 0 })).toEqual([
+      expect.objectContaining({ attempt: 1, executionId, executionState: "FAILED" }),
+    ]);
+    const persisted = await executionSnapshot(executionId);
+    expect(persisted.execution.state).toBe("FAILED");
+    expect(persisted.execution.completed_at).toBeInstanceOf(Date);
+    expect(persisted.attempts[0]).toMatchObject({ state: "FAILED", lease_owner: null, lease_expires_at: null });
+    expect(persisted.transitions.at(-1)).toMatchObject({
+      attempt: 1,
+      from_state: "PROVISIONING",
+      to_state: "FAILED",
+    });
+    expect(await store.promoteDueExecutionRetries({ limit: 10 })).toEqual([]);
+  });
+
+  it("does not recover a renewed unexpired lease", async () => {
+    const executionId = await queueExecution();
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-a", leaseDurationMs: 60_000 });
+    if (!claimed) throw new Error("Expected execution attempt");
+    expect(await store.renewExecutionLease({
+      executionId,
+      tenantId: "default",
+      attempt: claimed.lease.attempt,
+      fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner,
+      leaseDurationMs: 120_000,
+    })).toBe(true);
+    const before = await executionSnapshot(executionId);
+
+    expect(await store.recoverExpiredExecutionLeases({ limit: 10, maxAttempts: 3, retryDelayMs: 0 })).toEqual([]);
+    expect(await executionSnapshot(executionId)).toEqual(before);
+  });
+
+  it("times out a retry whose execution deadline elapsed while waiting", async () => {
+    const executionId = await queueExecution();
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-a", leaseDurationMs: 60_000 });
+    if (!claimed) throw new Error("Expected execution attempt");
+    await pool.query(
+      "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      [executionId],
+    );
+    await store.recoverExpiredExecutionLeases({ limit: 10, maxAttempts: 3, retryDelayMs: 60_000 });
+    await pool.query(
+      "update agentbay_executions set timeout_at = now() - interval '1 second' where id = $1",
+      [executionId],
+    );
+
+    expect(await store.promoteDueExecutionRetries({ limit: 10 })).toEqual([
+      expect.objectContaining({ executionId, executionState: "TIMED_OUT" }),
+    ]);
+    const persisted = await executionSnapshot(executionId);
+    expect(persisted.execution.state).toBe("TIMED_OUT");
+    expect(persisted.execution.completed_at).toBeInstanceOf(Date);
+    expect(persisted.transitions.at(-1)).toMatchObject({
+      attempt: null,
+      from_state: "RETRY_WAIT",
+      to_state: "TIMED_OUT",
+    });
+  });
+
   async function queueExecution(): Promise<string> {
     const createdAt = new Date().toISOString();
     const id = randomUUID();
@@ -222,11 +362,11 @@ describe("dispatcher persistence", () => {
 
   async function executionSnapshot(executionId: string) {
     const execution = (await pool.query(
-      "select state, result, completed_at from agentbay_executions where id = $1",
+      "select state, result, completed_at, available_at from agentbay_executions where id = $1",
       [executionId],
     )).rows[0];
     const attempts = (await pool.query(
-      "select attempt, state, fencing_token, lease_owner, lease_expires_at, workload_name, opencode_session_id from agentbay_execution_attempts where execution_id = $1 order by attempt",
+      "select attempt, state, fencing_token, lease_owner, lease_expires_at, started_at, finished_at, workload_name, opencode_session_id from agentbay_execution_attempts where execution_id = $1 order by attempt",
       [executionId],
     )).rows;
     const transitions = (await pool.query(

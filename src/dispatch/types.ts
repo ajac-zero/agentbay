@@ -55,3 +55,18 @@ export type TransitionLeasedExecutionResult =
       applied: false;
       reason: "NOT_FOUND" | "STATE_MISMATCH" | "LEASE_MISMATCH" | "LEASE_EXPIRED";
     };
+
+export type RecoveredExecutionLease = {
+  executionId: string;
+  tenantId: string;
+  attempt: number;
+  executionState: "RETRY_WAIT" | "FAILED" | "TIMED_OUT";
+  recoveredAt: Date;
+};
+
+export type PromotedExecutionRetry = {
+  executionId: string;
+  executionState: "QUEUED" | "TIMED_OUT";
+  tenantId: string;
+  promotedAt: Date;
+};
