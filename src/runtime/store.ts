@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readBoolean, readNumber } from "../util.js";
 import type { ThreadState } from "../types.js";
 import type { PostgresRuntimeStoreOptions } from "./postgres.js";
+import type { ExecutionStore } from "../execution/store.js";
 import type {
   AgentProfile,
   Bot,
@@ -51,7 +52,7 @@ export type UpsertOpencodeConfigInput = Omit<OpencodeConfigRecord, "configHash" 
   updatedAt?: string;
 };
 
-export async function createRuntimeStore(env: NodeJS.ProcessEnv = process.env): Promise<RuntimeStore> {
+export async function createRuntimeStore(env: NodeJS.ProcessEnv = process.env): Promise<RuntimeStore & ExecutionStore> {
   const { createPostgresRuntimeStore } = await import("./postgres.js");
   return createPostgresRuntimeStore(readPostgresRuntimeStoreOptions(env));
 }

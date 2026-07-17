@@ -3,6 +3,7 @@ import { createBotRegistry } from "./chat/bot.js";
 import { mountWebhooks } from "./chat/webhooks.js";
 import { loadConfig } from "./config.js";
 import { logger } from "./logger.js";
+import { mountExecutionApi } from "./execution/api.js";
 import { createOpenApiApp, mountHealthRoute, mountOpenApiDocs } from "./openapi.js";
 import { mountRuntimeAdmin } from "./runtime/admin.js";
 import { createRuntimeStore } from "./runtime/store.js";
@@ -18,6 +19,7 @@ const app = createOpenApiApp();
 mountHealthRoute(app, config, runtimeStore);
 mountWebhooks(app, chats, runtimeStore);
 mountRuntimeAdmin(app, config, runtimeStore);
+mountExecutionApi(app, config, runtimeStore);
 mountOpenApiDocs(app);
 
 const server = serve({ fetch: (request) => app.fetch(request), port: config.port }, (info) => {

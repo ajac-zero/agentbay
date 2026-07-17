@@ -140,6 +140,26 @@ Agent profiles can store per-agent sandbox secret references in `claimEnv`:
 
 The orchestrator resolves `valueFromEnv` from its own environment when creating a `SandboxClaim` and injects it as `name` inside the sandbox.
 
+## Asynchronous Execution API
+
+The first event-driven API foundation is available under `/v1`. It uses `AGENTBAY_ADMIN_TOKEN` as temporary single-tenant authentication and assigns records to the `default` tenant.
+
+Publish an immutable agent profile version:
+
+```text
+POST /v1/agent-profiles/:profileID/versions
+GET  /v1/agent-profiles/:profileID/versions/:version
+```
+
+Submit and inspect an execution:
+
+```text
+POST /v1/executions
+GET  /v1/executions/:id
+```
+
+Execution submission requires an `Idempotency-Key` header and an exact profile version. A successful request returns `202 Accepted` after atomically recording the normalized event, execution, initial lifecycle transitions, and transactional outbox message. It does not wait for or directly create a Kubernetes workload. Queue publication and dispatch are subsequent platform components.
+
 ## Deployment
 
 Build and push the orchestrator image:
