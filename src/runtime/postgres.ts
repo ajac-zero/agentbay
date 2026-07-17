@@ -1,9 +1,24 @@
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { and, asc, eq, type InferSelectModel } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
 import type { ThreadState } from "../types.js";
+import type {
+  CreateExecutionCommand,
+  CreateExecutionResult,
+  ExecutionStore,
+  PublishProfileVersionCommand,
+} from "../execution/store.js";
+import {
+  IdempotencyConflictError,
+  ProfileVersionAlreadyExistsError,
+  ProfileVersionNotFoundError,
+  type AgentProfileVersion,
+  type Execution,
+  type JsonObject,
+} from "../execution/types.js";
 import type { AgentProfile, Bot, OpencodeConfigRecord, SandboxProfile } from "./types.js";
 import {
   hashConfig,
@@ -13,7 +28,18 @@ import {
   type UpsertOpencodeConfigInput,
 } from "./store.js";
 import * as schema from "./schema.js";
-import { agentProfiles, botAgentProfiles, bots, opencodeConfigs, sandboxProfiles } from "./schema.js";
+import {
+  agentProfiles,
+  agentProfileVersions,
+  botAgentProfiles,
+  bots,
+  events,
+  executions,
+  executionTransitions,
+  opencodeConfigs,
+  outboxEntries,
+  sandboxProfiles,
+} from "./schema.js";
 import {
   validateBotAdapters,
   validateEnvVarRefs,
@@ -65,7 +91,7 @@ export async function migratePostgresRuntimeStore(options: PostgresRuntimeStoreO
   }
 }
 
-export class PostgresRuntimeStore implements RuntimeStore {
+export class PostgresRuntimeStore implements RuntimeStore, ExecutionStore {
   constructor(
     private readonly pool: pg.Pool,
     private readonly db: RuntimeDatabase,
@@ -78,6 +104,137 @@ export class PostgresRuntimeStore implements RuntimeStore {
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  async publishProfileVersion(command: PublishProfileVersionCommand): Promise<AgentProfileVersion> {
+    const rows = await this.db
+      .insert(agentProfileVersions)
+      .values({
+        createdAt: new Date(command.createdAt),
+        definition: command.definition,
+        id: command.id,
+        profileID: command.profileId,
+        tenantID: command.tenantId,
+        version: command.version,
+      })
+      .onConflictDoNothing()
+      .returning();
+    const row = rows[0];
+    if (!row) throw new ProfileVersionAlreadyExistsError(command.profileId, command.version);
+    return profileVersionFromRow(row);
+  }
+
+  async getProfileVersion(tenantId: string, profileId: string, version: number): Promise<AgentProfileVersion | undefined> {
+    const rows = await this.db
+      .select()
+      .from(agentProfileVersions)
+      .where(and(
+        eq(agentProfileVersions.tenantID, tenantId),
+        eq(agentProfileVersions.profileID, profileId),
+        eq(agentProfileVersions.version, version),
+      ))
+      .limit(1);
+    return rows[0] ? profileVersionFromRow(rows[0]) : undefined;
+  }
+
+  async createExecution(command: CreateExecutionCommand): Promise<CreateExecutionResult> {
+    return this.db.transaction(async (tx) => {
+      const existingRows = await tx
+        .select()
+        .from(executions)
+        .where(and(eq(executions.tenantID, command.tenantId), eq(executions.idempotencyKey, command.idempotencyKey)))
+        .limit(1);
+      const existing = existingRows[0];
+      if (existing) {
+        if (existing.requestHash !== command.requestHash) throw new IdempotencyConflictError();
+        return { execution: await executionFromRow(tx, existing), replayed: true };
+      }
+
+      const profileRows = await tx
+        .select()
+        .from(agentProfileVersions)
+        .where(and(
+          eq(agentProfileVersions.tenantID, command.tenantId),
+          eq(agentProfileVersions.profileID, command.profile.id),
+          eq(agentProfileVersions.version, command.profile.version),
+        ))
+        .limit(1);
+      const profile = profileRows[0];
+      if (!profile) throw new ProfileVersionNotFoundError(command.profile.id, command.profile.version);
+      const timeoutSeconds = profileTimeoutSeconds(profile.definition);
+
+      const createdAt = new Date(command.createdAt);
+      await tx.insert(events).values({
+        data: command.event.data,
+        eventID: command.event.id,
+        eventTime: new Date(command.event.time),
+        id: command.event.id,
+        source: command.event.source,
+        tenantID: command.tenantId,
+        type: command.event.type,
+      });
+
+      const inserted = await tx
+        .insert(executions)
+        .values({
+          createdAt,
+          eventID: command.event.id,
+          id: command.id,
+          idempotencyKey: command.idempotencyKey,
+          input: command.input,
+          profileVersionID: profile.id,
+          requestHash: command.requestHash,
+          resolvedPolicy: profile.definition,
+          state: "QUEUED",
+          tenantID: command.tenantId,
+          timeoutAt: new Date(createdAt.getTime() + timeoutSeconds * 1_000),
+          updatedAt: createdAt,
+          workspace: command.workspace,
+        })
+        .onConflictDoNothing({ target: [executions.tenantID, executions.idempotencyKey] })
+        .returning();
+
+      const execution = inserted[0];
+      if (!execution) {
+        await tx.delete(events).where(eq(events.id, command.event.id));
+        const winnerRows = await tx
+          .select()
+          .from(executions)
+          .where(and(eq(executions.tenantID, command.tenantId), eq(executions.idempotencyKey, command.idempotencyKey)))
+          .limit(1);
+        const winner = winnerRows[0];
+        if (!winner) throw new Error("Idempotent execution winner was not found");
+        if (winner.requestHash !== command.requestHash) throw new IdempotencyConflictError();
+        return { execution: await executionFromRow(tx, winner), replayed: true };
+      }
+
+      await tx.insert(executionTransitions).values([
+        transition(command, 1, null, "RECEIVED", "execution request received"),
+        transition(command, 2, "RECEIVED", "PLANNED", "profile version resolved"),
+        transition(command, 3, "PLANNED", "QUEUED", "execution queued"),
+      ]);
+      await tx.insert(outboxEntries).values({
+        aggregateID: command.id,
+        aggregateType: "execution",
+        availableAt: createdAt,
+        createdAt,
+        id: randomUUID(),
+        payload: { schemaVersion: 1, tenantId: command.tenantId, executionId: command.id },
+        tenantID: command.tenantId,
+        topic: "execution.requested",
+      });
+
+      return { execution: executionRecord(execution, profile), replayed: false };
+    });
+  }
+
+  async getExecution(tenantId: string, executionId: string): Promise<Execution | undefined> {
+    const rows = await this.db
+      .select()
+      .from(executions)
+      .where(and(eq(executions.tenantID, tenantId), eq(executions.id, executionId)))
+      .limit(1);
+    return rows[0] ? executionFromRow(this.db, rows[0]) : undefined;
   }
 
   async addBotAgentProfile(entry: { botID: string; agentProfileID: string }): Promise<{ botID: string; agentProfileID: string }> {
@@ -317,6 +474,8 @@ type BotRow = InferSelectModel<typeof bots>;
 type SandboxProfileRow = InferSelectModel<typeof sandboxProfiles>;
 type OpencodeConfigRow = InferSelectModel<typeof opencodeConfigs>;
 type AgentProfileRow = InferSelectModel<typeof agentProfiles>;
+type AgentProfileVersionRow = InferSelectModel<typeof agentProfileVersions>;
+type ExecutionRow = InferSelectModel<typeof executions>;
 
 function botFromRow(row: BotRow): Bot {
   return {
@@ -362,6 +521,76 @@ function agentProfileFromRow(row: AgentProfileRow): AgentProfile {
     opencodeConfigID: row.opencodeConfigID,
     slug: row.slug,
   };
+}
+
+function profileVersionFromRow(row: AgentProfileVersionRow): AgentProfileVersion {
+  return {
+    createdAt: row.createdAt.toISOString(),
+    definition: row.definition as JsonObject,
+    id: row.id,
+    profile: { id: row.profileID, version: row.version },
+    tenantId: row.tenantID,
+  };
+}
+
+async function executionFromRow(
+  db: Pick<RuntimeDatabase, "select">,
+  row: ExecutionRow,
+): Promise<Execution> {
+  const profileRows = await db
+    .select()
+    .from(agentProfileVersions)
+    .where(and(
+      eq(agentProfileVersions.id, row.profileVersionID),
+      eq(agentProfileVersions.tenantID, row.tenantID),
+    ))
+    .limit(1);
+  const profile = profileRows[0];
+  if (!profile) throw new Error(`Execution ${row.id} references missing profile version ${row.profileVersionID}`);
+  return executionRecord(row, profile);
+}
+
+function executionRecord(row: ExecutionRow, profile: AgentProfileVersionRow): Execution {
+  return {
+    createdAt: row.createdAt.toISOString(),
+    eventId: row.eventID,
+    id: row.id,
+    input: row.input as Execution["input"],
+    profile: { id: profile.profileID, version: profile.version },
+    result: (row.result as Execution["result"]) ?? null,
+    state: row.state as Execution["state"],
+    tenantId: row.tenantID,
+    updatedAt: row.updatedAt.toISOString(),
+    workspace: row.workspace as Execution["workspace"],
+  };
+}
+
+function transition(
+  command: CreateExecutionCommand,
+  sequence: number,
+  fromState: Execution["state"] | null,
+  toState: Execution["state"],
+  reason: string,
+) {
+  return {
+    actor: "api",
+    createdAt: new Date(command.createdAt),
+    executionID: command.id,
+    fromState,
+    id: randomUUID(),
+    reason,
+    sequence,
+    tenantID: command.tenantId,
+    toState,
+  };
+}
+
+function profileTimeoutSeconds(definition: Record<string, unknown>): number {
+  const value = definition.timeoutSeconds;
+  if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > 86_400) {
+    throw new Error("Published profile has an invalid timeoutSeconds value");
+  }
+  return value as number;
 }
 
 function missingRow(kind: string, id: string): never {

@@ -9,7 +9,7 @@ export function createOpenApiApp(): OpenAPIHono {
   app.openAPIRegistry.registerComponent("securitySchemes", "bearerAuth", {
     type: "http",
     scheme: "bearer",
-    description: "Set AGENTBAY_ADMIN_TOKEN to enable runtime admin routes, then send it as a bearer token.",
+    description: "Bearer authentication for agentbay management and execution APIs.",
   });
   registerWebhookDocs(app);
   return app;
@@ -45,7 +45,7 @@ export function mountOpenApiDocs(app: OpenAPIHono): void {
     info: {
       title: "agentbay API",
       version: "1.0.0",
-      description: "HTTP API for agentbay health checks, chat adapter webhooks, and runtime administration.",
+      description: "HTTP API for agentbay health checks, asynchronous executions, chat adapter webhooks, and runtime administration.",
     },
   });
   app.get("/docs", swaggerUI({ url: "/openapi.json", displayRequestDuration: true }));
