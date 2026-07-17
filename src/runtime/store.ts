@@ -3,6 +3,7 @@ import { readBoolean, readNumber } from "../util.js";
 import type { ThreadState } from "../types.js";
 import type { PostgresRuntimeStoreOptions } from "./postgres.js";
 import type { ExecutionStore } from "../execution/store.js";
+import type { OutboxStore } from "../outbox/types.js";
 import type {
   AgentProfile,
   Bot,
@@ -52,7 +53,7 @@ export type UpsertOpencodeConfigInput = Omit<OpencodeConfigRecord, "configHash" 
   updatedAt?: string;
 };
 
-export async function createRuntimeStore(env: NodeJS.ProcessEnv = process.env): Promise<RuntimeStore & ExecutionStore> {
+export async function createRuntimeStore(env: NodeJS.ProcessEnv = process.env): Promise<RuntimeStore & ExecutionStore & OutboxStore> {
   const { createPostgresRuntimeStore } = await import("./postgres.js");
   return createPostgresRuntimeStore(readPostgresRuntimeStoreOptions(env));
 }

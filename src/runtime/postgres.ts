@@ -11,6 +11,10 @@ import type {
   ExecutionStore,
   PublishProfileVersionCommand,
 } from "../execution/store.js";
+import type {
+  ClaimedOutboxMessage,
+  OutboxStore,
+} from "../outbox/types.js";
 import {
   IdempotencyConflictError,
   ProfileVersionAlreadyExistsError,
@@ -91,7 +95,7 @@ export async function migratePostgresRuntimeStore(options: PostgresRuntimeStoreO
   }
 }
 
-export class PostgresRuntimeStore implements RuntimeStore, ExecutionStore {
+export class PostgresRuntimeStore implements RuntimeStore, ExecutionStore, OutboxStore {
   constructor(
     private readonly pool: pg.Pool,
     private readonly db: RuntimeDatabase,
@@ -104,6 +108,69 @@ export class PostgresRuntimeStore implements RuntimeStore, ExecutionStore {
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  async claimAvailable(options: {
+    claimToken: string;
+    limit: number;
+    leaseDurationMs: number;
+    signal?: AbortSignal;
+  }): Promise<ClaimedOutboxMessage[]> {
+    assertPositiveInteger(options.limit, "Outbox claim limit");
+    assertPositiveInteger(options.leaseDurationMs, "Outbox lease duration");
+    options.signal?.throwIfAborted();
+
+    const result = await this.pool.query<ClaimedOutboxRow>({
+      text: `
+      WITH claim_clock AS MATERIALIZED (
+        SELECT clock_timestamp() AS claimed_at
+      ), candidates AS (
+        SELECT outbox.id
+        FROM agentbay_outbox AS outbox, claim_clock
+        WHERE outbox.published_at IS NULL
+          AND outbox.available_at <= claim_clock.claimed_at
+          AND (outbox.lease_expires_at IS NULL OR outbox.lease_expires_at <= claim_clock.claimed_at)
+        ORDER BY outbox.available_at, outbox.created_at, outbox.id
+        FOR UPDATE OF outbox SKIP LOCKED
+        LIMIT $1
+      )
+      UPDATE agentbay_outbox AS outbox
+      SET lease_token = $2,
+          lease_expires_at = claim_clock.claimed_at + ($3::double precision * interval '1 millisecond'),
+          publish_attempts = outbox.publish_attempts + 1
+      FROM candidates, claim_clock
+      WHERE outbox.id = candidates.id
+      RETURNING outbox.aggregate_id, outbox.aggregate_type, outbox.available_at, outbox.created_at,
+                outbox.headers, outbox.id, outbox.lease_expires_at, outbox.lease_token,
+                outbox.payload, outbox.publish_attempts, outbox.tenant_id, outbox.topic
+      `,
+      values: [options.limit, options.claimToken, options.leaseDurationMs],
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+
+    return result.rows.map(outboxMessageFromRow);
+  }
+
+  async markPublished(command: { id: string; claimToken: string }): Promise<boolean> {
+    const result = await this.pool.query(`
+      UPDATE agentbay_outbox
+      SET published_at = clock_timestamp(), lease_token = NULL, lease_expires_at = NULL, last_error = NULL
+      WHERE id = $1 AND published_at IS NULL AND lease_token = $2 AND lease_expires_at > clock_timestamp()
+      RETURNING id
+    `, [command.id, command.claimToken]);
+    return result.rowCount === 1;
+  }
+
+  async markFailed(command: { id: string; claimToken: string; error: string; retryDelayMs: number }): Promise<boolean> {
+    assertNonnegativeInteger(command.retryDelayMs, "Outbox retry delay");
+    const result = await this.pool.query(`
+      UPDATE agentbay_outbox
+      SET available_at = clock_timestamp() + ($3::double precision * interval '1 millisecond'),
+          lease_token = NULL, lease_expires_at = NULL, last_error = $4
+      WHERE id = $1 AND published_at IS NULL AND lease_token = $2 AND lease_expires_at > clock_timestamp()
+      RETURNING id
+    `, [command.id, command.claimToken, command.retryDelayMs, command.error]);
+    return result.rowCount === 1;
   }
 
   async publishProfileVersion(command: PublishProfileVersionCommand): Promise<AgentProfileVersion> {
@@ -477,6 +544,21 @@ type AgentProfileRow = InferSelectModel<typeof agentProfiles>;
 type AgentProfileVersionRow = InferSelectModel<typeof agentProfileVersions>;
 type ExecutionRow = InferSelectModel<typeof executions>;
 
+type ClaimedOutboxRow = {
+  aggregate_id: string;
+  aggregate_type: string;
+  available_at: Date;
+  created_at: Date;
+  headers: Record<string, string>;
+  id: string;
+  lease_expires_at: Date;
+  lease_token: string;
+  payload: unknown;
+  publish_attempts: number;
+  tenant_id: string;
+  topic: string;
+};
+
 function botFromRow(row: BotRow): Bot {
   return {
     adapters: row.adapters,
@@ -520,6 +602,23 @@ function agentProfileFromRow(row: AgentProfileRow): AgentProfile {
     opencodeAgentName: row.opencodeAgentName,
     opencodeConfigID: row.opencodeConfigID,
     slug: row.slug,
+  };
+}
+
+function outboxMessageFromRow(row: ClaimedOutboxRow): ClaimedOutboxMessage {
+  return {
+    aggregateId: row.aggregate_id,
+    aggregateType: row.aggregate_type,
+    availableAt: row.available_at,
+    createdAt: row.created_at,
+    headers: row.headers,
+    id: row.id,
+    claimExpiresAt: row.lease_expires_at,
+    claimToken: row.lease_token,
+    payload: row.payload,
+    publishAttempts: row.publish_attempts,
+    tenantId: row.tenant_id,
+    topic: row.topic,
   };
 }
 
@@ -595,4 +694,12 @@ function profileTimeoutSeconds(definition: Record<string, unknown>): number {
 
 function missingRow(kind: string, id: string): never {
   throw new Error(`Failed to return ${kind}: ${id}`);
+}
+
+function assertNonnegativeInteger(value: number, name: string): void {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${name} must be a nonnegative safe integer`);
+}
+
+function assertPositiveInteger(value: number, name: string): void {
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive safe integer`);
 }
