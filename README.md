@@ -1,6 +1,10 @@
 # agentbay
 
-agentbay is a TypeScript orchestrator that connects Chat SDK webhooks to `agent-sandbox` `SandboxClaim`s and drives a headless opencode server in each sandbox Pod.
+agentbay is a platform for event-driven asynchronous agents. External events such as pull requests, issues, Grafana alerts, schedules, queue messages, generic webhooks, and chat messages invoke deeply configured OpenCode agents in isolated Kubernetes workspaces. Executions are durable, asynchronous, observable, and designed to scale independently from event ingestion.
+
+The target architecture is defined in [`DESIGN.md`](DESIGN.md). It is the source of truth for future development.
+
+> **Implementation status:** The current codebase is the earlier chat-native prototype. It connects Chat SDK webhooks to `agent-sandbox` `SandboxClaim`s and drives a headless OpenCode server in each sandbox Pod. The commands and configuration below document that working prototype while the event-driven execution core is built.
 
 ## Local Development
 

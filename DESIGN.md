@@ -1,511 +1,1016 @@
-# agentbay — Design Document
+# agentbay - Architecture and Product Definition
 
-> **Status:** Guiding target design. Current implementation may lag behind this document.
-> **Audience:** Engineers building agentbay, and any AI coding agent contributing to it.
-> **Scope:** End-to-end architecture, component responsibilities, data flow, and the design decisions behind them.
+> **Status:** Source of truth for the next generation of agentbay.
+> **Audience:** Engineers, operators, agent authors, and AI coding agents contributing to this repository.
+> **Implementation note:** The current codebase is the previous chat-centric orchestrator. It is useful as a prototype and source of reusable components, but it does not yet implement this architecture.
 
----
+## 1. Definition
 
-## 1. Vision
+**agentbay is a platform for event-driven asynchronous agents.**
 
-**agentbay** is a chat-native platform for running AI coding agents. A user mentions a bot in Slack, GitHub, Linear (or any other platform supported by the Chat SDK), and within seconds an isolated, sandboxed agent — backed by an opencode server in its own Kubernetes Pod — is answering them in-thread, with full tool access (shell, file edits, LSP, MCP) constrained by platform-level network and resource policy.
+An immutable agent definition is invoked by an event, runs asynchronously in an isolated workspace, and publishes durable results.
 
-The system is composed entirely of off-the-shelf primitives glued together by a small TypeScript orchestrator. We write **no agent runtime, no sandbox runtime, no chat adapter** — only the wiring between them.
+Agent authors configure agents deeply through native OpenCode configuration: models, providers, prompts, tools, MCP servers, permissions, and runtime behavior. Operators bind those agents to external events such as pull requests, issues, Grafana alerts, schedules, chat messages, queues, and generic webhooks. Agentbay admits and persists those events, plans durable executions, and runs them in isolated Kubernetes workloads at large scale.
 
-### Core promise
+Chat is one trigger and result destination among many. Kubernetes is the execution substrate, not the product model.
 
-| For | We provide |
+### 1.1 Core promise
+
+| Audience | Promise |
 |---|---|
-| End users | "Mention the bot, get an agent." Zero friction; works anywhere chat works. |
-| Platform admins | Declarative bot definitions, sandbox profiles, network isolation, resource quotas — managed via DB records and Kubernetes CRDs. |
-| Agent authors | The full opencode tool surface inside a clean, disposable sandbox. |
+| Agent authors | Define a capable OpenCode agent once, version it, and invoke it from many event sources. |
+| Integration authors | Add triggers and result destinations through small, stable connector contracts. |
+| Platform operators | Run agents with explicit quotas, identities, credentials, network policy, retention, and auditability. |
+| Application teams | Turn operational and development events into asynchronous, observable agent work without owning agent infrastructure. |
+| End users | Receive useful results where work already happens: GitHub, Grafana, chat, ticketing systems, or APIs. |
 
----
+### 1.2 Non-goals
 
-## 2. Building Blocks
+Agentbay is not:
 
-agentbay stands on three projects. Understanding their roles is non-negotiable.
+- A new agent runtime. OpenCode owns the agent loop and native agent configuration.
+- A general-purpose workflow engine. Agentbay may integrate with one when durable multi-stage workflows justify it.
+- A chat bot framework. Chat is an integration, not the architecture.
+- A Kubernetes operator as its primary product API. Users reason about events, agents, and executions, not Pods.
+- A source of truth for secrets. It references credentials managed by a secret manager or workload identity system.
+- An exactly-once distributed system. It provides effective-once behavior on top of at-least-once delivery.
 
-| Layer | Project | Role |
-|---|---|---|
-| Chat I/O | [`chat`](https://chat-sdk.dev) (Vercel Chat SDK) | Unified TS interface for Slack, GitHub, Linear, Discord, Teams, Google Chat, Telegram, WhatsApp. Handles webhooks, threads, streaming, dedupe, state. |
-| Sandbox | [`kubernetes-sigs/agent-sandbox`](https://github.com/kubernetes-sigs/agent-sandbox) | Four CRDs (`Sandbox`, `SandboxTemplate`, `SandboxWarmPool`, `SandboxClaim`) for managing isolated, stateful, singleton Pods on Kubernetes. |
-| Agent runtime | [`anomalyco/opencode`](https://github.com/anomalyco/opencode) + [`@opencode-ai/sdk`](https://www.npmjs.com/package/@opencode-ai/sdk) | Headless AI coding agent with HTTP/SSE API. Runs as a server inside the sandbox. Driven via the SDK from outside. |
+## 2. Guiding Principles
 
-### What we write
+1. **Events are inputs, not conversations.** A conversation may emit events, but no chat-specific abstraction belongs in the execution core.
+2. **Executions are durable records, not handler calls.** Every accepted invocation remains inspectable and recoverable across process failures.
+3. **Profiles are immutable capability definitions.** Every execution resolves an exact profile version and records the resolved configuration.
+4. **Triggers and destinations are connectors around a stable core.** Adding an integration must not modify sandbox or OpenCode orchestration.
+5. **Ingress is fast and asynchronous.** A webhook is authenticated, persisted, deduplicated, and acknowledged without waiting for a Pod.
+6. **Delivery is at least once and idempotent.** Source events, executions, and result deliveries have stable idempotency keys.
+7. **Kubernetes supplies isolation and elasticity, not business-state persistence.** Postgres and the durable bus own workflow state.
+8. **Every execution is bounded.** It has a timeout, resource limits, cancellation semantics, retention policy, and attributable owner.
+9. **Bindings may reduce capability but never expand it.** Profile policy is an upper bound.
+10. **Workspace preparation is deterministic platform work.** Repository checkout, artifact materialization, and credentials are not delegated to prompts.
+11. **Observability is part of the product.** Queue time, provisioning, model use, tool calls, outputs, and delivery are visible per execution.
+12. **Scale is controlled, not accidental.** Queue depth does not translate directly into unbounded Pod creation.
 
-A single TypeScript service — the **orchestrator** — that:
-1. Runs Chat SDK adapters and receives webhooks.
-2. Maps incoming chat events to `SandboxClaim` operations (create, lookup, delete) on the cluster.
-3. Drives each Pod's opencode server via `@opencode-ai/sdk/client`.
-4. Streams responses back into chat threads.
+## 3. Domain Model
 
-That's it. There is no agent code, no sandbox controller, no chat adapter to maintain.
-
----
-
-## 3. High-Level Architecture
-
-```diagram
-╭─────────────────────────────────────────────────────────────────────────────╮
-│                          External Chat Platforms                             │
-│              Slack · GitHub · Linear · Discord · Teams · …                   │
-╰────────────────────────────────────┬────────────────────────────────────────╯
-                                     │ webhooks (HTTPS)
-                                     ▼
-╭─────────────────────────────────────────────────────────────────────────────╮
-│                        agentbay Orchestrator (TS)                            │
-│                                                                              │
-│  ╭────────────────╮   ╭──────────────────╮   ╭──────────────────────────╮   │
-│  │  Chat SDK      │──▶│  Bot / Runtime    │──▶│  Sandbox Manager         │   │
-│  │  (all adapters)│   │  Resolver         │   │  (k8s client)            │   │
-│  ╰───────┬────────╯   ╰──────────────────╯   ╰────────────┬─────────────╯   │
-│          │                                                 │                 │
-│          │ thread.post(stream)                             │ create/get/del  │
-│          │                                                 │ SandboxClaim    │
-│          ▲                                                 ▼                 │
-│  ╭───────┴──────────────────────────────────────────────────────────────╮   │
-│  │  opencode SDK client                                                  │   │
-│  │  • session.create / .prompt / .abort                                  │   │
-│  │  • event.subscribe (SSE → AsyncIterable<string>)                      │   │
-│  ╰─────────────────────────────────┬─────────────────────────────────────╯   │
-╰────────────────────────────────────┼────────────────────────────────────────╯
-                                     │ HTTP/SSE        │ k8s API
-                                     ▼                 ▼
-                ╭────────────────────────────╮  ╭──────────────────╮
-                │  Sandbox Pod (one of many) │  │  kube-apiserver  │
-                │  ╭──────────────────────╮  │  │  + agent-sandbox │
-                │  │ opencode serve       │  │  │   controllers    │
-                │  │  --hostname 0.0.0.0  │  │  ╰─────────┬────────╯
-                │  │  --port 4096         │  │            │ creates
-                │  │ working-dir:         │  │            ▼
-                │  │  /workspace/<repo>   │  │     SandboxClaim
-                │  │ SQLite at PVC mount  │  │      → Sandbox
-                │  ╰──────────────────────╯  │       → Pod
-                ╰────────────────────────────╯
-```
-
----
-
-## 4. Component Responsibilities
-
-### 4.1 Chat SDK Layer
-
-- **One `Chat` instance per bot as needed**, with adapters registered using that bot's secret references. This is required for platforms such as Telegram where the adapter credential is the bot identity.
-- One handler per relevant event: `onNewMention`, `onSubscribedMessage`, `onDirectMessage`, optionally `onSlashCommand` and `onAction` for control surfaces (e.g., a "stop" button).
-- Webhooks are mounted under an explicit bot path: `/agents/:botSlug/webhooks/:adapter`. There is no implicit global bot and no `/webhooks/:adapter` fallback in the target architecture.
-- **State**: persisted via a state adapter (Redis or equivalent) keyed by thread.
-- **Per-thread state shape** (stored via `thread.setState`):
-  ```ts
-  type ThreadState = {
-    botID: string            // chat-facing bot definition used by this thread
-    sandboxProfileID: string // sandbox/runtime boundary selected at thread start
-    agentProfileID: string   // agentbay selectable profile pointing to an opencode agent
-    opencodeConfigID: string // injected opencode config document
-    opencodeConfigHash: string
-    opencodeAgentName: string
-    claimName: string        // SandboxClaim.metadata.name
-    podFQDN: string          // headless service FQDN of the sandbox pod
-    sessionID: string        // opencode session id
-    password: string         // per-claim opencode server password
-    createdAt: string        // ISO8601
-  }
-  ```
-
-### 4.2 Bot / Runtime Resolver
-
-- A **Bot** is the chat-facing identity addressed by webhook path, e.g. `/agents/clusterbot/webhooks/slack`.
-- A **SandboxProfile** is the cluster/runtime boundary: which `SandboxTemplate` to claim and which warm pool to use. In alpha this is intentionally minimal: `templateName`, `warmpool`, and `enabled`.
-- An **OpencodeConfig** is the JSON document injected as `OPENCODE_CONFIG_CONTENT`. It includes opencode-native agent definitions under `agent`, plus model/provider/MCP/tool/permission settings.
-- An **AgentProfile** is agentbay metadata that points to one named opencode agent inside an `OpencodeConfig`. It does not duplicate prompt/model/tools; opencode owns those fields.
-- A **Bot** binds one `SandboxProfile`, one default `AgentProfile`, and an allowed set of `AgentProfile`s.
-- First message in a thread resolves bot/runtime in this order:
-  1. Resolve `botSlug` from `/agents/:botSlug/webhooks/:adapter`.
-  2. Load the bot's `SandboxProfile`.
-  3. Resolve the `AgentProfile` from bot policy; alpha uses the bot default unless explicit selection is added later.
-  4. Load the referenced `OpencodeConfig` and selected `opencodeAgentName`.
-  5. Persist the resolved IDs and config hash in thread state.
-- Subsequent messages reuse the thread's stored bot/runtime. They do not re-resolve based on sender. Alpha security warning: anyone who can post in a thread can interact with that thread's sandbox and inherits its selected runtime capability.
-
-### 4.3 Sandbox Manager
-
-- Wraps `@kubernetes/client-node`.
-- Single ServiceAccount with RBAC scoped to `sandboxclaims` (verbs: `create`, `get`, `list`, `watch`, `delete`) in tenant namespaces.
-- Operations:
-  - `claimFor(thread, runtime) → { claimName, podFQDN, password }`
-    - Computes a deterministic claim name from `thread.id` (e.g. `sha256(thread.id)[:16]`).
-    - Checks if the claim already exists; if so, returns its current details.
-    - Otherwise creates the claim with the `SandboxProfile` template/warm-pool, per-claim auth env vars, injected opencode config, and lifecycle.
-    - Watches until `status.conditions[Ready]=True`; reads `status.sandbox.podIPs[]` / serviceFQDN.
-  - `releaseClaim(claimName)` — explicit deletion (used on stop commands).
-  - **Reconciler loop** — periodically lists `SandboxClaim`s, cross-checks Chat SDK state, deletes orphans.
-
-### 4.4 opencode SDK Client
-
-- For each thread interaction, build a client targeted at the Pod:
-  ```ts
-  const client = createOpencodeClient({
-    baseUrl: `http://${podFQDN}:4096`,
-    headers: { Authorization: `Basic ${b64("opencode:" + password)}` },
-    directory: "/workspace",
-  })
-  ```
-- **First mention in a thread**:
-  1. `session.create()`
-  2. Persist `sessionID` and resolved runtime IDs in thread state
-  3. `event.subscribe()` and translate to `AsyncIterable<string>` for `thread.post(stream)`
-  4. `session.promptAsync()` with `agent: opencodeAgentName` and user message
-- **Subsequent messages**: skip `session.create`; reuse `sessionID` and pass the stored `opencodeAgentName` on each prompt.
-- The orchestrator does not prepend its own system prompt in the target design. The selected opencode agent's `prompt`, `model`, `tools`, and `permission` config are authoritative.
-
----
-
-## 5. End-to-End Flow
-
-### 5.1 First mention in a new thread
-
-```diagram
-User                Chat Platform     Orchestrator        kube-apiserver       Sandbox Pod
- │  "@bot do X"        │                   │                    │                    │
- ├────────────────────▶│                   │                    │                    │
- │                     ├──webhook─────────▶│                    │                    │
- │                     │                   │ resolve runtime    │                    │
- │                     │                   ├─claim.create──────▶│                    │
- │                     │                   │                    ├─schedule pod──────▶│ (warm or cold)
- │                     │                   │ watch Ready        │                    │
- │                     │                   │◀───status: Ready───┤                    │
- │                     │                   │ openClient(pod)    │                    │
- │                     │                   ├─session.create────────────────────────▶│
- │                     │                   │◀──sessionID────────────────────────────┤
- │                     │                   ├─event.subscribe (SSE)──────────────────▶│
- │                     │                   │ thread.setState({botID, agentProfileID, sessionID})│
- │                     │                   ├─promptAsync(agent+msg)──────────────────▶│
- │                     │   "spinning up…"  │                                         │
- │                     │◀──post(stream)────┤◀────message.part.updated (delta)────────┤
- │◀────token stream────┤                   │                                         │
- │                     │                   │◀────session.idle────────────────────────┤
- │                     │                   │ stream.close()                          │
-```
-
-### 5.2 Subsequent mention in the same thread
-
-```diagram
-User                Chat Platform     Orchestrator        Sandbox Pod
- │  "@bot also Y"      │                   │                    │
- ├────────────────────▶│                   │                    │
- │                     ├──webhook─────────▶│                    │
- │                     │                   │ thread.getState()  │
- │                     │                   │ openClient(podFQDN)│
- │                     │                   ├─session.status────▶│
- │                     │                   │◀──{type:"idle"}────┤
- │                     │                   ├─promptAsync(sessionID, agent)▶│
- │                     │   stream tokens   │◀──SSE deltas───────┤
- │◀────token stream────┤◀──────────────────┤                    │
-```
-
-### 5.3 Cleanup
-
-- **Soft expiry**: `claim.spec.lifecycle.ttlSecondsAfterFinished = 1800` — opencode session ends → pod marked finished → cleaned up after TTL.
-- **Hard cap**: `claim.spec.lifecycle.shutdownTime` set on creation (e.g. now + 4h) — absolute upper bound.
-- **Explicit**: a `/agent stop` slash command, or `onAction` from a "Stop" button on a status card → `releaseClaim()`.
-- **Reconciler**: periodic sweep deletes claims whose Chat SDK thread has been inactive beyond the policy.
-
----
-
-## 6. Configuration Model
-
-The old single `Profile` concept is superseded by four explicit records. This keeps cluster/runtime policy separate from opencode-native agent behavior.
-
-### 6.1 Bot
-
-Chat-facing identity and webhook target.
-
-```ts
-type Bot = {
-  id: string
-  slug: string                 // used in /agents/:botSlug/webhooks/:adapter
-  displayName: string
-  adapters: {
-    telegram?: {
-      botTokenEnv?: string      // env var containing this Telegram bot token
-      secretTokenEnv?: string   // env var containing this webhook secret token
-      userName?: string
-    }
-  }
-  sandboxProfileID: string
-  defaultAgentProfileID: string
-  enabled: boolean
-}
-```
-
-There is no global default bot. A webhook request without a valid `botSlug` is rejected before adapter processing/provisioning.
-
-### 6.2 SandboxProfile
-
-Cluster/runtime boundary. This is admin-owned and intentionally small in alpha.
-
-```ts
-type SandboxProfile = {
-  id: string
-  slug: string
-  templateName: string         // SandboxTemplate.metadata.name
-  warmpool: "default" | "none" | (string & {})
-  enabled: boolean
-}
-```
-
-Future versions may add policy fields such as allowed models, tools, MCP servers, env keys, PVC classes, and permission bounds. Alpha defers that policy engine and relies on `SandboxTemplate`, RBAC, network policy, image contents, and injected secrets as the hard boundary.
-
-### 6.3 OpencodeConfig
-
-Mutable JSON document injected into the sandbox as `OPENCODE_CONFIG_CONTENT`.
-
-```ts
-type OpencodeConfigRecord = {
-  id: string
-  slug: string
-  displayName: string
-  config: Record<string, unknown>
-  configHash: string
-  updatedAt: string
-  enabled: boolean
-}
-```
-
-The document is opencode-native. Agent definitions live in `config.agent.<name>` and may specify `prompt`, `model`, `tools`, `permission`, `mode`, temperature/options, MCP, providers, and other opencode settings.
-
-### 6.4 AgentProfile
-
-Selectable agentbay metadata that points to a named opencode agent inside an `OpencodeConfig`.
-
-```ts
-type AgentProfile = {
-  id: string
-  slug: string
-  displayName: string
-  opencodeConfigID: string
-  opencodeAgentName: string
-  claimEnv: Array<{ name: string, valueFromEnv: string }>
-  enabled: boolean
-}
-```
-
-`AgentProfile` does not duplicate system prompt/model/tool fields. The referenced opencode agent definition is the source of truth. `claimEnv` stores env-var references only; secret values stay in the orchestrator environment and are resolved when creating a `SandboxClaim`.
-
-### 6.5 Bot-Agent Allow List
-
-Bots bind a sandbox profile and an allowed set of agent profiles.
-
-```ts
-type BotAgentProfile = {
-  botID: string
-  agentProfileID: string
-}
-```
-
-Alpha uses `bot.defaultAgentProfileID`. Later milestones can resolve different allowed agent profiles by principal, channel, repo, slash command, or interactive selection.
-
-### 6.6 Thread → Runtime Mapping
-
-This dynamic mapping is stored through Chat SDK state.
+The core path is:
 
 ```text
-slack:T012345/C0XXX/1731XXXXXX  → { botID, sandboxProfileID, agentProfileID, opencodeConfigID, claimName, podFQDN, sessionID }
-github:owner/repo/PR#142        → { botID, sandboxProfileID, agentProfileID, opencodeConfigID, claimName, podFQDN, sessionID }
+Event -> Trigger -> Binding -> Execution -> Result -> Destination
 ```
 
-Thread state is sticky. The initiating message selects the runtime; subsequent messages reuse it. If `opencodeConfigHash` changes while a thread is active, alpha behavior should restart the sandbox/session before continuing so the new injected config is applied deterministically.
+### 3.1 AgentProfile
 
+A versioned, immutable definition of an agent and the maximum capabilities it may receive. It contains native OpenCode configuration plus execution policy such as image, resources, timeout, workspace access, connection allow-list, network class, permission policy, and retention.
+
+Changing a profile creates a new version. Existing executions continue to reference the original version.
+
+### 3.2 Connection
+
+A named reference to an external service identity or credential policy, for example `github-production`, `grafana-readonly`, or `anthropic-team-a`. Connections describe how a connector or execution obtains short-lived access. They never contain secrets in exported profile or binding documents.
+
+### 3.3 Trigger
+
+A configured instance of an event connector. It defines the connector type, source-specific configuration, authentication policy, and connection references. Examples include a GitHub App webhook, a Grafana alert webhook, a cron schedule, or an SQS subscription.
+
+### 3.4 Binding
+
+Connects a trigger to an agent profile and defines:
+
+- Event type and filtering
+- Input transformation or prompt template
+- Workspace materialization
+- Exact profile or version-selection policy
+- Concurrency, deduplication, priority, timeout, and retry policy
+- Capability reductions
+- Result destinations
+
+Bindings are configuration, not execution history.
+
+### 3.5 Event
+
+An immutable, normalized input represented with a CloudEvents envelope. Agentbay retains source identity, normalized data, deduplication information, and a reference to the raw source payload when required.
+
+One source delivery may normalize into zero, one, or multiple events. One event may match multiple bindings and therefore produce multiple executions.
+
+### 3.6 Execution
+
+The durable record of one agent invocation. It records the event, binding, exact profile version, resolved policy, state transitions, attempts, Kubernetes workload, OpenCode session, usage, costs, artifacts, and final result.
+
+Execution is the primary unit of scheduling, isolation, cancellation, retry, auditing, and billing.
+
+### 3.7 Workspace
+
+The deterministic file and context environment materialized for an execution. A workspace may come from an empty directory, Git revision, object-storage archive, previous execution snapshot, or persistent project workspace.
+
+### 3.8 Result
+
+A structured execution outcome independent of any destination. It may include a human-readable summary, status, annotations, proposed patch, machine-readable findings, usage, and artifact references.
+
+### 3.9 Destination
+
+A configured result connector such as a GitHub Check, pull-request comment, Grafana incident note, Slack message, generic webhook, ticket, queue, or object-storage location.
+
+Deliveries are durable records with retry and dead-letter behavior separate from execution success.
+
+### 3.10 Tenant
+
+The ownership and policy boundary for profiles, connections, triggers, bindings, executions, quotas, and costs. Even if the first release is single-tenant, all durable records should carry `tenant_id` so multi-tenancy does not require redesigning identity and scheduling.
+
+## 4. Example Configuration
+
+The eventual API may use JSON, YAML, or a UI. This example illustrates semantics rather than committing to a wire schema.
+
+```yaml
+kind: AgentProfile
+metadata:
+  name: security-reviewer
+spec:
+  runtime:
+    type: opencode
+    image: ghcr.io/acme/agent-runtime:v4
+    agent: review
+    opencodeConfig:
+      model: anthropic/claude-sonnet
+      agent:
+        review:
+          prompt: |
+            Review the supplied change for security and correctness.
+            Report concrete findings with file and line references.
+          tools:
+            write: false
+          permission:
+            bash: ask
+  resources:
+    requests: { cpu: "1", memory: 2Gi }
+    limits: { cpu: "4", memory: 8Gi }
+  timeout: 30m
+  capabilities:
+    connections:
+      - github-production-readonly
+    networkClasses:
+      - source-control
+    workspace:
+      write: true
+  permissions:
+    default: deny
+    rules:
+      - operation: read
+        decision: allow
+      - operation: shell
+        decision: approve
+  retention:
+    logs: 30d
+    workspace: 24h
 ---
-
-## 7. Data & Control Plane Boundaries
-
-| Responsibility | Lives in |
-|---|---|
-| Bots, sandbox profiles, agent profiles, opencode config docs | Orchestrator DB |
-| Pod spec, image, network policy | `SandboxTemplate` (admin-owned) |
-| Per-tenant quotas | `ResourceQuota` on the tenant namespace |
-| Pre-warming | `SandboxWarmPool` (admin-owned, optional) |
-| Per-session secrets (opencode password, model API keys) | Injected via `claim.spec.env` (template policy: `Allowed`) |
-| Per-thread session continuity | Chat SDK state + opencode SQLite |
-| Conversation history | opencode SQLite (PVC-backed for durability) |
-| Streaming protocol | opencode SSE (`/event`) |
-
----
-
-## 8. Key Design Decisions and Trade-offs
-
-### D1. The Chat SDK webhook handler **is** the API.
-We do not build a separate REST API for sandbox management. The chat platforms are the entry points; the orchestrator is a webhook server. This collapses two services into one and inherits per-platform identity, threading, dedupe, and streaming for free.
-
-### D2. One opencode server per Pod, one Pod per thread.
-- ✅ Matches user mental model ("the agent is in this thread").
-- ✅ Sandbox is already singleton — no impedance mismatch.
-- ✅ Permission/network blast radius is one conversation.
-- ⚠️ Cannot fan out parallel prompts in the same thread; check `session.status` before issuing.
-- ⚠️ Long-running threads consume a Pod for their lifetime. Mitigated by TTL + reconciler.
-
-### D3. Always go through `SandboxClaim`, never `Sandbox` directly.
-This preserves the admin's `SandboxTemplate` policy (network, env injection, resource limits). The orchestrator's RBAC should *not* grant create on `Sandbox`.
-
-### D4. opencode in headless `serve` mode, not embedded.
-- ✅ Strong process isolation: agent crash ≠ orchestrator crash.
-- ✅ Single, stable HTTP/SSE contract.
-- ✅ Sandbox network policy is enforced naturally (orchestrator → Pod is the only allowed ingress path).
-- ⚠️ Requires HTTP roundtrips for every interaction (negligible inside a cluster).
-
-### D5. Session continuity = opencode `sessionID` + Chat SDK `thread.setState`.
-- ✅ No custom persistence layer.
-- ⚠️ If the Pod dies (eviction, expiry) before the thread ends, `sessionID` is invalid. Two options:
-  - **PVC-backed SQLite** per thread (mount `~/.opencode` at a `volumeClaimTemplates` entry).
-  - **Summary fallback**: store an opencode-generated summary in thread state; seed a fresh session with it on resume.
-  - We will start with the **summary fallback** (simpler) and add PVCs only if it proves insufficient.
-
-### D5b. opencode config is injected per claim and enforced.
-- The orchestrator forwards LLM provider credentials from its **own** environment into each `SandboxClaim.spec.env` through `AgentProfile.claimEnv` references, without storing secret values in the database.
-- The resolved `OpencodeConfig` JSON is injected as `OPENCODE_CONFIG_CONTENT`. It contains the named opencode agent definitions that `AgentProfile` records point to.
-- On every prompt, the orchestrator passes `agent: opencodeAgentName` to `session.promptAsync()`. opencode's agent config owns prompt/model/tools/permission behavior.
-- In opencode's config merge order this injected layer sits **above** any `opencode.json` or `.opencode/` directory shipped inside the repo checked out into the sandbox, so a workspace cannot silently override the platform's chosen agent config.
-- For absolute cluster-wide overrides (e.g. blocking certain providers regardless of bot/agent config), an admin can mount a ConfigMap at `/etc/opencode/opencode.json` via the `SandboxTemplate`; that managed-path config wins over `OPENCODE_CONFIG_CONTENT`.
-
-### D6. Authentication is per-claim shared secret.
-- Generated by the orchestrator on claim creation, injected via `claim.spec.env.OPENCODE_SERVER_PASSWORD`, stored in Chat SDK thread state.
-- Cluster network policy already restricts who can reach the Pod; the password is defense in depth.
-- This requires `SandboxTemplate.spec.envVarsInjectionPolicy: Allowed`.
-
-### D7. Warm pools are an optimization, not a requirement.
-- First implementation: every claim is cold (`warmpool: "none"`). Cold start ≈ pull image + start opencode ≈ a few seconds. We post a "spinning up…" message and edit it.
-- Second iteration: introduce a `SandboxWarmPool` per popular `SandboxProfile` once latency complaints arise.
-
-### D8. No wrapper CRD / operator (yet).
-A custom CRD that translates to `SandboxClaim` would add an operator to the system and a Kubernetes-shaped API surface. We don't need it: chat is the API. Revisit only if a non-chat consumer of agent provisioning emerges.
-
-### D9. Alpha binds capability to thread, not principal.
-- Alpha deliberately reuses one sandbox/session for a chat thread, following the runtime selected by the initiating message.
-- This is not a complete security boundary. Anyone who can post in the thread can interact with the existing sandbox and its selected opencode agent.
-- Privileged bots should be used in DMs or restricted channels until principal-bound sessions, approval flows, or per-message authorization are added.
-
-### D10. SandboxProfile policy bounding is deferred.
-- The model keeps `SandboxProfile` as the place where policy bounds will live, but alpha only stores `templateName`, `warmpool`, and `enabled`.
-- We rely on Kubernetes objects (`SandboxTemplate`, RBAC, network policy, image contents, Secrets) for the hard boundary in alpha.
-- Future policy validation can reject opencode configs that exceed the sandbox profile's allowed models, tools, MCP servers, permission rules, env keys, or storage/network classes.
-
----
-
-## 9. Repository Layout (proposed)
-
+kind: Binding
+metadata:
+  name: review-new-pull-requests
+spec:
+  trigger:
+    ref: engineering-github
+    eventTypes:
+      - com.github.pull_request.opened
+      - com.github.pull_request.synchronize
+    filter:
+      repositories:
+        - acme/*
+  agent:
+    profile: security-reviewer
+    version: latest
+  input:
+    template: |
+      Review pull request {{ event.data.repository.fullName }}#{{ event.data.number }}.
+      Head revision: {{ event.data.headSha }}.
+  workspace:
+    provider: git
+    connection: github-production-readonly
+    repository: "{{ event.data.repository.cloneUrl }}"
+    revision: "{{ event.data.headSha }}"
+  execution:
+    timeout: 30m
+    priority: normal
+    concurrencyKey: "{{ event.data.repository.fullName }}:{{ event.data.number }}"
+    supersede: older
+    retries: 2
+  destinations:
+    - type: github.check
+      connection: github-production
+    - type: github.comment
+      connection: github-production
+      when: failed
 ```
-agentbay/
-├── DESIGN.md                       ← this file
-├── README.md                       ← quickstart for ops
-├── package.json
-├── tsconfig.json
-├── src/
-│   ├── index.ts                    ← bootstrap: build Chat, register handlers, start http
-│   ├── config.ts                   ← env parsing
-│   ├── runtime/
-│   │   ├── store.ts                ← DB-backed bot/runtime/config lookup
-│   │   ├── resolver.ts             ← botSlug + thread/message → resolved runtime
-│   │   └── types.ts                ← Bot, SandboxProfile, OpencodeConfig, AgentProfile
-│   ├── chat/
-│   │   ├── handlers.ts             ← onNewMention, onSubscribedMessage, …
-│   │   └── webhooks.ts             ← /agents/:botSlug/webhooks/:adapter route wiring
-│   ├── sandbox/
-│   │   ├── client.ts               ← @kubernetes/client-node setup
-│   │   ├── manager.ts              ← claimFor(), releaseClaim()
-│   │   ├── reconciler.ts           ← periodic orphan sweep
-│   │   └── naming.ts               ← deterministic claim names from thread ids
-│   ├── agent/
-│   │   ├── client.ts               ← per-claim opencode client factory
-│   │   ├── runner.ts               ← prompt → SSE → AsyncIterable<string>
-│   │   └── config.ts               ← opencode config injection helpers
-│   └── state/
-│       └── adapter.ts              ← Redis state adapter wiring
-├── deploy/
-│   ├── orchestrator.yaml           ← Deployment + Service + ServiceAccount
-│   ├── rbac.yaml                   ← Role/RoleBinding for SandboxClaim
-│   └── examples/
-│       ├── sandbox-template.yaml   ← reference SandboxTemplate
-│       └── warmpool.yaml           ← reference SandboxWarmPool
-└── .agents/skills/
-    ├── using-agent-sandbox/        ← already exists
-    └── chat-sdk/                   ← already exists
+
+## 5. High-Level Architecture
+
+```mermaid
+flowchart TB
+    subgraph Sources[Event Sources]
+        GitHub[GitHub]
+        Grafana[Grafana]
+        Chat[Chat Platforms]
+        Cron[Schedules]
+        Generic[Generic Webhooks]
+        ExternalQueue[External Queues]
+    end
+
+    subgraph Connectors[Trigger Connectors]
+        Push[Push Connectors]
+        Pull[Polling Connectors]
+        Subscription[Subscription Connectors]
+        Scheduler[Scheduler]
+    end
+
+    subgraph Control[Agentbay Control Plane]
+        Ingress[Event Admission]
+        Normalize[Normalize and Validate]
+        Match[Binding Matcher]
+        Planner[Execution Planner]
+        API[Management API and UI]
+        Store[(Postgres)]
+        Outbox[Transactional Outbox]
+    end
+
+    Bus[(Durable Event Bus)]
+    Objects[(Object Storage)]
+    Secrets[Secret Manager and Workload Identity]
+
+    subgraph Execution[Agentbay Execution Plane]
+        Dispatcher[Dispatcher]
+        Admission[Quota and Policy Admission]
+        Workspace[Workspace Provisioner]
+        Sandbox[SandboxClaim or Job]
+        OpenCode[OpenCode Runtime]
+        Collector[Result Collector]
+    end
+
+    subgraph Results[Destination Connectors]
+        GitHubResult[GitHub Checks and Comments]
+        GrafanaResult[Grafana Incident Notes]
+        ChatResult[Chat Messages]
+        WebhookResult[Webhooks]
+        QueueResult[Queues]
+    end
+
+    Sources --> Connectors --> Ingress
+    Ingress --> Normalize --> Match --> Planner
+    API --> Store
+    Normalize --> Store
+    Match --> Store
+    Planner --> Store
+    Planner --> Outbox --> Bus
+    Bus --> Dispatcher --> Admission
+    Admission --> Workspace --> Sandbox --> OpenCode --> Collector
+    Secrets --> Connectors
+    Secrets --> Sandbox
+    Workspace <--> Objects
+    Collector --> Store
+    Collector --> Objects
+    Collector --> Bus
+    Bus --> Results
 ```
 
----
+## 6. Control Plane
 
-## 10. Implementation Roadmap
+The control plane is always available, horizontally scalable, and inexpensive relative to agent execution. It must never hold an inbound webhook open while Kubernetes provisions work.
 
-Each milestone is independently demoable.
+### 6.1 Event admission
 
-### M1 — Hello sandbox (no chat)
-- Stand up the cluster, install `agent-sandbox` CRDs and controllers.
-- Hand-write a `SandboxTemplate` with an opencode image.
-- From a local script, create a `SandboxClaim`, wait for Ready, hit `GET /global/health` on the Pod via port-forward.
-- **Deliverable:** proof that we can drive opencode in a sandbox at all.
+Admission performs the following transaction boundary:
 
-### M2 — Hello orchestrator (one platform, hardcoded runtime)
-- TS service with `@kubernetes/client-node` + `@opencode-ai/sdk` + Chat SDK with **only Slack adapter**.
-- One bot, one sandbox profile, one opencode config, one agent profile, hardcoded or seeded.
-- Webhook path includes bot slug: `/agents/:botSlug/webhooks/slack`.
-- `onNewMention` creates a claim, opens a session, prompts, streams response.
-- No state persistence yet (one-shot per mention; new claim every time).
-- **Deliverable:** mention the bot in Slack, get an opencode-driven answer.
+1. Identify the configured trigger from the ingress URL or subscription.
+2. Authenticate and authorize the source.
+3. Apply payload limits and reject malformed input.
+4. Preserve the raw payload in object storage when retention policy requires it.
+5. Normalize the source delivery into CloudEvents.
+6. Derive and persist source deduplication keys.
+7. Acknowledge accepted push requests quickly, normally with `202 Accepted`.
 
-### M3 — Thread continuity
-- Wire Redis state adapter.
-- Persist resolved runtime IDs plus `{claimName, podFQDN, sessionID, password}` in thread state.
-- `onSubscribedMessage` reuses the same sandbox + session.
-- Add TTL + reconciler.
-- **Deliverable:** multi-turn conversation in a single sandbox.
+Connectors must not launch workloads directly.
 
-### M4 — DB-backed bots and opencode agents
-- Add GitHub and Linear adapters.
-- DB-backed `Bot`, `SandboxProfile`, `OpencodeConfig`, `AgentProfile`, and bot-agent allow-list records.
-- Inject selected `OpencodeConfig` as `OPENCODE_CONFIG_CONTENT`.
-- Pass selected `opencodeAgentName` to `session.promptAsync()` on every message.
-- Remove global default bot/profile path behavior; all webhooks require `/agents/:botSlug/webhooks/:adapter`.
-- Slash commands for control: `/agent stop`, `/agent status`.
-- **Deliverable:** review-bot on GitHub PRs, triage-bot in Linear, generic chat-bot in Slack — same orchestrator.
+### 6.2 Binding matching
 
-### M5 — Hardening
-- Warm pools for hot sandbox profiles.
-- Per-tenant namespaces and `ResourceQuota`s.
-- Summary-fallback session resume after Pod eviction.
-- Observability: structured logs, metrics on claim age / session duration / cost.
-- Principal-bound sessions, approval flows, or per-message authorization for privileged bots.
-- SandboxProfile policy validation for opencode configs.
-- **Deliverable:** ready to invite real teams.
+The matcher selects enabled bindings by tenant, trigger, event type, and declarative filter. Filters should be deterministic, bounded, and safe to evaluate. A CEL-like expression language is preferable to arbitrary JavaScript.
 
----
+The match result records the binding version used. Later edits do not change already planned work.
 
-## 11. Open Questions (to revisit during implementation)
+### 6.3 Execution planning
 
-1. **Workspace seeding.** When the bot is mentioned on a GitHub PR, who clones the repo into the Pod? Options: an `initContainer` in the template, an early `session.prompt` that invokes git tools, or a pre-baked image per repo. Likely: `initContainer` driven by claim env vars.
-2. **Model API keys.** Inject per-claim (more isolation, harder rotation) or mount a shared Secret into the template (simpler, less isolated)? Default: per-claim via env injection.
-3. **Per-tenant cost accounting.** opencode reports tokens/cost in `StepFinishPart`. Do we aggregate in the orchestrator and emit metrics labeled by chat-workspace?
-4. **Permission UX.** opencode emits `permission.updated` events for tool calls. Auto-allow within the sandbox (it's already isolated) or surface as an interactive Chat SDK card (`Button` with callback)? Default: auto-allow inside the sandbox; the sandbox boundary is the trust boundary.
-5. **Multi-repo / multi-workspace per thread.** Out of scope for v1. One thread = one working directory = one Pod.
-6. **Config update semantics.** Alpha restarts active sandboxes when the selected `OpencodeConfig` hash changes. Later, can we safely patch opencode config live for some fields and avoid restarts?
-7. **Agent selection UX.** Alpha uses each bot's default agent profile. Later, should agent selection happen through slash commands, buttons/selects, principal policy, channel/repo policy, or all of the above?
-8. **Policy bounds.** Which `SandboxProfile` policy fields are worth enforcing first: model allow-list, tool allow-list, MCP allow-list, env-key allow-list, permission ceiling, storage class, or network class?
+For each match, the planner:
 
----
+1. Resolves an exact immutable agent profile version.
+2. Validates binding restrictions against the profile's capability ceiling.
+3. Renders bounded input and workspace templates from normalized event data.
+4. Computes idempotency and concurrency keys.
+5. Applies supersession and coalescing rules.
+6. Creates the execution and initial state transition in Postgres.
+7. Writes an execution-request message to the transactional outbox in the same transaction.
 
-## 12. Glossary
+An outbox publisher moves committed messages to the durable bus. This prevents a committed execution from being lost between database insertion and queue publication.
+
+### 6.4 Management API
+
+The management API is separate from trigger ingress. Its conceptual resources are:
+
+```text
+/v1/agent-profiles
+/v1/agent-profiles/:id/versions
+/v1/connections
+/v1/triggers
+/v1/bindings
+/v1/executions
+/v1/executions/:id/events
+/v1/executions/:id/logs
+/v1/executions/:id/artifacts
+/v1/executions/:id/cancel
+/v1/executions/:id/retry
+/v1/destinations
+```
+
+An explicit `POST /v1/executions` invocation API is required. It supports CLIs, CI systems, tests, and services that do not need a dedicated trigger connector.
+
+Trigger ingress is connector-specific:
+
+```text
+/hooks/github/:triggerID
+/hooks/grafana/:triggerID
+/hooks/chat/:triggerID
+/hooks/generic/:triggerID
+```
+
+## 7. Canonical Event Model
+
+Agentbay uses the CloudEvents 1.0 envelope. A normalized GitHub event might be:
+
+```json
+{
+  "specversion": "1.0",
+  "id": "github-delivery-8d91f1",
+  "source": "github://acme/platform",
+  "type": "com.github.pull_request.opened",
+  "subject": "pull/482",
+  "time": "2026-07-17T10:14:00Z",
+  "datacontenttype": "application/json",
+  "tenantid": "acme",
+  "data": {
+    "repository": {
+      "owner": "acme",
+      "name": "platform",
+      "fullName": "acme/platform",
+      "cloneUrl": "https://github.com/acme/platform.git"
+    },
+    "number": 482,
+    "action": "opened",
+    "headSha": "abc123"
+  }
+}
+```
+
+Rules for event data:
+
+- Preserve vendor payloads by reference when they are needed for audit or future processing.
+- Normalize stable cross-vendor concepts used by bindings.
+- Keep large logs, archives, and attachments in object storage.
+- Include source timestamps and ingestion timestamps separately.
+- Never treat an event payload as trusted prompt text. Templates must delimit source data and defend against oversized input.
+- Version connector normalization schemas so bindings can migrate deliberately.
+
+## 8. Connector Framework
+
+Adding a trigger or destination must not require changes to execution planning, Kubernetes scheduling, or the OpenCode runner.
+
+### 8.1 Trigger contract
+
+```ts
+interface TriggerConnector<TConfig> {
+  readonly type: string
+  readonly configVersion: number
+
+  validateConfig(config: unknown): TConfig
+
+  authenticate(
+    request: TriggerRequest,
+    config: TConfig,
+  ): Promise<AuthenticatedRequest>
+
+  normalize(
+    request: AuthenticatedRequest,
+    config: TConfig,
+  ): Promise<CloudEvent[]>
+
+  deduplicationKey(event: CloudEvent): string
+}
+```
+
+Trigger modes are:
+
+- **Push:** GitHub webhooks, Grafana alerts, chat events, generic webhooks.
+- **Pull:** Periodically query an external API and checkpoint progress.
+- **Subscription:** Consume Kafka, NATS, SQS, Pub/Sub, or similar systems.
+- **Schedule:** Emit events from cron, interval, or calendar definitions.
+
+Connectors share lifecycle, telemetry, retry, rate-limit, and secret-resolution libraries. They may run in the control-plane process initially. They can become independently deployed workers when isolation or scale requires it; microservices are not the starting assumption.
+
+### 8.2 Destination contract
+
+```ts
+interface DestinationConnector<TConfig> {
+  readonly type: string
+  readonly configVersion: number
+
+  validateConfig(config: unknown): TConfig
+
+  publish(
+    result: ExecutionResult,
+    context: DeliveryContext,
+    config: TConfig,
+  ): Promise<DeliveryResult>
+}
+```
+
+A result may be published to multiple destinations. Destination delivery has its own state, retry policy, idempotency key, and dead-letter handling. A successful agent execution remains successful if a temporary destination outage delays delivery.
+
+### 8.3 Initial connector set
+
+Build connectors in this order:
+
+1. `webhook.generic` trigger and destination
+2. `schedule.cron` trigger
+3. `github.pull_request` and `github.issue` triggers
+4. GitHub Check and comment destinations
+5. `grafana.alert` trigger and incident-note destination
+6. `chat.message` trigger and message destination
+7. Queue connectors selected by deployment environment
+
+The generic webhook is the escape hatch for integrations that do not yet justify a first-class connector.
+
+## 9. Agent Profiles and Policy
+
+### 9.1 Native OpenCode configuration
+
+Agentbay does not re-model OpenCode's evolving configuration schema. A profile contains an OpenCode-native document and selects a named agent. Prompts, models, providers, tools, MCP servers, and agent-specific permissions remain authored in OpenCode terms.
+
+Agentbay wraps that document with platform policy:
+
+- Runtime image and OpenCode version
+- CPU, memory, ephemeral storage, and optional accelerator limits
+- Maximum duration
+- Workspace provider and write policy
+- Allowed connection references
+- Network policy class
+- Model/provider allow-list or cost ceiling
+- Tool and MCP allow-list
+- Permission decisions and approval routing
+- Artifact and log retention
+
+Profile publication validates the native document and the platform policy. A published version is immutable.
+
+### 9.2 Capability intersection
+
+Effective execution capability is the intersection of:
+
+```text
+platform policy
+  AND tenant policy
+  AND profile policy
+  AND binding restrictions
+  AND trigger principal policy
+```
+
+No lower layer may expand capability granted by an upper layer. The fully resolved policy is recorded on the execution for audit and reproducibility.
+
+### 9.3 Permission decisions
+
+OpenCode permission requests are evaluated as:
+
+- `allow`: continue automatically.
+- `deny`: reject the operation and continue or fail according to policy.
+- `approve`: transition to `AWAITING_APPROVAL`, publish an approval request, and resume only after an authorized decision.
+
+There is no blanket auto-approval mode outside explicitly trusted profiles. Approvals may live for hours or days, which is one reason execution state cannot be held only in a process.
+
+## 10. Execution Lifecycle
+
+### 10.1 State machine
+
+The main success path is:
+
+```text
+RECEIVED -> PLANNED -> QUEUED -> PROVISIONING -> RUNNING
+         -> SUCCEEDED -> DELIVERING -> COMPLETED
+```
+
+Control and failure states include:
+
+```text
+RETRY_WAIT
+AWAITING_APPROVAL
+CANCEL_REQUESTED
+CANCELLED
+TIMED_OUT
+FAILED
+DEAD_LETTERED
+```
+
+State transitions are append-only records with timestamp, attempt, actor, reason, and trace context. A materialized current state supports efficient queries, but transition history is authoritative for audit.
+
+Terminal execution states are `COMPLETED`, `CANCELLED`, `TIMED_OUT`, `FAILED`, and `DEAD_LETTERED`. `SUCCEEDED` means agent work completed; `COMPLETED` means required result delivery policy is satisfied.
+
+### 10.2 Attempts and leases
+
+Workers claim executions using time-bounded, fenced leases. Every mutation from an execution worker carries the attempt and fencing token. A worker that loses its lease cannot commit later state, even if it continues running due to a partition.
+
+A retry creates a new attempt under the same execution unless policy explicitly creates a new execution. Attempt-specific artifacts and logs remain distinguishable.
+
+### 10.3 Idempotency and effective-once behavior
+
+Exactly-once behavior is not assumed across webhooks, databases, queues, Kubernetes, and external APIs. Agentbay uses:
+
+- Unique source-delivery keys
+- Unique event IDs per source
+- Binding and event execution keys
+- Idempotent state transitions
+- Transactional outbox publication
+- Fenced worker leases
+- Kubernetes resource names derived from execution and attempt IDs
+- Idempotent destination delivery keys
+- Connector-specific replay protection
+
+### 10.4 Concurrency, supersession, and coalescing
+
+Bindings may specify a `concurrencyKey`. Policy can:
+
+- Queue all executions in order
+- Reject while another execution is active
+- Keep only the newest event
+- Supersede and cancel older executions
+- Coalesce multiple events into one pending execution
+
+For example, a new pull-request commit should usually supersede a queued review of an older SHA, while an already published review remains historical.
+
+### 10.5 Cancellation and timeout
+
+Cancellation is cooperative first and destructive second:
+
+1. Persist `CANCEL_REQUESTED`.
+2. Abort the OpenCode session if reachable.
+3. Allow a short cleanup period for artifacts.
+4. Delete or terminate the Kubernetes workload.
+5. Persist `CANCELLED` with the actor and reason.
+
+Timeout follows the same path but terminates as `TIMED_OUT`. Control-plane reconciliation guarantees cleanup if a worker crashes during cancellation.
+
+## 11. Execution Plane
+
+### 11.1 Dispatcher
+
+Dispatchers consume execution requests, acquire leases, enforce admission policy, choose an execution cluster, and create workloads. They scale from queue depth but are also bounded by database-backed and cluster-backed quotas.
+
+Routing inputs include:
+
+- Tenant and priority
+- Data residency
+- Required architecture or accelerator
+- Network policy class
+- Workspace locality
+- Profile image availability
+- Cluster health and capacity
+
+### 11.2 Kubernetes workload model
+
+The default is one isolated sandbox per execution.
+
+- Use `SandboxClaim` when agent-sandbox provides valuable lifecycle, warm-pool, stateful workspace, and isolation behavior.
+- Permit ordinary Kubernetes Jobs for simple stateless profiles if they are a better operational fit.
+- Never create workloads directly from ingress handlers.
+- Never use Kubernetes objects as the only execution database.
+
+Each workload receives labels for tenant, execution, attempt, profile version, and policy class. Names are deterministic and safe to reconcile.
+
+### 11.3 OpenCode runtime
+
+OpenCode runs headlessly inside the workload. The execution worker:
+
+1. Waits for the runtime health endpoint.
+2. Opens an authenticated OpenCode client.
+3. Creates one session for the attempt.
+4. Subscribes to events before submitting the prompt.
+5. Sends the selected agent name and rendered input.
+6. Persists progress, text, tool calls, permission requests, usage, and errors.
+7. Produces a structured result when the session becomes idle.
+
+The platform must tolerate SSE disconnects and worker restarts. Durable execution state, OpenCode session status, and artifact checkpoints determine whether to reconnect, resume, retry, or fail.
+
+### 11.4 Warm execution
+
+Cold-start improvements include:
+
+- Pre-pulled images
+- `SandboxWarmPool`
+- Profile-specific runtime pools
+- Git object and dependency caches
+- Workspace snapshots
+- Cluster autoscaler capacity planning
+
+Warm pools are an optimization. Correctness and security cannot depend on reuse. Any reused sandbox must be reset and validated before receiving another tenant execution.
+
+### 11.5 Massive scale
+
+Queue depth is absorbed independently from execution concurrency. Capacity control occurs at multiple levels:
+
+- Global execution ceiling
+- Tenant quota and rate limit
+- Profile concurrency limit
+- Connection/provider rate limit
+- Cluster and namespace quota
+- Priority class and fairness policy
+
+KEDA or an equivalent system may scale dispatchers and supporting workers from queue depth. Cluster autoscaling supplies compute. Backpressure remains explicit: accepted work waits durably rather than causing admission failure or an uncontrolled Pod storm.
+
+## 12. Workspace Model
+
+Workspace provisioning is a platform contract:
+
+```ts
+interface WorkspaceProvider<TSpec> {
+  readonly type: string
+
+  validateSpec(spec: unknown): TSpec
+
+  materialize(
+    spec: TSpec,
+    execution: ExecutionContext,
+  ): Promise<WorkspaceMount>
+
+  snapshot?(
+    mount: WorkspaceMount,
+    execution: ExecutionContext,
+  ): Promise<ArtifactRef>
+}
+```
+
+Initial providers are:
+
+- Empty workspace
+- Git repository at an immutable revision
+- Object-storage archive
+- Previous execution snapshot
+- Persistent project workspace
+
+Repository checkout is performed with narrowly scoped source-control identity before the agent runs. The checked-out revision, submodule state, and materialization logs are recorded. Agents do not receive write credentials unless the profile and binding explicitly require them.
+
+Workspace retention is independent from execution-record retention. A workspace may be deleted immediately, retained for debugging, or snapshotted as an artifact.
+
+## 13. Results and Delivery
+
+The runtime emits a source-independent result:
+
+```ts
+type ExecutionResult = {
+  status: "succeeded" | "failed" | "cancelled" | "timed_out"
+  summary?: string
+  findings?: Array<{
+    severity?: string
+    title: string
+    body: string
+    location?: { path?: string; line?: number }
+  }>
+  patch?: ArtifactRef
+  artifacts: ArtifactRef[]
+  usage?: {
+    inputTokens?: number
+    outputTokens?: number
+    cost?: number
+    currency?: string
+  }
+}
+```
+
+Destination connectors translate this result into vendor concepts. A GitHub destination may create a Check Run with annotations; a Grafana destination may append an incident note; a chat destination may render a concise message and artifact links.
+
+Every delivery records request identity, attempt, response metadata, external object identifier, and retry schedule. Credentials and sensitive payloads are redacted from logs.
+
+## 14. Security Model
+
+### 14.1 Identity and credentials
+
+Each execution receives a unique workload identity where the environment supports it. Prefer short-lived, audience-bound credentials from workload identity or a secret broker. Static credentials are a compatibility fallback.
+
+Connections are references resolved at runtime. Raw secrets are never embedded in events, profile versions, bindings, queue messages, or execution results.
+
+### 14.2 Sandbox hardening
+
+Execution workloads should use:
+
+- Dedicated service accounts with no Kubernetes API access by default
+- Pod Security restricted settings
+- Non-root user and read-only root filesystem where compatible
+- Seccomp and dropped Linux capabilities
+- CPU, memory, storage, process, and duration limits
+- NetworkPolicy derived from an approved class
+- Isolated writable workspace
+- Per-execution OpenCode authentication
+- No host mounts or privileged containers
+
+### 14.3 Network policy
+
+Profiles select named network classes rather than arbitrary CIDRs. Platform operators own those classes. Examples include `no-egress`, `source-control`, `observability-readonly`, and `approved-model-gateway`.
+
+Bindings may choose a stricter class but cannot broaden profile access. Prefer routing model traffic through a controlled AI gateway rather than distributing provider keys to Pods.
+
+### 14.4 Input and prompt safety
+
+Events and checked-out repositories are untrusted input. Agentbay must:
+
+- Delimit event content in rendered prompts
+- Enforce prompt and payload size limits
+- Avoid interpreting event fields as templates
+- Keep platform instructions above workspace-local OpenCode config
+- Prevent repositories from overriding managed capability policy
+- Treat tool output and destination content as potentially sensitive
+
+### 14.5 Administrative authorization
+
+Management APIs require tenant-aware RBAC. Roles should distinguish profile authors, integration administrators, operators, approvers, auditors, and execution viewers. Approval decisions record the authenticated principal and policy evaluated.
+
+## 15. Persistence and Infrastructure
+
+### 15.1 Postgres
+
+Postgres stores:
+
+- Tenants and authorization metadata
+- Agent profiles and immutable versions
+- Connections and non-secret configuration
+- Triggers, bindings, and destinations
+- Events and deduplication records
+- Executions, attempts, leases, and state transitions
+- Permission requests and approvals
+- Result delivery records
+- Transactional outbox entries
+
+### 15.2 Durable event bus
+
+The bus carries execution requests, lifecycle events, and delivery work. Selection depends on deployment context:
+
+- **NATS JetStream:** preferred self-hosted starting point for a lightweight event system.
+- **SQS, Pub/Sub, or equivalent:** preferred when committing to a cloud platform.
+- **Kafka:** appropriate only when throughput, long retention, replay, and existing operational investment justify it.
+
+The domain must not depend on vendor-specific queue semantics. Consumer handling assumes redelivery.
+
+### 15.3 Object storage
+
+S3-compatible object storage holds raw source payloads, logs, repository or workspace snapshots, patches, reports, and large result artifacts. Database rows contain metadata, checksums, retention, and references.
+
+### 15.4 Secret manager
+
+Use cloud secret managers, Vault, External Secrets, or workload identity. Postgres stores connection metadata and secret references only.
+
+### 15.5 Temporal decision
+
+A database state machine plus durable queue is sufficient for short autonomous executions. Introduce Temporal or another durable workflow engine only when the product requires substantial support for:
+
+- Human approvals lasting hours or days
+- Multi-stage agent workflows
+- Durable timers and signals
+- Child executions and fan-out/fan-in
+- Complex compensation or pause/resume behavior
+
+Temporal is not required merely to start a Pod and wait for an agent.
+
+## 16. Reconciliation and Recovery
+
+Every external side effect has a reconciler:
+
+- **Outbox publisher:** republishes committed, unpublished messages.
+- **Execution reconciler:** detects expired leases and schedules recovery.
+- **Kubernetes reconciler:** compares active attempts to workloads and removes or repairs orphans.
+- **Timeout reconciler:** requests cancellation for overdue executions.
+- **Delivery reconciler:** retries due result deliveries and dead-letters exhausted work.
+- **Retention reconciler:** deletes expired payloads, logs, artifacts, and workspaces.
+
+Reconciliation is based on durable desired state, not only workload age. All operations are idempotent.
+
+## 17. Observability
+
+Every execution is a traceable product object. The UI and API expose:
+
+- Source trigger, event, and raw-payload reference
+- Matching binding and exact profile version
+- Resolved capabilities and policy decisions
+- Queue latency and scheduling reason
+- Sandbox provisioning duration and selected cluster
+- OpenCode session state and event timeline
+- Model, token use, and cost
+- Tool calls and permission decisions
+- Logs, patches, reports, and other artifacts
+- Retries, cancellation, timeout, and recovery history
+- Destination delivery state and external links
+
+OpenTelemetry propagates `tenant_id`, `event_id`, `execution_id`, `attempt_id`, `binding_id`, `profile_version`, and `delivery_id` across ingress, database, bus, Kubernetes, OpenCode, and destinations.
+
+Required platform metrics include:
+
+- Event admission and rejection rate
+- Deduplication rate
+- Binding match count
+- Queue age and depth by tenant/priority
+- Execution state counts and duration histograms
+- Provisioning latency and failure rate
+- Active sandbox count and capacity saturation
+- OpenCode error and disconnect rate
+- Token use and cost by tenant/profile/model
+- Delivery latency, retry count, and dead-letter count
+
+Logs are structured and redact secrets. High-cardinality identifiers belong in traces and logs, not metric labels.
+
+## 18. Deployment Topology
+
+The first production topology can remain operationally modest:
+
+- One control-plane deployment containing API, ingress, matcher, planner, and outbox publisher
+- One dispatcher deployment
+- One destination-worker deployment
+- Postgres
+- NATS JetStream or a managed queue
+- S3-compatible object storage
+- One Kubernetes execution cluster
+
+The component boundaries are logical before they are process boundaries. Split components only for scaling, failure isolation, or security.
+
+Later, one global control plane may route to multiple execution clusters. Each cluster runs a small execution gateway/dispatcher with local Kubernetes credentials. The global control plane should not require broad direct credentials to every tenant namespace if a narrower pull-based cluster agent can be used.
+
+## 19. End-to-End Examples
+
+### 19.1 Pull-request review
+
+1. GitHub sends `pull_request.opened`.
+2. The GitHub connector verifies the signature and normalizes a CloudEvent.
+3. A binding matches the repository and action.
+4. The planner resolves `security-reviewer@12`, renders input, and writes an execution plus outbox event.
+5. A dispatcher admits the execution under tenant and GitHub connection quotas.
+6. The workspace provider clones the exact head SHA with read-only credentials.
+7. OpenCode reviews the repository in an isolated sandbox.
+8. The result collector stores findings and a report artifact.
+9. A GitHub destination publishes a Check Run with inline annotations.
+10. A later `synchronize` event supersedes any queued review of the previous SHA.
+
+### 19.2 Grafana alert diagnosis
+
+1. Grafana posts a firing alert with a stable fingerprint.
+2. A binding filters for production severity and invokes an incident diagnostician.
+3. The profile grants only a read-only Grafana connection and an `observability-readonly` network class.
+4. The agent queries bounded logs, metrics, traces, and dashboards through approved tools or MCP servers.
+5. The result is attached to a Grafana incident and summarized in Slack.
+6. Repeated notifications deduplicate or join the active concurrency key rather than launching an agent storm.
+
+### 19.3 Scheduled maintenance
+
+1. A cron trigger emits an event each night.
+2. The binding invokes a dependency-maintenance agent against selected repositories.
+3. Per-tenant and provider quotas control fan-out.
+4. Successful changes are published as branches and pull requests; failures are sent to an operations queue.
+
+### 19.4 Chat request
+
+1. A chat connector normalizes a mention or command as an event.
+2. A binding uses channel and principal policy to choose an agent.
+3. The message thread becomes a destination reference, not the execution database.
+4. Agentbay posts an acknowledgement immediately and later publishes progress or the final result to the thread.
+
+## 20. Migration From the Current Prototype
+
+The current repository proves several valuable mechanics but centers execution on a Chat SDK `Thread`. Do not incrementally stretch that abstraction into the new core.
+
+### 20.1 Reuse
+
+Candidates for reuse include:
+
+- OpenCode client creation, health checking, SSE parsing, and session control
+- Kubernetes client and `SandboxClaim` lifecycle knowledge
+- OpenCode configuration validation and injection
+- Drizzle/Postgres setup and migration tooling
+- Hono/OpenAPI setup
+- Structured logging
+- Helm deployment patterns
+- Chat and vendor webhook authentication code
+- Kubernetes lifecycle and Helm tests
+
+### 20.2 Replace
+
+Replace these concepts:
+
+- `Thread` as the unit of execution
+- Chat state as execution persistence
+- Synchronous webhook-to-sandbox processing
+- Bot-to-agent mappings as the primary configuration model
+- Process-wide adapter configuration
+- One long-lived sandbox per conversation as the default
+- Cleanup based only on claim expiry
+- Automatic approval of all OpenCode permissions
+
+### 20.3 Migration strategy
+
+Build the new execution core alongside the prototype rather than attempting a flag-day rewrite of every integration:
+
+1. Introduce new database tables and modules for profiles, events, bindings, executions, attempts, transitions, outbox, and deliveries.
+2. Implement explicit invocation and generic webhooks against the new core.
+3. Build the asynchronous dispatcher and result collector using extracted OpenCode/Kubernetes components.
+4. Reimplement GitHub as an event connector and destination.
+5. Reimplement chat as a connector pair.
+6. Remove legacy runtime, bot, thread-state, and reconciler code after equivalent use cases migrate.
+
+Compatibility with legacy database records or APIs is not required unless a deployed user is identified. Prefer a coherent new model over permanent translation layers.
+
+## 21. Delivery Roadmap
+
+### Phase 1: Generic asynchronous execution
+
+- Immutable, versioned OpenCode agent profiles
+- `POST /v1/executions`
+- Generic webhook trigger and destination
+- Postgres execution state machine and append-only transitions
+- Transactional outbox
+- Durable queue
+- Kubernetes dispatcher
+- One sandbox per execution
+- Empty and Git workspace providers
+- Object-storage artifacts
+- Cancellation, timeout, retry, leases, and idempotency
+- Basic execution API and observability
+
+**Exit criterion:** An API or generic webhook can reliably invoke a versioned agent asynchronously, survive component restarts, and deliver a durable result.
+
+### Phase 2: GitHub product path
+
+- GitHub App connection
+- Pull-request and issue triggers
+- Deterministic repository checkout
+- GitHub Check and comment destinations
+- Supersession on new commits
+- Installation-scoped credentials
+- Review annotations and patch artifacts
+
+**Exit criterion:** A new or updated pull request triggers a reproducible review and publishes a Check Run without chat-specific state.
+
+### Phase 3: Operational agents
+
+- Grafana alert trigger
+- Read-only Grafana connection and tools/MCP
+- Grafana incident-note destination
+- Schedule triggers
+- Chat destination
+- Approval state and approval destinations
+
+**Exit criterion:** A firing alert can trigger bounded diagnosis and publish results to multiple operational systems.
+
+### Phase 4: Scale, policy, and tenancy
+
+- Tenant-aware RBAC and quotas
+- Priority and fairness scheduling
+- KEDA worker scaling
+- Multiple execution clusters
+- Warm pools and caches
+- Cost accounting and budgets
+- Profile and binding policy engine
+- Administrative UI
+
+**Exit criterion:** Multiple tenants can safely operate large event bursts with predictable isolation, cost, and latency.
+
+## 22. Open Decisions
+
+These decisions should be resolved by implementation evidence rather than hidden assumptions:
+
+1. **Initial durable bus:** NATS JetStream versus the deployment environment's managed queue.
+2. **Filter language:** CEL, JSONPath plus operators, or another bounded declarative language.
+3. **Profile document format:** API-native JSON only or a first-class YAML authoring and GitOps workflow.
+4. **Execution result schema:** Minimum common structure that remains useful across code, operations, and general agents.
+5. **OpenCode recovery:** Which failures can reconnect to a session versus requiring a new attempt.
+6. **Approval orchestration:** Keep in the database state machine initially or adopt a workflow engine when approval is implemented.
+7. **Multi-cluster protocol:** Push from control plane or pull from a cluster-local execution gateway.
+8. **Policy implementation:** Built-in validation, CEL, OPA, or a combination.
+9. **Artifact log format:** Plain objects, OpenTelemetry logs, or a queryable log backend plus archival storage.
+10. **Conversation semantics:** Whether related chat messages create separate executions, append events to one execution, or start an explicit long-running workflow.
+
+## 23. Glossary
 
 | Term | Meaning |
 |---|---|
-| **Bot** | Chat-facing agentbay identity addressed by `/agents/:botSlug/webhooks/:adapter`. |
-| **SandboxProfile** | Admin-owned runtime boundary selecting a `SandboxTemplate` and warm pool. Future home for policy bounds. |
-| **OpencodeConfig** | opencode-native JSON config document injected as `OPENCODE_CONFIG_CONTENT`; contains named opencode agent definitions. |
-| **AgentProfile** | agentbay metadata that points to a named opencode agent inside an `OpencodeConfig`. |
-| **Claim** | A `SandboxClaim` Kubernetes object — the orchestrator's request for a sandbox. |
-| **Sandbox** | The `Sandbox` Kubernetes object created by the agent-sandbox controller in response to a claim, and the Pod it owns. |
-| **Session** | An opencode session — a persistent conversation in the Pod's SQLite. |
-| **Thread** | A conversation context in a chat platform (Slack thread, GitHub PR comment chain, Linear comment thread). The unit of mapping to a sandbox. |
-| **Orchestrator** | The single TypeScript service we are building. |
+| **AgentProfile** | Immutable, versioned OpenCode agent and maximum execution capability definition. |
+| **Binding** | Declarative connection from matching trigger events to an agent profile, execution policy, workspace, and destinations. |
+| **Connection** | Named reference to external-service authentication and access policy. |
+| **Connector** | Pluggable source or destination integration around the stable event/execution core. |
+| **Destination** | Configuration for publishing an execution result to an external system. |
+| **Event** | Immutable normalized input represented by a CloudEvents envelope. |
+| **Execution** | Durable record and scheduling unit for one agent invocation. |
+| **Attempt** | One leased runtime attempt to complete an execution. |
+| **Result** | Source-independent structured outcome of an execution. |
+| **Trigger** | Configured source connector that authenticates and normalizes external deliveries. |
+| **Workspace** | Deterministically materialized files and context available to an execution. |
+| **Control plane** | Event admission, configuration, planning, durable state, APIs, and reconciliation. |
+| **Execution plane** | Scheduling, workspace provisioning, sandbox operation, OpenCode execution, and result collection. |
+| **Sandbox** | Isolated Kubernetes workload in which OpenCode runs an execution attempt. |
 
 ---
 
-*This document is the source of truth. Decisions that contradict it must update it.*
+This document is the source of truth. Architectural decisions that contradict it must update this document explicitly.
