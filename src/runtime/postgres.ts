@@ -85,12 +85,14 @@ export type PostgresRuntimeStoreOptions = {
 
 export async function createPostgresRuntimeStore(options: PostgresRuntimeStoreOptions): Promise<PostgresRuntimeStore> {
   const pool = new Pool({
+    connectionTimeoutMillis: 10_000,
     connectionString: options.connectionString,
     database: options.database,
     host: options.host,
     password: options.password,
     port: options.port,
     ssl: options.ssl ? { rejectUnauthorized: options.sslRejectUnauthorized } : undefined,
+    statement_timeout: 30_000,
     user: options.user,
   });
   const db = drizzle(pool, { schema });
