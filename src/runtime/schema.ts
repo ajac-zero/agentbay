@@ -124,6 +124,7 @@ export const events = pgTable("agentbay_events", {
 ]);
 
 export const executions = pgTable("agentbay_executions", {
+  availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   eventID: text("event_id").notNull(),
@@ -155,6 +156,9 @@ export const executions = pgTable("agentbay_executions", {
   unique("agentbay_executions_id_tenant_unique").on(table.id, table.tenantID),
   index("agentbay_executions_tenant_state_created_idx").on(table.tenantID, table.state, table.createdAt),
   index("agentbay_executions_state_timeout_idx").on(table.state, table.timeoutAt),
+  index("agentbay_executions_dispatch_idx")
+    .on(table.availableAt, table.createdAt, table.id)
+    .where(sql`${table.state} = 'QUEUED'`),
 ]);
 
 export const executionAttempts = pgTable("agentbay_execution_attempts", {
@@ -173,13 +177,26 @@ export const executionAttempts = pgTable("agentbay_execution_attempts", {
   primaryKey({ columns: [table.executionID, table.attempt] }),
   check("agentbay_execution_attempts_attempt_positive", sql`${table.attempt} > 0`),
   check("agentbay_execution_attempts_state_valid", sql`${table.state} IN ('PENDING', 'LEASED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')`),
+  check(
+    "agentbay_execution_attempts_active_lease_consistent",
+    sql`(${table.leaseOwner} IS NULL) = (${table.leaseExpiresAt} IS NULL) AND (${table.state} IN ('LEASED', 'RUNNING')) = (${table.leaseOwner} IS NOT NULL)`,
+  ),
+  check(
+    "agentbay_execution_attempts_terminal_consistent",
+    sql`(${table.state} IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')) = (${table.finishedAt} IS NOT NULL)`,
+  ),
   foreignKey({
     columns: [table.executionID, table.tenantID],
     foreignColumns: [executions.id, executions.tenantID],
     name: "agentbay_execution_attempts_execution_tenant_fk",
   }),
   uniqueIndex("agentbay_execution_attempts_fencing_token_unique").on(table.fencingToken),
-  index("agentbay_execution_attempts_lease_idx").on(table.state, table.leaseExpiresAt),
+  uniqueIndex("agentbay_execution_attempts_one_active_unique")
+    .on(table.executionID)
+    .where(sql`${table.state} IN ('LEASED', 'RUNNING')`),
+  index("agentbay_execution_attempts_expired_active_lease_idx")
+    .on(table.leaseExpiresAt, table.executionID)
+    .where(sql`${table.state} IN ('LEASED', 'RUNNING')`),
 ]);
 
 export const executionTransitions = pgTable("agentbay_execution_transitions", {
