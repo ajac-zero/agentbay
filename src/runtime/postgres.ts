@@ -13,6 +13,8 @@ import {
 } from "../dispatch/store.js";
 import type {
   ClaimedExecution,
+  PromotedExecutionRetry,
+  RecoveredExecutionLease,
   TransitionLeasedExecutionCommand,
   TransitionLeasedExecutionResult,
 } from "../dispatch/types.js";
@@ -411,9 +413,8 @@ export class PostgresRuntimeStore implements RuntimeStore, ExecutionStore, Outbo
           attempt.lease_expires_at,
           lease_clock.renewed_at + ($6::double precision * interval '1 millisecond')
         )
-        FROM agentbay_executions AS execution, lease_clock
-        WHERE execution.id = $1 AND execution.tenant_id = $2
-          AND attempt.execution_id = execution.id AND attempt.tenant_id = execution.tenant_id
+        FROM lease_clock
+        WHERE attempt.execution_id = $1 AND attempt.tenant_id = $2
           AND attempt.attempt = $3 AND attempt.fencing_token = $4 AND attempt.lease_owner = $5
           AND attempt.state IN ('LEASED', 'RUNNING')
           AND attempt.lease_expires_at > lease_clock.renewed_at
@@ -422,6 +423,210 @@ export class PostgresRuntimeStore implements RuntimeStore, ExecutionStore, Outbo
       values: [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, command.leaseDurationMs],
     });
     return result.rowCount === 1;
+  }
+
+  async recoverExpiredExecutionLeases(command: {
+    limit: number;
+    maxAttempts: number;
+    retryDelayMs: number;
+  }): Promise<RecoveredExecutionLease[]> {
+    assertPositiveInteger(command.limit, "Execution lease recovery limit");
+    assertPositiveInteger(command.maxAttempts, "Execution maximum attempts");
+    assertNonnegativeInteger(command.retryDelayMs, "Execution retry delay");
+
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const candidates = await client.query<RecoveryExecutionRow>({
+        text: `
+          WITH recovery_clock AS MATERIALIZED (SELECT clock_timestamp() AS recovered_at)
+          SELECT execution.id, execution.tenant_id, execution.state, execution.timeout_at
+          FROM agentbay_executions AS execution, recovery_clock
+          WHERE execution.state IN ('PROVISIONING', 'RUNNING')
+            AND EXISTS (
+              SELECT 1
+              FROM agentbay_execution_attempts AS attempt
+              WHERE attempt.execution_id = execution.id
+                AND attempt.tenant_id = execution.tenant_id
+                AND attempt.state IN ('LEASED', 'RUNNING')
+                AND attempt.lease_expires_at <= recovery_clock.recovered_at
+            )
+          ORDER BY execution.updated_at, execution.created_at, execution.id
+          FOR UPDATE OF execution SKIP LOCKED
+          LIMIT $1
+        `,
+        values: [command.limit],
+      });
+
+      const recovered: RecoveredExecutionLease[] = [];
+      for (const execution of candidates.rows) {
+        // Renewal locks only the attempt. Rechecking after this lock lets an in-flight
+        // renewal win without introducing the execution/attempt lock-order cycle.
+        const attemptResult = await client.query<ExpiredAttemptRow>({
+          text: `
+            WITH recovery_clock AS MATERIALIZED (SELECT clock_timestamp() AS recovered_at)
+            SELECT attempt.attempt, attempt.state, recovery_clock.recovered_at
+            FROM agentbay_execution_attempts AS attempt, recovery_clock
+            WHERE attempt.execution_id = $1 AND attempt.tenant_id = $2
+              AND attempt.state IN ('LEASED', 'RUNNING')
+              AND attempt.lease_expires_at <= recovery_clock.recovered_at
+            ORDER BY attempt.attempt DESC
+            FOR UPDATE OF attempt
+            LIMIT 1
+          `,
+          values: [execution.id, execution.tenant_id],
+        });
+        const attempt = attemptResult.rows[0];
+        if (!attempt) continue;
+
+        const updateResult = await client.query<RecoveredExecutionRow>({
+          text: `
+            WITH updated_attempt AS (
+              UPDATE agentbay_execution_attempts
+              SET state = CASE WHEN $4 >= $9 THEN 'TIMED_OUT' ELSE 'FAILED' END, finished_at = $4,
+                  lease_owner = NULL, lease_expires_at = NULL
+              WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
+                AND state IN ('LEASED', 'RUNNING') AND lease_expires_at <= $4
+              RETURNING execution_id
+            ), updated_execution AS (
+              UPDATE agentbay_executions
+               SET state = CASE
+                     WHEN $4 >= timeout_at THEN 'TIMED_OUT'
+                     WHEN $3 < $5 AND $4 + ($6::double precision * interval '1 millisecond') < timeout_at
+                       THEN 'RETRY_WAIT'
+                    ELSE 'FAILED'
+                  END,
+                  available_at = CASE
+                    WHEN $3 < $5 AND $4 + ($6::double precision * interval '1 millisecond') < timeout_at
+                      THEN $4 + ($6::double precision * interval '1 millisecond')
+                    ELSE available_at
+                  END,
+                  completed_at = CASE
+                    WHEN $3 < $5 AND $4 + ($6::double precision * interval '1 millisecond') < timeout_at
+                      THEN NULL
+                    ELSE $4
+                  END,
+                  updated_at = $4
+              WHERE id = $1 AND tenant_id = $2 AND state = $7
+                AND EXISTS (SELECT 1 FROM updated_attempt)
+              RETURNING id, tenant_id, state
+            ), inserted_transition AS (
+              INSERT INTO agentbay_execution_transitions
+                (id, tenant_id, execution_id, attempt, sequence, from_state, to_state, actor, reason, created_at)
+              SELECT $8, tenant_id, id, $3,
+                     (SELECT COALESCE(MAX(sequence), 0) + 1
+                      FROM agentbay_execution_transitions
+                      WHERE tenant_id = $2 AND execution_id = $1),
+                     $7, state, 'execution-reconciler', 'execution lease expired', $4
+              FROM updated_execution
+              RETURNING execution_id
+            )
+            SELECT id, tenant_id, state, $4::timestamptz AS recovered_at
+            FROM updated_execution
+            WHERE EXISTS (SELECT 1 FROM inserted_transition)
+          `,
+          values: [
+            execution.id,
+            execution.tenant_id,
+            attempt.attempt,
+            attempt.recovered_at,
+            command.maxAttempts,
+            command.retryDelayMs,
+             execution.state,
+             randomUUID(),
+             execution.timeout_at,
+          ],
+        });
+        const row = updateResult.rows[0];
+        if (!row) continue;
+        recovered.push({
+          attempt: attempt.attempt,
+          executionId: row.id,
+          executionState: row.state,
+          recoveredAt: row.recovered_at,
+          tenantId: row.tenant_id,
+        });
+      }
+
+      await client.query("COMMIT");
+      return recovered;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async promoteDueExecutionRetries(command: { limit: number }): Promise<PromotedExecutionRetry[]> {
+    assertPositiveInteger(command.limit, "Execution retry promotion limit");
+
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<PromotedExecutionRow>({
+        text: `
+          WITH promotion_clock AS MATERIALIZED (SELECT clock_timestamp() AS promoted_at),
+          candidates AS (
+            SELECT execution.id, execution.tenant_id
+            FROM agentbay_executions AS execution, promotion_clock
+            WHERE execution.state = 'RETRY_WAIT'
+              AND (execution.available_at <= promotion_clock.promoted_at
+                OR execution.timeout_at <= promotion_clock.promoted_at)
+            ORDER BY execution.available_at, execution.created_at, execution.id
+            FOR UPDATE OF execution SKIP LOCKED
+            LIMIT $1
+          ), updated_execution AS (
+            UPDATE agentbay_executions AS execution
+            SET state = CASE
+                  WHEN execution.timeout_at <= promotion_clock.promoted_at THEN 'TIMED_OUT'
+                  ELSE 'QUEUED'
+                END,
+                completed_at = CASE
+                  WHEN execution.timeout_at <= promotion_clock.promoted_at THEN promotion_clock.promoted_at
+                  ELSE completed_at
+                END,
+                updated_at = promotion_clock.promoted_at
+            FROM candidates, promotion_clock
+            WHERE execution.id = candidates.id AND execution.tenant_id = candidates.tenant_id
+              AND execution.state = 'RETRY_WAIT'
+              AND (execution.available_at <= promotion_clock.promoted_at
+                OR execution.timeout_at <= promotion_clock.promoted_at)
+            RETURNING execution.id, execution.tenant_id, execution.state
+          ), inserted_transition AS (
+            INSERT INTO agentbay_execution_transitions
+              (id, tenant_id, execution_id, attempt, sequence, from_state, to_state, actor, reason, created_at)
+            SELECT ($2::text[])[(row_number() OVER ())::integer], execution.tenant_id, execution.id, NULL,
+                   (SELECT COALESCE(MAX(sequence), 0) + 1
+                    FROM agentbay_execution_transitions
+                    WHERE tenant_id = execution.tenant_id AND execution_id = execution.id),
+                   'RETRY_WAIT', execution.state, 'execution-reconciler',
+                   CASE WHEN execution.state = 'TIMED_OUT' THEN 'execution deadline elapsed' ELSE 'execution retry became due' END,
+                   promotion_clock.promoted_at
+            FROM updated_execution AS execution, promotion_clock
+            RETURNING execution_id
+          )
+          SELECT execution.id, execution.tenant_id, execution.state, promotion_clock.promoted_at
+          FROM updated_execution AS execution, promotion_clock
+          WHERE EXISTS (
+            SELECT 1 FROM inserted_transition WHERE inserted_transition.execution_id = execution.id
+          )
+        `,
+        values: [command.limit, Array.from({ length: command.limit }, () => randomUUID())],
+      });
+      await client.query("COMMIT");
+      return result.rows.map((row) => ({
+        executionId: row.id,
+        executionState: row.state,
+        promotedAt: row.promoted_at,
+        tenantId: row.tenant_id,
+      }));
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async transitionLeasedExecution(command: TransitionLeasedExecutionCommand): Promise<TransitionLeasedExecutionResult> {
@@ -815,6 +1020,33 @@ type ClaimedOutboxRow = {
   publish_attempts: number;
   tenant_id: string;
   topic: string;
+};
+
+type RecoveryExecutionRow = {
+  id: string;
+  state: "PROVISIONING" | "RUNNING";
+  tenant_id: string;
+  timeout_at: Date;
+};
+
+type ExpiredAttemptRow = {
+  attempt: number;
+  recovered_at: Date;
+  state: "LEASED" | "RUNNING";
+};
+
+type RecoveredExecutionRow = {
+  id: string;
+  recovered_at: Date;
+  state: "RETRY_WAIT" | "FAILED" | "TIMED_OUT";
+  tenant_id: string;
+};
+
+type PromotedExecutionRow = {
+  id: string;
+  promoted_at: Date;
+  state: "QUEUED" | "TIMED_OUT";
+  tenant_id: string;
 };
 
 function botFromRow(row: BotRow): Bot {

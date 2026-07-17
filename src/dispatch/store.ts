@@ -1,5 +1,7 @@
 import type {
   ClaimedExecution,
+  PromotedExecutionRetry,
+  RecoveredExecutionLease,
   TransitionLeasedExecutionCommand,
   TransitionLeasedExecutionResult,
 } from "./types.js";
@@ -19,6 +21,16 @@ export interface DispatcherExecutionStore {
     leaseOwner: string;
     leaseDurationMs: number;
   }): Promise<boolean>;
+
+  recoverExpiredExecutionLeases(input: {
+    limit: number;
+    maxAttempts: number;
+    retryDelayMs: number;
+  }): Promise<RecoveredExecutionLease[]>;
+
+  promoteDueExecutionRetries(input: {
+    limit: number;
+  }): Promise<PromotedExecutionRetry[]>;
 
   transitionLeasedExecution(
     command: TransitionLeasedExecutionCommand,
