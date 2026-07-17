@@ -129,7 +129,10 @@ describe("execution API", () => {
     const missingAgent = await request(app, "POST", "/v1/agent-profiles/coder/versions", {
       version: 1,
       definition: {
+        schemaVersion: 1,
         runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: {} } },
+        sandbox: { templateName: "opencode" },
+        permissions: { onRequest: "fail" },
         timeoutSeconds: 3_600,
       },
     });
@@ -257,11 +260,14 @@ async function publishCoder(app: ReturnType<typeof createOpenApiApp>): Promise<v
 
 function profileDefinition(agent: string) {
   return {
+    schemaVersion: 1 as const,
     runtime: {
       agent,
       opencodeConfig: { agent: { [agent]: { prompt: "Test agent" } } },
       type: "opencode",
     },
+    sandbox: { templateName: "opencode" },
+    permissions: { onRequest: "fail" },
     timeoutSeconds: 3_600,
   };
 }
@@ -296,31 +302,23 @@ async function request(
 }
 
 function testConfig(): Config {
-  const disabled = { enabled: false };
   return {
     adminToken: "test-token",
-    botUserName: "agentbay",
+    dispatcherEnabled: false,
+    dispatcherIdlePollMs: 500,
+    dispatcherLeaseDurationMs: 60_000,
+    dispatcherRenewIntervalMs: 20_000,
+    dispatcherWorkerId: "test-worker",
     executionMaintenanceBatchSize: 100,
     executionMaintenanceEnabled: true,
     executionMaintenanceIntervalMs: 5_000,
     executionMaxAttempts: 3,
     executionRetryDelayMs: 30_000,
     claimReadyTimeoutMs: 5_000,
-    claimShutdownHours: 1,
-    claimTtlSecondsAfterFinished: 60,
     kubeNamespace: "unused",
     opencodeDirectory: "/workspace",
     opencodePort: 4096,
     port: 3000,
     sandboxClaimApiVersion: "v1alpha1",
-    discord: disabled,
-    gchat: disabled,
-    github: disabled,
-    linear: disabled,
-    messenger: disabled,
-    slack: disabled,
-    teams: disabled,
-    telegram: disabled,
-    whatsapp: disabled,
   };
 }

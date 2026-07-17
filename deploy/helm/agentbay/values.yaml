@@ -18,13 +18,11 @@ image:
   # -- Image pull policy.
   pullPolicy: IfNotPresent
 
-# -- Image pull secrets used by the orchestrator and (when enabled) the
-# -- in-cluster Redis Deployment.
+# -- Image pull secrets used by the orchestrator and chart-managed Jobs.
 imagePullSecrets: []
 
-# -- Number of orchestrator replicas. Webhooks are stateless, but session
-# -- continuity relies on the configured state backend (Redis recommended
-# -- when running more than one replica).
+# -- Number of API replicas. Replicas share durable execution state in
+# -- Postgres; execution submission does not depend on process-local state.
 replicaCount: 1
 
 # -- Resource requests and limits for the orchestrator container.
@@ -62,7 +60,7 @@ service:
   port: 80
 
 ingress:
-  # -- Whether to create an Ingress for the orchestrator webhook routes.
+  # -- Whether to create an Ingress for the execution API.
   enabled: false
   # -- IngressClass name. Leave empty to use the cluster default.
   className: ""
@@ -103,12 +101,6 @@ claims:
   # -- Defaults to the release namespace. The orchestrator's RBAC is scoped
   # -- to this namespace.
   namespace: ""
-  # -- Convenience default SandboxTemplate name for chart-managed templates.
-  # -- Runtime selection comes from DB-backed SandboxProfile.templateName.
-  templateName: opencode-template
-  # -- Convenience default SandboxWarmPool reference for chart-managed examples.
-  # -- Runtime selection comes from DB-backed SandboxProfile.warmpool.
-  warmpool: none
 opencode:
   # -- Port exposed by `opencode serve` inside each sandbox Pod.
   port: 4096
@@ -118,8 +110,8 @@ opencode:
 # -- Optional Envoy AI Gateway integration. When enabled, the chart deploys
 # -- the central agentbay-authz ext_authz service and adds a localhost proxy
 # -- sidecar plus a projected service account token to chart-managed
-# -- SandboxTemplates. Leave disabled to use the simpler direct `claimEnv`
-# -- credential injection model.
+# -- SandboxTemplates. Leave disabled only when immutable profiles use another
+# -- operator-managed credential path.
 aiGatewayAuthz:
   enabled: false
   # -- Envoy AI Gateway base URL used by the sandbox-local proxy sidecar.
@@ -214,11 +206,20 @@ orchestrator:
     maxAttempts: 3
     # -- Fixed delay before an execution becomes eligible for retry.
     retryDelayMs: 30000
+  dispatcher:
+    # -- Claim queued executions and run them in attempt-scoped SandboxClaims.
+    enabled: true
+    # -- Delay before polling again when no execution is queued.
+    idlePollMs: 500
+    # -- Duration of the fenced execution lease.
+    leaseDurationMs: 60000
+    # -- Lease renewal interval; must be less than leaseDurationMs.
+    renewIntervalMs: 20000
   # -- Extra orchestrator env vars expressed as a name/value list. These are
   # -- attached as plain `env` entries; use `secrets` for sensitive values.
   extraEnv: []
-  #  - name: AGENTBAY_BOT_USER_NAME
-  #    value: agentbay
+  #  - name: LOG_LEVEL
+  #    value: debug
   # -- Extra `envFrom` entries appended after the chart-managed Secret. Use
   # -- this to layer in additional ConfigMaps or Secrets you manage outside
   # -- this chart.
@@ -227,13 +228,13 @@ orchestrator:
   #      name: my-extra-config
 
 admin:
-  # -- Admin bearer token for `/admin/runtime/*`. When empty and this chart
+  # -- Bearer token for authenticated `/v1/*` execution API routes. When empty and this chart
   # -- creates its own Secret, Helm generates a token and preserves it across
   # -- upgrades. Existing Secrets should provide AGENTBAY_ADMIN_TOKEN directly.
   token: ""
 
 migrations:
-  # -- Run Drizzle runtime database migrations from a Helm hook Job instead of
+  # -- Run Drizzle database migrations from a Helm hook Job instead of
   # -- from orchestrator startup.
   enabled: true
   # -- Override Helm hook events. By default, external databases use
@@ -241,7 +242,7 @@ migrations:
   # -- empty and renders migrations as a normal Job so app readiness can wait on
   # -- the migrated schema without deadlocking Helm post-install hooks.
   hookEvents: []
-  # -- Helm hook weight for the migration Job. Keep this before runtimeSeed.
+  # -- Helm hook weight for the migration Job.
   hookWeight: -10
   # -- Helm hook delete policy. Failed Jobs are intentionally kept so their
   # -- logs remain available for troubleshooting.
@@ -263,51 +264,6 @@ migrations:
       cpu: 200m
       memory: 256Mi
 
-runtimeSeed:
-  # -- Create/update runtime rows after install/upgrade through the admin API.
-  # -- This is disabled by default because production installs usually want to
-  # -- own bot/profile/config definitions explicitly in their environment repo.
-  # -- Use `helm install/upgrade --wait` with an external database when enabling
-  # -- this so the orchestrator is ready before the seed hook runs.
-  enabled: false
-  image:
-    repository: curlimages/curl
-    tag: "8.11.1"
-    pullPolicy: IfNotPresent
-  # -- Helm hook delete policy for the seed Job. Failed Jobs are intentionally
-  # -- kept so their logs remain available for troubleshooting.
-  hookDeletePolicy:
-    - before-hook-creation
-    - hook-succeeded
-  backoffLimit: 6
-  wait:
-    # -- Number of health-check attempts before the seed Job gives up.
-    attempts: 90
-    # -- Seconds between health-check attempts.
-    seconds: 2
-  resources:
-    requests:
-      cpu: 10m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 128Mi
-  # -- DB-backed opencode config records. Empty by default; define these in an
-  # -- environment-specific values file when enabling runtime seed.
-  opencodeConfigs: []
-  # -- DB-backed sandbox profile records. `templateName` must reference an
-  # -- existing SandboxTemplate in `claims.namespace` before this bot can run.
-  sandboxProfiles: []
-  # -- DB-backed agent profile records. `opencodeAgentName` must exist under
-  # -- the referenced opencode config's `agent` object. Add `claimEnv` refs per
-  # -- agent to inject model/repo credentials into that agent's SandboxClaims.
-  agentProfiles: []
-  # -- DB-backed bot records. Webhooks use `/agents/<slug>/webhooks/<adapter>`.
-  bots: []
-  # -- Additional bot/agent allow-list entries. Default bot mappings are added
-  # -- automatically when each bot is upserted.
-  botAgentProfiles: []
-
 secrets:
   # -- Whether the chart should create a Secret containing the orchestrator
   # -- env vars listed in `secrets.data`. Set to false to use an existing
@@ -316,57 +272,18 @@ secrets:
   # -- Name of an existing Secret to mount as `envFrom`. When set, the chart
   # -- will not create a Secret of its own. The Secret must live in the
   # -- release namespace and contain env vars under their canonical names
-  # -- (e.g. SLACK_BOT_TOKEN, ANTHROPIC_API_KEY_AGENTBAY, REDIS_URL, ...).
+  # -- (e.g. AGENTBAY_ADMIN_TOKEN or provider credentials).
   existingSecret: ""
   # -- Inline secret data. Each key becomes an env var of the same name on
   # -- the orchestrator container via `envFrom`. Leave empty and reference
   # -- an existing Secret instead if you do not want plaintext values in
   # -- your values file.
   data: {}
-  #  SLACK_BOT_TOKEN: xoxb-...
-  #  SLACK_SIGNING_SECRET: ...
-  #  TELEGRAM_BOT_TOKEN_AGENTBAY: ...
-  #  ANTHROPIC_API_KEY_AGENTBAY: sk-ant-...
-  #  OPENAI_API_KEY_AGENTBAY: sk-...
-  #  GITHUB_TOKEN_AGENTBAY: ghp_...
-
-redis:
-  # -- Enable an in-cluster Redis Deployment for Chat SDK state. When false,
-  # -- the orchestrator either uses `redis.external` or falls back to the
-  # -- in-memory state adapter.
-  enabled: true
-  image:
-    repository: redis
-    tag: "7-alpine"
-    pullPolicy: IfNotPresent
-  # -- Persistence for in-cluster Redis. When disabled, Redis uses an
-  # -- emptyDir and state is lost on Pod restart.
-  persistence:
-    enabled: false
-    size: 1Gi
-    storageClassName: ""
-    accessModes:
-      - ReadWriteOnce
-  # -- Resource requests and limits for the in-cluster Redis container.
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
-      memory: 256Mi
-  # -- Use an external Redis instead of the in-cluster one. Ignored when
-  # -- `redis.enabled` is true. Set exactly one of `url` or `existingSecret`.
-  external:
-    # -- Full redis:// URL passed to the orchestrator as REDIS_URL.
-    url: ""
-    # -- Reference an existing Secret containing the REDIS_URL value.
-    existingSecret: ""
-    # -- Key inside `existingSecret` whose value is the REDIS_URL.
-    existingSecretKey: REDIS_URL
+  #  AGENTBAY_ADMIN_TOKEN: replace-me
+  #  ANTHROPIC_API_KEY: sk-ant-...
 
 database:
-  # -- Enable an in-cluster Postgres Deployment for runtime configuration.
+  # -- Enable an in-cluster Postgres Deployment for durable execution state.
   # -- When false, use database.external or provide AGENTBAY_DATABASE_URL via secrets.
   enabled: true
   image:
@@ -381,7 +298,7 @@ database:
     # -- Password for the in-cluster Postgres instance. Change for production.
     password: agentbay
   # -- Persistence for in-cluster Postgres. When disabled, Postgres uses an
-  # -- emptyDir and runtime config is lost on Pod restart.
+  # -- emptyDir and execution data is lost on Pod restart.
   persistence:
     enabled: false
     size: 8Gi
@@ -419,7 +336,6 @@ sandboxTemplates:
   enabled: false
   # -- One entry per template. Each entry deep-merges over the built-in
   # -- defaults documented in `templates/_sandbox-template-defaults.tpl`.
-  # -- The first template's `name` usually matches `claims.templateName`.
   templates:
     - name: opencode-template
       # -- Namespace for the template. Defaults to claims.namespace.

@@ -35,8 +35,7 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/kind: ServiceAccount/);
       expect(result.stdout).toMatch(/kind: Role\b/);
       expect(result.stdout).toMatch(/kind: RoleBinding/);
-      // In-cluster Redis and Postgres are on by default
-      expect(result.stdout).toMatch(/name: demo-agentbay-redis/);
+      // In-cluster Postgres is on by default
       expect(result.stdout).toMatch(/name: demo-agentbay-postgres/);
       expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_HOST/);
       expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_PASSWORD/);
@@ -45,10 +44,16 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/name: AGENTBAY_EXECUTION_MAINTENANCE_BATCH_SIZE\n\s+value: "100"/);
       expect(result.stdout).toMatch(/name: AGENTBAY_EXECUTION_MAX_ATTEMPTS\n\s+value: "3"/);
       expect(result.stdout).toMatch(/name: AGENTBAY_EXECUTION_RETRY_DELAY_MS\n\s+value: "30000"/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_DISPATCHER_ENABLED\n\s+value: "true"/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_DISPATCHER_IDLE_POLL_MS\n\s+value: "500"/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_DISPATCHER_LEASE_DURATION_MS\n\s+value: "60000"/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS\n\s+value: "20000"/);
+      expect(result.stdout).toMatch(
+        /name: AGENTBAY_DISPATCHER_WORKER_ID\n\s+valueFrom:\n\s+fieldRef:\n\s+fieldPath: metadata\.name/,
+      );
       expect(result.stdout).toMatch(/name: demo-agentbay-migrate-1/);
       expect(result.stdout).not.toMatch(/helm\.sh\/hook: "post-install,pre-upgrade"/);
       expect(result.stdout).toMatch(/command: \["node", "dist\/migrate\.js"\]/);
-      expect(result.stdout).not.toMatch(/name: demo-agentbay-runtime-seed/);
       // No SandboxTemplate / WarmPool / Ingress unless opted in
       expect(result.stdout).not.toMatch(/kind: SandboxTemplate/);
       expect(result.stdout).not.toMatch(/kind: SandboxWarmPool/);
@@ -58,94 +63,6 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/command: \["node", "dist\/reconcile\.js"\]/);
       expect(result.stdout).toMatch(/name: demo-agentbay-reconciler/);
       expect(result.stdout).toMatch(/name: AGENTBAY_RECONCILER_GRACE_MINUTES/);
-    });
-
-    it("renders a runtime seed hook without opinionated records when enabled", () => {
-      const result = helm([
-        "template",
-        "demo",
-        CHART_PATH,
-        "--namespace",
-        NAMESPACE,
-        "--set",
-        "runtimeSeed.enabled=true",
-      ]);
-      expect(result.status, formatStderr(result)).toBe(0);
-      expect(result.stdout).toMatch(/name: demo-agentbay-runtime-seed/);
-      expect(result.stdout).toMatch(/helm\.sh\/hook: post-install,post-upgrade/);
-      expect(result.stdout).toMatch(/key: AGENTBAY_ADMIN_TOKEN/);
-      expect(result.stdout).not.toMatch(/\/admin\/runtime\/opencode-configs\/opencode-config-default/);
-      expect(result.stdout).not.toMatch(/\/admin\/runtime\/sandbox-profiles\/sandbox-profile-default/);
-      expect(result.stdout).not.toMatch(/\/admin\/runtime\/agent-profiles\/agent-profile-agentbay/);
-      expect(result.stdout).not.toMatch(/\/admin\/runtime\/bots\/bot-agentbay/);
-    });
-
-    it("renders explicit runtime seed records when configured", () => {
-      const result = helm([
-        "template",
-        "demo",
-        CHART_PATH,
-        "--namespace",
-        NAMESPACE,
-        "--set",
-        "runtimeSeed.enabled=true",
-        "--set",
-        "runtimeSeed.opencodeConfigs[0].id=opencode-config-default",
-        "--set",
-        "runtimeSeed.opencodeConfigs[0].slug=default",
-        "--set",
-        "runtimeSeed.opencodeConfigs[0].displayName=Default",
-        "--set",
-        "runtimeSeed.opencodeConfigs[0].enabled=true",
-        "--set",
-        "runtimeSeed.opencodeConfigs[0].config.default_agent=agentbay",
-        "--set",
-        "runtimeSeed.opencodeConfigs[0].config.agent.agentbay.prompt=Prompt",
-        "--set",
-        "runtimeSeed.sandboxProfiles[0].id=sandbox-profile-default",
-        "--set",
-        "runtimeSeed.sandboxProfiles[0].slug=default",
-        "--set",
-        "runtimeSeed.sandboxProfiles[0].templateName=opencode-template",
-        "--set",
-        "runtimeSeed.sandboxProfiles[0].warmpool=none",
-        "--set",
-        "runtimeSeed.sandboxProfiles[0].enabled=true",
-        "--set",
-        "runtimeSeed.agentProfiles[0].id=agent-profile-agentbay",
-        "--set",
-        "runtimeSeed.agentProfiles[0].slug=agentbay",
-        "--set",
-        "runtimeSeed.agentProfiles[0].displayName=agentbay",
-        "--set",
-        "runtimeSeed.agentProfiles[0].opencodeConfigID=opencode-config-default",
-        "--set",
-        "runtimeSeed.agentProfiles[0].opencodeAgentName=agentbay",
-        "--set",
-        "runtimeSeed.agentProfiles[0].enabled=true",
-        "--set",
-        "runtimeSeed.bots[0].id=bot-agentbay",
-        "--set",
-        "runtimeSeed.bots[0].slug=agentbay",
-        "--set",
-        "runtimeSeed.bots[0].displayName=agentbay",
-        "--set",
-        "runtimeSeed.bots[0].adapters.telegram.botTokenEnv=TELEGRAM_BOT_TOKEN",
-        "--set",
-        "runtimeSeed.bots[0].sandboxProfileID=sandbox-profile-default",
-        "--set",
-        "runtimeSeed.bots[0].defaultAgentProfileID=agent-profile-agentbay",
-        "--set",
-        "runtimeSeed.bots[0].enabled=true",
-      ]);
-      expect(result.status, formatStderr(result)).toBe(0);
-      expect(result.stdout).toMatch(/PUT "\/admin\/runtime\/opencode-configs\/opencode-config-default"/);
-      expect(result.stdout).toMatch(/PUT "\/admin\/runtime\/sandbox-profiles\/sandbox-profile-default"/);
-      expect(result.stdout).toMatch(/PUT "\/admin\/runtime\/agent-profiles\/agent-profile-agentbay"/);
-      expect(result.stdout).toMatch(/PUT "\/admin\/runtime\/bots\/bot-agentbay"/);
-      expect(result.stdout).toMatch(/"slug":"agentbay"/);
-      expect(result.stdout).toMatch(/"adapters":\{"telegram":\{"botTokenEnv":"TELEGRAM_BOT_TOKEN"\}\}/);
-      expect(result.stdout).not.toMatch(/AGENTBAY_TELEGRAM_ENABLED/);
     });
 
     it("renders SandboxTemplates with a NetworkPolicy ingress selector that matches the orchestrator", () => {
@@ -313,23 +230,6 @@ sandboxTemplates:
       expect(result.stdout).toMatch(/kind: SandboxWarmPool/);
     });
 
-    it("uses an external Redis URL from an existing Secret when configured", () => {
-      const result = helm([
-        "template",
-        "demo",
-        CHART_PATH,
-        "--namespace",
-        NAMESPACE,
-        "--set",
-        "redis.enabled=false",
-        "--set",
-        "redis.external.existingSecret=my-redis",
-      ]);
-      expect(result.status, formatStderr(result)).toBe(0);
-      expect(result.stdout).not.toMatch(/name: demo-agentbay-redis/);
-      expect(result.stdout).toMatch(/secretKeyRef:\s+name: my-redis/);
-    });
-
     it("uses an external Postgres URL from an existing Secret when configured", () => {
       const result = helm([
         "template",
@@ -382,21 +282,6 @@ sandboxTemplates:
       ]);
       expect(result.status).not.toBe(0);
       expect(result.stderr).toMatch(/migrations\.enabled=true cannot use secrets\.data\.AGENTBAY_DATABASE_URL/);
-    });
-
-    it("falls back to in-memory Chat SDK state when no Redis is configured", () => {
-      const result = helm([
-        "template",
-        "demo",
-        CHART_PATH,
-        "--namespace",
-        NAMESPACE,
-        "--set",
-        "redis.enabled=false",
-      ]);
-      expect(result.status, formatStderr(result)).toBe(0);
-      expect(result.stdout).not.toMatch(/name: demo-agentbay-redis/);
-      expect(result.stdout).not.toMatch(/REDIS_URL/);
     });
 
     it("renders the helm test connection Pod", () => {
@@ -520,10 +405,10 @@ sandboxTemplates:
       expect(result.stdout).toMatch(/kind: SandboxWarmPool/);
     });
 
-    it("server-side validates an external-Redis configuration", () => {
+    it("server-side validates an external Postgres configuration", () => {
       const result = helm([
         "install",
-        "agentbay-extredis",
+        "agentbay-extdb",
         CHART_PATH,
         "--namespace",
         NAMESPACE,
@@ -531,9 +416,9 @@ sandboxTemplates:
         "--kubeconfig",
         kubeConfigPath,
         "--set",
-        "redis.enabled=false",
+        "database.enabled=false",
         "--set",
-        "redis.external.url=redis://example:6379",
+        "database.external.url=postgres://agentbay:agentbay@example:5432/agentbay",
       ]);
       expect(result.status, formatStderr(result)).toBe(0);
     });

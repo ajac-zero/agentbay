@@ -1,40 +1,76 @@
 import { Buffer } from "node:buffer";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/client";
-import type { Config } from "../config.js";
 
 export type AgentEndpoint = {
   password: string;
-  podFQDN: string;
+  host: string;
 };
 
-export function createAgentClient(endpoint: AgentEndpoint, config: Config): OpencodeClient {
+export type OpenCodeConnectionOptions = {
+  directory: string;
+  port: number;
+  readyTimeoutMs: number;
+};
+
+export type OpenCodeEndpoint = AgentEndpoint & OpenCodeConnectionOptions;
+
+type ExistingConfigShape = {
+  claimReadyTimeoutMs: number;
+  opencodeDirectory: string;
+  opencodePort: number;
+};
+
+export function createAgentClient(
+  endpoint: AgentEndpoint,
+  options: OpenCodeConnectionOptions | ExistingConfigShape,
+): OpencodeClient {
+  const connection = normalizeOptions(options);
   return createOpencodeClient({
-    baseUrl: baseUrl(endpoint.podFQDN, config.opencodePort),
-    directory: config.opencodeDirectory,
+    baseUrl: baseUrl(endpoint.host, connection.port),
+    directory: connection.directory,
     headers: authHeaders(endpoint.password),
   });
 }
 
-export async function waitForOpencodeReady(endpoint: AgentEndpoint, config: Config): Promise<void> {
-  const deadline = Date.now() + config.claimReadyTimeoutMs;
-  const url = `${baseUrl(endpoint.podFQDN, config.opencodePort)}/global/health`;
+export async function waitForOpencodeReady(
+  endpoint: AgentEndpoint,
+  options: OpenCodeConnectionOptions | ExistingConfigShape,
+  signal?: AbortSignal,
+): Promise<void> {
+  const connection = normalizeOptions(options);
+  const deadline = Date.now() + connection.readyTimeoutMs;
+  const url = `${baseUrl(endpoint.host, connection.port)}/global/health`;
 
   while (Date.now() <= deadline) {
+    signal?.throwIfAborted();
     try {
-      const response = await fetch(url, { headers: authHeaders(endpoint.password) });
+      const response = await fetch(url, { headers: authHeaders(endpoint.password), signal });
       if (response.ok) return;
-    } catch {
+    } catch (error) {
+      signal?.throwIfAborted();
       // The sandbox Pod can be Ready before opencode has bound its HTTP port.
+      void error;
     }
 
-    await sleep(500);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+    await sleep(Math.min(500, remainingMs), signal);
   }
 
   throw new Error(`opencode server at ${url} did not become ready`);
 }
 
-function baseUrl(podFQDN: string, port: number): string {
-  return `http://${formatHost(podFQDN)}:${port}`;
+function normalizeOptions(options: OpenCodeConnectionOptions | ExistingConfigShape): OpenCodeConnectionOptions {
+  if ("port" in options) return options;
+  return {
+    directory: options.opencodeDirectory,
+    port: options.opencodePort,
+    readyTimeoutMs: options.claimReadyTimeoutMs,
+  };
+}
+
+function baseUrl(host: string, port: number): string {
+  return `http://${formatHost(host)}:${port}`;
 }
 
 function formatHost(host: string): string {
@@ -47,6 +83,21 @@ function authHeaders(password: string): Record<string, string> {
   return { Authorization: `Basic ${token}` };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    if (!signal) return;
+
+    const abort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+    };
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
 }

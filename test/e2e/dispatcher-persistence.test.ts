@@ -26,7 +26,10 @@ describe("dispatcher persistence", () => {
     await store.publishProfileVersion({
       createdAt: new Date().toISOString(),
       definition: {
+        schemaVersion: 1,
         runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: { prompt: "Test" } } } },
+        sandbox: { templateName: "opencode", warmPool: "none" },
+        permissions: { onRequest: "fail" },
         timeoutSeconds: 3_600,
       },
       id: randomUUID(),
@@ -177,6 +180,33 @@ describe("dispatcher persistence", () => {
     expect(persisted.transitions.map((transition) => transition.to_state)).toEqual([
       "RECEIVED", "PLANNED", "QUEUED", "PROVISIONING", "RUNNING", "SUCCEEDED",
     ]);
+  });
+
+  it("fences a failed attempt into retry wait using database time", async () => {
+    const executionId = await queueExecution();
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-a", leaseDurationMs: 60_000 });
+    if (!claimed) throw new Error("Expected execution to be claimed");
+
+    await expect(store.transitionLeasedExecution({
+      executionId,
+      tenantId: "default",
+      attempt: claimed.lease.attempt,
+      fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner,
+      expectedExecutionState: "PROVISIONING",
+      expectedAttemptState: "LEASED",
+      targetExecutionState: "RETRY_WAIT",
+      targetAttemptState: "FAILED",
+      actor: "dispatcher-a",
+      reason: "transient provisioning failure",
+      result: { error: "unavailable" },
+      retryDelayMs: 30_000,
+    })).resolves.toEqual({ applied: true, executionState: "RETRY_WAIT", attemptState: "FAILED" });
+
+    const persisted = await executionSnapshot(executionId);
+    expect(persisted.execution.state).toBe("RETRY_WAIT");
+    expect(persisted.execution.available_at.getTime()).toBeGreaterThan(Date.now() + 20_000);
+    expect(persisted.attempts[0]).toMatchObject({ state: "FAILED", lease_owner: null, lease_expires_at: null });
   });
 
   it("rejects a stale fence without mutating execution history", async () => {

@@ -53,15 +53,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
-Selector labels for the in-cluster Redis Deployment.
-*/}}
-{{- define "agentbay.redis.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "agentbay.name" . }}-redis
-app.kubernetes.io/instance: {{ .Release.Name }}
-app.kubernetes.io/component: redis
-{{- end -}}
-
-{{/*
 Name of the ServiceAccount used by the orchestrator.
 */}}
 {{- define "agentbay.serviceAccountName" -}}
@@ -119,13 +110,6 @@ Secret or the user-provided existing Secret.
 {{- end -}}
 
 {{/*
-Name of the in-cluster Redis Service.
-*/}}
-{{- define "agentbay.redis.fullname" -}}
-{{- printf "%s-redis" (include "agentbay.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-
-{{/*
 Selector labels for the in-cluster Postgres Deployment.
 */}}
 {{- define "agentbay.postgres.selectorLabels" -}}
@@ -139,25 +123,6 @@ Name of the in-cluster Postgres Service and Secret.
 */}}
 {{- define "agentbay.postgres.fullname" -}}
 {{- printf "%s-postgres" (include "agentbay.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-
-{{/*
-Resolve which Redis URL strategy is active. Output is one of:
-  "in-cluster"        - use the chart's Redis Deployment
-  "external-url"      - use the literal value from redis.external.url
-  "external-secret"   - use a key from an existing Secret
-  "none"              - no Redis, orchestrator falls back to in-memory state
-*/}}
-{{- define "agentbay.redis.mode" -}}
-{{- if .Values.redis.enabled -}}
-in-cluster
-{{- else if .Values.redis.external.url -}}
-external-url
-{{- else if .Values.redis.external.existingSecret -}}
-external-secret
-{{- else -}}
-none
-{{- end -}}
 {{- end -}}
 
 {{/*

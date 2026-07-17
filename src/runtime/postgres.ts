@@ -1,10 +1,9 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, type InferSelectModel } from "drizzle-orm";
+import { and, eq, type InferSelectModel } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import pg from "pg";
-import type { ThreadState } from "../types.js";
 import { isExecutionState, isTerminalExecutionState } from "../execution/states.js";
 import { isAttemptState } from "../dispatch/states.js";
 import {
@@ -34,37 +33,16 @@ import {
   ProfileVersionNotFoundError,
   type AgentProfileVersion,
   type Execution,
-  type JsonObject,
 } from "../execution/types.js";
-import type { AgentProfile, Bot, OpencodeConfigRecord, SandboxProfile } from "./types.js";
-import {
-  hashConfig,
-  resolveRuntime,
-  type RuntimeStore,
-  type RuntimeStoreSnapshot,
-  type UpsertOpencodeConfigInput,
-} from "./store.js";
+import { agentProfileDefinitionSchema } from "../execution/api-schema.js";
 import * as schema from "./schema.js";
 import {
-  agentProfiles,
   agentProfileVersions,
-  botAgentProfiles,
-  bots,
   events,
   executions,
   executionTransitions,
-  opencodeConfigs,
   outboxEntries,
-  sandboxProfiles,
 } from "./schema.js";
-import {
-  validateBotAdapters,
-  validateEnvVarRefs,
-  assertOpencodeAgentExists,
-  assertOpencodeConfigSupportsProfiles,
-  validateRuntimeID,
-  validateRuntimeSlug,
-} from "./validation.js";
 
 const { Pool } = pg;
 
@@ -110,7 +88,7 @@ export async function migratePostgresRuntimeStore(options: PostgresRuntimeStoreO
   }
 }
 
-export class PostgresRuntimeStore implements RuntimeStore, ExecutionStore, OutboxStore, DispatcherExecutionStore {
+export class PostgresRuntimeStore implements ExecutionStore, OutboxStore, DispatcherExecutionStore {
   constructor(
     private readonly pool: pg.Pool,
     private readonly db: RuntimeDatabase,
@@ -189,11 +167,12 @@ export class PostgresRuntimeStore implements RuntimeStore, ExecutionStore, Outbo
   }
 
   async publishProfileVersion(command: PublishProfileVersionCommand): Promise<AgentProfileVersion> {
+    const definition = agentProfileDefinitionSchema.parse(command.definition);
     const rows = await this.db
       .insert(agentProfileVersions)
       .values({
         createdAt: new Date(command.createdAt),
-        definition: command.definition,
+        definition,
         id: command.id,
         profileID: command.profileId,
         tenantID: command.tenantId,
@@ -377,7 +356,7 @@ export class PostgresRuntimeStore implements RuntimeStore, ExecutionStore, Outbo
                  execution.event_id, execution.input, execution.workspace, execution.resolved_policy,
                  execution.created_at, execution.timeout_at,
                   profile.id AS profile_version_id, profile.profile_id, profile.version,
-                  execution.resolved_policy AS definition,
+                  profile.definition AS definition,
                  attempt.attempt, attempt.fencing_token, attempt.state AS attempt_state,
                  attempt.lease_owner, attempt.lease_expires_at
           FROM updated_execution AS execution
@@ -635,6 +614,7 @@ export class PostgresRuntimeStore implements RuntimeStore, ExecutionStore, Outbo
     if (!isValidTransitionLeasedExecutionCommand(command)) {
       throw new Error("Invalid leased execution transition");
     }
+    assertNonnegativeInteger(command.retryDelayMs ?? 0, "Execution retry delay");
 
     const client = await this.pool.connect();
     try {
@@ -706,6 +686,8 @@ export class PostgresRuntimeStore implements RuntimeStore, ExecutionStore, Outbo
           ), updated_execution AS (
             UPDATE agentbay_executions
             SET state = $10, result = $11::jsonb,
+                available_at = CASE WHEN $10 = 'RETRY_WAIT'
+                  THEN $7 + ($20::double precision * interval '1 millisecond') ELSE available_at END,
                 completed_at = CASE WHEN $12 THEN $7 ELSE NULL END,
                 updated_at = $7
             WHERE id = $1 AND tenant_id = $2 AND state = $13
@@ -728,6 +710,7 @@ export class PostgresRuntimeStore implements RuntimeStore, ExecutionStore, Outbo
           command.targetAttemptState, now, terminalAttempt, command.expectedAttemptState, command.targetExecutionState,
           JSON.stringify(command.result ?? null), terminalExecution, command.expectedExecutionState, randomUUID(), command.actor,
           command.reason, JSON.stringify({}), command.workloadName ?? null, command.opencodeSessionId ?? null,
+          command.retryDelayMs ?? 0,
         ],
       });
       if (updated.rowCount !== 1) {
@@ -748,243 +731,8 @@ export class PostgresRuntimeStore implements RuntimeStore, ExecutionStore, Outbo
     }
   }
 
-  async addBotAgentProfile(entry: { botID: string; agentProfileID: string }): Promise<{ botID: string; agentProfileID: string }> {
-    validateRuntimeID(entry.botID, "botID");
-    validateRuntimeID(entry.agentProfileID, "agentProfileID");
-    await this.db.insert(botAgentProfiles).values(entry).onConflictDoNothing();
-    return entry;
-  }
-
-  async deleteAgentProfile(id: string): Promise<boolean> {
-    const rows = await this.db.delete(agentProfiles).where(eq(agentProfiles.id, id)).returning({ id: agentProfiles.id });
-    return rows.length > 0;
-  }
-
-  async deleteBot(id: string): Promise<boolean> {
-    const rows = await this.db.delete(bots).where(eq(bots.id, id)).returning({ id: bots.id });
-    return rows.length > 0;
-  }
-
-  async deleteBotAgentProfile(botID: string, agentProfileID: string): Promise<boolean> {
-    const bot = await this.getBot(botID);
-    if (bot?.defaultAgentProfileID === agentProfileID) {
-      throw new Error(`Cannot delete default agent profile mapping for bot ${botID}`);
-    }
-
-    const rows = await this.db
-      .delete(botAgentProfiles)
-      .where(and(eq(botAgentProfiles.botID, botID), eq(botAgentProfiles.agentProfileID, agentProfileID)))
-      .returning({ botID: botAgentProfiles.botID });
-    return rows.length > 0;
-  }
-
-  async deleteOpencodeConfig(id: string): Promise<boolean> {
-    const rows = await this.db.delete(opencodeConfigs).where(eq(opencodeConfigs.id, id)).returning({ id: opencodeConfigs.id });
-    return rows.length > 0;
-  }
-
-  async deleteSandboxProfile(id: string): Promise<boolean> {
-    const rows = await this.db.delete(sandboxProfiles).where(eq(sandboxProfiles.id, id)).returning({ id: sandboxProfiles.id });
-    return rows.length > 0;
-  }
-
-  async getAgentProfile(id: string): Promise<AgentProfile | undefined> {
-    const rows = await this.db.select().from(agentProfiles).where(eq(agentProfiles.id, id)).limit(1);
-    return rows[0] ? agentProfileFromRow(rows[0]) : undefined;
-  }
-
-  async getBot(id: string): Promise<Bot | undefined> {
-    const rows = await this.db.select().from(bots).where(eq(bots.id, id)).limit(1);
-    return rows[0] ? botFromRow(rows[0]) : undefined;
-  }
-
-  async getOpencodeConfig(id: string): Promise<OpencodeConfigRecord | undefined> {
-    const rows = await this.db.select().from(opencodeConfigs).where(eq(opencodeConfigs.id, id)).limit(1);
-    return rows[0] ? opencodeConfigFromRow(rows[0]) : undefined;
-  }
-
-  async getSandboxProfile(id: string): Promise<SandboxProfile | undefined> {
-    const rows = await this.db.select().from(sandboxProfiles).where(eq(sandboxProfiles.id, id)).limit(1);
-    return rows[0] ? sandboxProfileFromRow(rows[0]) : undefined;
-  }
-
-  async listAgentProfiles(): Promise<AgentProfile[]> {
-    const rows = await this.db.select().from(agentProfiles).orderBy(asc(agentProfiles.slug));
-    return rows.map(agentProfileFromRow);
-  }
-
-  async listBotAgentProfiles(): Promise<Array<{ botID: string; agentProfileID: string }>> {
-    return this.db
-      .select()
-      .from(botAgentProfiles)
-      .orderBy(asc(botAgentProfiles.botID), asc(botAgentProfiles.agentProfileID));
-  }
-
-  async listBots(): Promise<Bot[]> {
-    const rows = await this.db.select().from(bots).orderBy(asc(bots.slug));
-    return rows.map(botFromRow);
-  }
-
-  async listOpencodeConfigs(): Promise<OpencodeConfigRecord[]> {
-    const rows = await this.db.select().from(opencodeConfigs).orderBy(asc(opencodeConfigs.slug));
-    return rows.map(opencodeConfigFromRow);
-  }
-
-  async listSandboxProfiles(): Promise<SandboxProfile[]> {
-    const rows = await this.db.select().from(sandboxProfiles).orderBy(asc(sandboxProfiles.slug));
-    return rows.map(sandboxProfileFromRow);
-  }
-
-  async botBySlug(slug: string): Promise<Bot | undefined> {
-    const rows = await this.db.select().from(bots).where(eq(bots.slug, slug)).limit(1);
-    return rows[0] ? botFromRow(rows[0]) : undefined;
-  }
-
-  async resolveByBotSlug(slug: string): Promise<ReturnType<typeof resolveRuntime>> {
-    const snapshot = await this.snapshot();
-    const bot = snapshot.bots.find((candidate) => candidate.slug === slug);
-    if (!bot || !bot.enabled) throw new Error(`Unknown or disabled bot: ${slug}`);
-    return resolveRuntime(snapshot, bot, bot.defaultAgentProfileID);
-  }
-
-  async resolveByThreadState(state: ThreadState): Promise<ReturnType<typeof resolveRuntime>> {
-    const snapshot = await this.snapshot();
-    const bot = snapshot.bots.find((candidate) => candidate.id === state.botID);
-    if (!bot || !bot.enabled) throw new Error(`Unknown or disabled bot: ${state.botID}`);
-    return resolveRuntime(snapshot, bot, state.agentProfileID);
-  }
-
-  async upsertAgentProfile(profile: AgentProfile): Promise<AgentProfile> {
-    validateRuntimeID(profile.id, "id");
-    validateRuntimeSlug(profile.slug, "slug");
-    validateRuntimeID(profile.opencodeConfigID, "opencodeConfigID");
-    validateEnvVarRefs(profile.claimEnv, "claimEnv");
-
-    const opencodeConfig = await this.getOpencodeConfig(profile.opencodeConfigID);
-    if (!opencodeConfig) throw new Error(`Unknown opencode config: ${profile.opencodeConfigID}`);
-    assertOpencodeAgentExists(opencodeConfig.config, profile.opencodeAgentName, opencodeConfig.id);
-
-    const rows = await this.db
-      .insert(agentProfiles)
-      .values(profile)
-      .onConflictDoUpdate({
-        set: {
-          claimEnv: profile.claimEnv,
-          displayName: profile.displayName,
-          enabled: profile.enabled,
-          opencodeAgentName: profile.opencodeAgentName,
-          opencodeConfigID: profile.opencodeConfigID,
-          slug: profile.slug,
-        },
-        target: agentProfiles.id,
-      })
-      .returning();
-    return agentProfileFromRow(rows[0] ?? missingRow("agent profile", profile.id));
-  }
-
-  async upsertBot(bot: Bot): Promise<Bot> {
-    validateRuntimeID(bot.id, "id");
-    validateRuntimeSlug(bot.slug, "slug");
-    validateRuntimeID(bot.defaultAgentProfileID, "defaultAgentProfileID");
-    validateRuntimeID(bot.sandboxProfileID, "sandboxProfileID");
-    validateBotAdapters(bot.adapters);
-
-    return this.db.transaction(async (tx) => {
-      const rows = await tx
-        .insert(bots)
-        .values(bot)
-        .onConflictDoUpdate({
-          set: {
-            adapters: bot.adapters,
-            defaultAgentProfileID: bot.defaultAgentProfileID,
-            displayName: bot.displayName,
-            enabled: bot.enabled,
-            sandboxProfileID: bot.sandboxProfileID,
-            slug: bot.slug,
-          },
-          target: bots.id,
-        })
-        .returning();
-      await tx
-        .insert(botAgentProfiles)
-        .values({ agentProfileID: bot.defaultAgentProfileID, botID: bot.id })
-        .onConflictDoNothing();
-      return botFromRow(rows[0] ?? missingRow("bot", bot.id));
-    });
-  }
-
-  async upsertOpencodeConfig(input: UpsertOpencodeConfigInput): Promise<OpencodeConfigRecord> {
-    validateRuntimeID(input.id, "id");
-    validateRuntimeSlug(input.slug, "slug");
-
-    const updatedAt = input.updatedAt ? new Date(input.updatedAt) : new Date();
-    const configHash = hashConfig(input.config);
-    assertOpencodeConfigSupportsProfiles(
-      { ...input, configHash, updatedAt: updatedAt.toISOString() },
-      (await this.listAgentProfiles()).filter((profile) => profile.opencodeConfigID === input.id),
-    );
-
-    const rows = await this.db
-      .insert(opencodeConfigs)
-      .values({ ...input, configHash, updatedAt })
-      .onConflictDoUpdate({
-        set: {
-          config: input.config,
-          configHash,
-          displayName: input.displayName,
-          enabled: input.enabled,
-          slug: input.slug,
-          updatedAt,
-        },
-        target: opencodeConfigs.id,
-      })
-      .returning();
-    return opencodeConfigFromRow(rows[0] ?? missingRow("opencode config", input.id));
-  }
-
-  async upsertSandboxProfile(profile: SandboxProfile): Promise<SandboxProfile> {
-    validateRuntimeID(profile.id, "id");
-    validateRuntimeSlug(profile.slug, "slug");
-
-    const rows = await this.db
-      .insert(sandboxProfiles)
-      .values(profile)
-      .onConflictDoUpdate({
-        set: {
-          enabled: profile.enabled,
-          slug: profile.slug,
-          templateName: profile.templateName,
-          warmpool: profile.warmpool,
-        },
-        target: sandboxProfiles.id,
-      })
-      .returning();
-    return sandboxProfileFromRow(rows[0] ?? missingRow("sandbox profile", profile.id));
-  }
-
-  private async snapshot(): Promise<RuntimeStoreSnapshot> {
-    const [botRows, sandboxProfileRows, opencodeConfigRows, agentProfileRows, botAgentProfileRows] = await Promise.all([
-      this.db.select().from(bots),
-      this.db.select().from(sandboxProfiles),
-      this.db.select().from(opencodeConfigs),
-      this.db.select().from(agentProfiles),
-      this.db.select().from(botAgentProfiles),
-    ]);
-
-    return {
-      agentProfiles: agentProfileRows.map(agentProfileFromRow),
-      botAgentProfiles: botAgentProfileRows,
-      bots: botRows.map(botFromRow),
-      opencodeConfigs: opencodeConfigRows.map(opencodeConfigFromRow),
-      sandboxProfiles: sandboxProfileRows.map(sandboxProfileFromRow),
-    };
-  }
 }
 
-type BotRow = InferSelectModel<typeof bots>;
-type SandboxProfileRow = InferSelectModel<typeof sandboxProfiles>;
-type OpencodeConfigRow = InferSelectModel<typeof opencodeConfigs>;
-type AgentProfileRow = InferSelectModel<typeof agentProfiles>;
 type AgentProfileVersionRow = InferSelectModel<typeof agentProfileVersions>;
 type ExecutionRow = InferSelectModel<typeof executions>;
 
@@ -1051,52 +799,6 @@ type PromotedExecutionRow = {
   tenant_id: string;
 };
 
-function botFromRow(row: BotRow): Bot {
-  return {
-    adapters: row.adapters,
-    defaultAgentProfileID: row.defaultAgentProfileID,
-    displayName: row.displayName,
-    enabled: row.enabled,
-    id: row.id,
-    sandboxProfileID: row.sandboxProfileID,
-    slug: row.slug,
-  };
-}
-
-function sandboxProfileFromRow(row: SandboxProfileRow): SandboxProfile {
-  return {
-    enabled: row.enabled,
-    id: row.id,
-    slug: row.slug,
-    templateName: row.templateName,
-    warmpool: row.warmpool,
-  };
-}
-
-function opencodeConfigFromRow(row: OpencodeConfigRow): OpencodeConfigRecord {
-  return {
-    config: row.config,
-    configHash: row.configHash,
-    displayName: row.displayName,
-    enabled: row.enabled,
-    id: row.id,
-    slug: row.slug,
-    updatedAt: row.updatedAt.toISOString(),
-  };
-}
-
-function agentProfileFromRow(row: AgentProfileRow): AgentProfile {
-  return {
-    claimEnv: row.claimEnv,
-    displayName: row.displayName,
-    enabled: row.enabled,
-    id: row.id,
-    opencodeAgentName: row.opencodeAgentName,
-    opencodeConfigID: row.opencodeConfigID,
-    slug: row.slug,
-  };
-}
-
 function outboxMessageFromRow(row: ClaimedOutboxRow): ClaimedOutboxMessage {
   return {
     aggregateId: row.aggregate_id,
@@ -1147,7 +849,7 @@ function claimedExecutionFromRow(row: ClaimedExecutionRow): ClaimedExecution {
 function profileVersionFromRow(row: AgentProfileVersionRow): AgentProfileVersion {
   return {
     createdAt: row.createdAt.toISOString(),
-    definition: row.definition as JsonObject,
+    definition: agentProfileDefinitionSchema.parse(row.definition),
     id: row.id,
     profile: { id: row.profileID, version: row.version },
     tenantId: row.tenantID,
@@ -1212,10 +914,6 @@ function profileTimeoutSeconds(definition: Record<string, unknown>): number {
     throw new Error("Published profile has an invalid timeoutSeconds value");
   }
   return value as number;
-}
-
-function missingRow(kind: string, id: string): never {
-  throw new Error(`Failed to return ${kind}: ${id}`);
 }
 
 function assertNonnegativeInteger(value: number, name: string): void {

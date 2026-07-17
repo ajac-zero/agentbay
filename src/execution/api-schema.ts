@@ -1,6 +1,6 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { EXECUTION_STATES } from "./states.js";
-import type { ExecutionInput, JsonObject } from "./types.js";
+import type { AgentProfileDefinition, ExecutionInput, JsonObject } from "./types.js";
 
 export const simpleIdSchema = z
   .string()
@@ -11,9 +11,16 @@ export const versionSchema = z.coerce.number().int().positive();
 const MAX_JSON_BYTES = 128 * 1024;
 const boundedJsonObjectSchema = z
   .record(z.string(), z.unknown())
-  .refine((value) => Buffer.byteLength(JSON.stringify(value), "utf8") <= MAX_JSON_BYTES, `must be at most ${MAX_JSON_BYTES} bytes`);
-export const definitionSchema = z
+  .refine((value) => Buffer.byteLength(JSON.stringify(value), "utf8") <= MAX_JSON_BYTES, `must be at most ${MAX_JSON_BYTES} bytes`) as z.ZodType<JsonObject>;
+const dnsLabelSchema = z
+  .string()
+  .min(1)
+  .max(63)
+  .regex(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/, "must be a valid DNS label");
+
+export const agentProfileDefinitionSchema: z.ZodType<AgentProfileDefinition> = z
   .object({
+    schemaVersion: z.literal(1),
     runtime: z
       .object({
         type: z.literal("opencode"),
@@ -21,7 +28,18 @@ export const definitionSchema = z
         opencodeConfig: boundedJsonObjectSchema,
       })
       .strict(),
+    sandbox: z
+      .object({
+        templateName: dnsLabelSchema,
+        warmPool: dnsLabelSchema.default("none"),
+      })
+      .strict(),
+    permissions: z.object({ onRequest: z.literal("fail") }).strict(),
     timeoutSeconds: z.number().int().min(1).max(86_400),
+    retention: z
+      .object({ sandboxSecondsAfterFinished: z.number().int().min(0).max(86_400).default(0) })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((definition, context) => {
@@ -33,7 +51,8 @@ export const definitionSchema = z
         path: ["runtime", "opencodeConfig", "agent"],
       });
     }
-  }) as z.ZodType<JsonObject>;
+  });
+export const definitionSchema = agentProfileDefinitionSchema;
 export const profileRefSchema = z.object({ id: simpleIdSchema, version: z.number().int().positive() }).strict();
 export const executionInputSchema = z
   .object({

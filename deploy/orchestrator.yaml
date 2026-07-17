@@ -33,30 +33,15 @@ spec:
                 secretKeyRef:
                   name: agentbay-secrets
                   key: database-url
-            - name: REDIS_URL
+            - name: AGENTBAY_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: agentbay-secrets
-                  key: redis-url
-                  optional: true
-            - name: SLACK_BOT_TOKEN
+                  key: admin-token
+            - name: AGENTBAY_DISPATCHER_WORKER_ID
               valueFrom:
-                secretKeyRef:
-                  name: agentbay-secrets
-                  key: slack-bot-token
-                  optional: true
-            - name: SLACK_SIGNING_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: agentbay-secrets
-                  key: slack-signing-secret
-                  optional: true
-            - name: ANTHROPIC_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: agentbay-secrets
-                  key: anthropic-api-key
-                  optional: true
+                fieldRef:
+                  fieldPath: metadata.name
           readinessProbe:
             httpGet:
               path: /healthz

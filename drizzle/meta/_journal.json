@@ -5,43 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1779256617049,
-      "tag": "0000_wandering_captain_midlands",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1779257513071,
-      "tag": "0001_quick_spitfire",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1779287290103,
-      "tag": "0002_peaceful_squadron_supreme",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1784300434317,
-      "tag": "0003_lyrical_katie_power",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1784316077695,
-      "tag": "0004_fearless_pete_wisdom",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1784317253043,
-      "tag": "0005_overjoyed_turbo",
+      "when": 1784328994173,
+      "tag": "0000_execution_baseline",
       "breakpoints": true
     }
   ]

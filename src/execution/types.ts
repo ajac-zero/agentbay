@@ -4,6 +4,26 @@ export type JsonPrimitive = boolean | null | number | string;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
 
+export type AgentProfileDefinition = {
+  readonly schemaVersion: 1;
+  readonly runtime: {
+    readonly type: "opencode";
+    readonly agent: string;
+    readonly opencodeConfig: JsonObject;
+  };
+  readonly sandbox: {
+    readonly templateName: string;
+    readonly warmPool: string;
+  };
+  readonly permissions: {
+    readonly onRequest: "fail";
+  };
+  readonly timeoutSeconds: number;
+  readonly retention?: {
+    readonly sandboxSecondsAfterFinished: number;
+  };
+};
+
 export type AgentProfileRef = {
   id: string;
   version: number;
@@ -13,7 +33,7 @@ export type AgentProfileVersion = {
   id: string;
   tenantId: string;
   profile: AgentProfileRef;
-  definition: JsonObject;
+  definition: AgentProfileDefinition;
   createdAt: string;
 };
 

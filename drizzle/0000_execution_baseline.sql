@@ -44,7 +44,9 @@ CREATE TABLE "agentbay_execution_attempts" (
 	"workload_name" text,
 	CONSTRAINT "agentbay_execution_attempts_execution_id_attempt_pk" PRIMARY KEY("execution_id","attempt"),
 	CONSTRAINT "agentbay_execution_attempts_attempt_positive" CHECK ("agentbay_execution_attempts"."attempt" > 0),
-	CONSTRAINT "agentbay_execution_attempts_state_valid" CHECK ("agentbay_execution_attempts"."state" IN ('PENDING', 'LEASED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'))
+	CONSTRAINT "agentbay_execution_attempts_state_valid" CHECK ("agentbay_execution_attempts"."state" IN ('PENDING', 'LEASED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')),
+	CONSTRAINT "agentbay_execution_attempts_active_lease_consistent" CHECK (("agentbay_execution_attempts"."lease_owner" IS NULL) = ("agentbay_execution_attempts"."lease_expires_at" IS NULL) AND ("agentbay_execution_attempts"."state" IN ('LEASED', 'RUNNING')) = ("agentbay_execution_attempts"."lease_owner" IS NOT NULL)),
+	CONSTRAINT "agentbay_execution_attempts_terminal_consistent" CHECK (("agentbay_execution_attempts"."state" IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')) = ("agentbay_execution_attempts"."finished_at" IS NOT NULL))
 );
 --> statement-breakpoint
 CREATE TABLE "agentbay_execution_transitions" (
@@ -66,6 +68,7 @@ CREATE TABLE "agentbay_execution_transitions" (
 );
 --> statement-breakpoint
 CREATE TABLE "agentbay_executions" (
+	"available_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"completed_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"event_id" text NOT NULL,
@@ -93,11 +96,15 @@ CREATE TABLE "agentbay_outbox" (
 	"headers" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"id" text PRIMARY KEY NOT NULL,
 	"last_error" text,
+	"lease_expires_at" timestamp with time zone,
+	"lease_token" text,
 	"payload" jsonb NOT NULL,
 	"publish_attempts" integer DEFAULT 0 NOT NULL,
 	"published_at" timestamp with time zone,
 	"tenant_id" text NOT NULL,
 	"topic" text NOT NULL,
+	CONSTRAINT "agentbay_outbox_lease_complete" CHECK (("agentbay_outbox"."lease_token" IS NULL) = ("agentbay_outbox"."lease_expires_at" IS NULL)),
+	CONSTRAINT "agentbay_outbox_published_unleased" CHECK ("agentbay_outbox"."published_at" IS NULL OR "agentbay_outbox"."lease_token" IS NULL),
 	CONSTRAINT "agentbay_outbox_publish_attempts_nonnegative" CHECK ("agentbay_outbox"."publish_attempts" >= 0)
 );
 --> statement-breakpoint
@@ -112,12 +119,14 @@ CREATE UNIQUE INDEX "agentbay_events_source_event_unique" ON "agentbay_events" U
 CREATE UNIQUE INDEX "agentbay_events_source_dedup_unique" ON "agentbay_events" USING btree ("tenant_id","source","source_deduplication_key");--> statement-breakpoint
 CREATE INDEX "agentbay_events_tenant_type_ingested_idx" ON "agentbay_events" USING btree ("tenant_id","type","ingested_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "agentbay_execution_attempts_fencing_token_unique" ON "agentbay_execution_attempts" USING btree ("fencing_token");--> statement-breakpoint
-CREATE INDEX "agentbay_execution_attempts_lease_idx" ON "agentbay_execution_attempts" USING btree ("state","lease_expires_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "agentbay_execution_attempts_one_active_unique" ON "agentbay_execution_attempts" USING btree ("execution_id") WHERE "agentbay_execution_attempts"."state" IN ('LEASED', 'RUNNING');--> statement-breakpoint
+CREATE INDEX "agentbay_execution_attempts_expired_active_lease_idx" ON "agentbay_execution_attempts" USING btree ("lease_expires_at","execution_id") WHERE "agentbay_execution_attempts"."state" IN ('LEASED', 'RUNNING');--> statement-breakpoint
 CREATE UNIQUE INDEX "agentbay_execution_transitions_sequence_unique" ON "agentbay_execution_transitions" USING btree ("tenant_id","execution_id","sequence");--> statement-breakpoint
 CREATE INDEX "agentbay_execution_transitions_execution_created_idx" ON "agentbay_execution_transitions" USING btree ("execution_id","created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "agentbay_executions_tenant_idempotency_unique" ON "agentbay_executions" USING btree ("tenant_id","idempotency_key");--> statement-breakpoint
 CREATE INDEX "agentbay_executions_tenant_state_created_idx" ON "agentbay_executions" USING btree ("tenant_id","state","created_at");--> statement-breakpoint
 CREATE INDEX "agentbay_executions_state_timeout_idx" ON "agentbay_executions" USING btree ("state","timeout_at");--> statement-breakpoint
+CREATE INDEX "agentbay_executions_dispatch_idx" ON "agentbay_executions" USING btree ("available_at","created_at","id") WHERE "agentbay_executions"."state" = 'QUEUED';--> statement-breakpoint
 CREATE UNIQUE INDEX "agentbay_outbox_topic_aggregate_unique" ON "agentbay_outbox" USING btree ("topic","aggregate_type","aggregate_id");--> statement-breakpoint
-CREATE INDEX "agentbay_outbox_publish_idx" ON "agentbay_outbox" USING btree ("published_at","available_at");--> statement-breakpoint
+CREATE INDEX "agentbay_outbox_claim_idx" ON "agentbay_outbox" USING btree ("available_at","lease_expires_at") WHERE "agentbay_outbox"."published_at" IS NULL;--> statement-breakpoint
 CREATE INDEX "agentbay_outbox_tenant_aggregate_idx" ON "agentbay_outbox" USING btree ("tenant_id","aggregate_type","aggregate_id");
