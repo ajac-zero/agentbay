@@ -40,6 +40,11 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/name: demo-agentbay-postgres/);
       expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_HOST/);
       expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_PASSWORD/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_EXECUTION_MAINTENANCE_ENABLED\n\s+value: "true"/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_EXECUTION_MAINTENANCE_INTERVAL_MS\n\s+value: "5000"/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_EXECUTION_MAINTENANCE_BATCH_SIZE\n\s+value: "100"/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_EXECUTION_MAX_ATTEMPTS\n\s+value: "3"/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_EXECUTION_RETRY_DELAY_MS\n\s+value: "30000"/);
       expect(result.stdout).toMatch(/name: demo-agentbay-migrate-1/);
       expect(result.stdout).not.toMatch(/helm\.sh\/hook: "post-install,pre-upgrade"/);
       expect(result.stdout).toMatch(/command: \["node", "dist\/migrate\.js"\]/);

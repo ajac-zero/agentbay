@@ -212,6 +212,11 @@ function testConfig(): Config {
 
   return {
     botUserName: "agentbay",
+    executionMaintenanceBatchSize: 100,
+    executionMaintenanceEnabled: true,
+    executionMaintenanceIntervalMs: 5_000,
+    executionMaxAttempts: 3,
+    executionRetryDelayMs: 30_000,
     claimReadyTimeoutMs: 120_000,
     claimShutdownHours: 1,
     claimTtlSecondsAfterFinished: 60,

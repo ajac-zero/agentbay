@@ -203,6 +203,17 @@ aiGatewayAuthz:
 orchestrator:
   # -- Port the orchestrator HTTP server listens on.
   port: 3000
+  executionMaintenance:
+    # -- Reconcile expired execution leases and due retries in each orchestrator replica.
+    enabled: true
+    # -- Delay between maintenance cycles.
+    intervalMs: 5000
+    # -- Maximum executions processed by each operation in one cycle.
+    batchSize: 100
+    # -- Maximum number of attempts, including the initial attempt.
+    maxAttempts: 3
+    # -- Fixed delay before an execution becomes eligible for retry.
+    retryDelayMs: 30000
   # -- Extra orchestrator env vars expressed as a name/value list. These are
   # -- attached as plain `env` entries; use `secrets` for sensitive values.
   extraEnv: []

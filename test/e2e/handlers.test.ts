@@ -316,6 +316,11 @@ function testConfig(opencodePort: number): Config {
 
   return {
     botUserName: "agentbay",
+    executionMaintenanceBatchSize: 100,
+    executionMaintenanceEnabled: true,
+    executionMaintenanceIntervalMs: 5_000,
+    executionMaxAttempts: 3,
+    executionRetryDelayMs: 30_000,
     claimReadyTimeoutMs: 5_000,
     claimShutdownHours: 1,
     claimTtlSecondsAfterFinished: 60,

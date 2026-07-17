@@ -14,6 +14,11 @@ export type Config = {
   redisUrl?: string;
   sandboxClaimApiVersion: SandboxClaimAPIVersion;
   discord: AdapterToggle;
+  executionMaintenanceBatchSize: number;
+  executionMaintenanceEnabled: boolean;
+  executionMaintenanceIntervalMs: number;
+  executionMaxAttempts: number;
+  executionRetryDelayMs: number;
   gchat: AdapterToggle;
   github: AdapterToggle;
   linear: AdapterToggle;
@@ -35,6 +40,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     claimReadyTimeoutMs: readNumber(env.AGENTBAY_CLAIM_READY_TIMEOUT_MS, 180_000),
     claimShutdownHours: readNumber(env.AGENTBAY_CLAIM_SHUTDOWN_HOURS, 4),
     claimTtlSecondsAfterFinished: readNumber(env.AGENTBAY_CLAIM_TTL_SECONDS, 1_800),
+    executionMaintenanceBatchSize: readPositiveInteger(env.AGENTBAY_EXECUTION_MAINTENANCE_BATCH_SIZE, 100),
+    executionMaintenanceEnabled: readStrictBoolean(env.AGENTBAY_EXECUTION_MAINTENANCE_ENABLED, true),
+    executionMaintenanceIntervalMs: readTimerDelay(env.AGENTBAY_EXECUTION_MAINTENANCE_INTERVAL_MS, 5_000),
+    executionMaxAttempts: readPositiveInteger(env.AGENTBAY_EXECUTION_MAX_ATTEMPTS, 3),
+    executionRetryDelayMs: readNonnegativeInteger(env.AGENTBAY_EXECUTION_RETRY_DELAY_MS, 30_000),
     kubeNamespace: env.AGENTBAY_KUBE_NAMESPACE ?? env.POD_NAMESPACE ?? "agents",
     opencodeDirectory: env.AGENTBAY_OPENCODE_DIRECTORY ?? "/workspace",
     opencodePort: readNumber(env.AGENTBAY_OPENCODE_PORT, 4096),
@@ -210,4 +220,36 @@ function readSandboxClaimApiVersion(value: string | undefined): SandboxClaimAPIV
 
 function emptyToUndefined(value: string | undefined): string | undefined {
   return value && value.length > 0 ? value : undefined;
+}
+
+function readPositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = readInteger(value, fallback);
+  if (parsed < 1) throw new Error(`Expected a positive integer, got ${value}`);
+  return parsed;
+}
+
+function readNonnegativeInteger(value: string | undefined, fallback: number): number {
+  const parsed = readInteger(value, fallback);
+  if (parsed < 0) throw new Error(`Expected a nonnegative integer, got ${value}`);
+  return parsed;
+}
+
+function readInteger(value: string | undefined, fallback: number): number {
+  if (value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`Expected a safe integer, got ${value}`);
+  return parsed;
+}
+
+function readTimerDelay(value: string | undefined, fallback: number): number {
+  const parsed = readPositiveInteger(value, fallback);
+  if (parsed > 2_147_483_647) throw new Error(`Expected a timer delay at most 2147483647, got ${value}`);
+  return parsed;
+}
+
+function readStrictBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined || value === "") return fallback;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`Expected true or false, got ${value}`);
 }

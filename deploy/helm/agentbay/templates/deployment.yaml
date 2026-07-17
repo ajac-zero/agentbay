@@ -58,6 +58,16 @@ spec:
               value: {{ .Values.opencode.port | quote }}
             - name: AGENTBAY_OPENCODE_DIRECTORY
               value: {{ .Values.opencode.directory | quote }}
+            - name: AGENTBAY_EXECUTION_MAINTENANCE_ENABLED
+              value: {{ .Values.orchestrator.executionMaintenance.enabled | quote }}
+            - name: AGENTBAY_EXECUTION_MAINTENANCE_INTERVAL_MS
+              value: {{ .Values.orchestrator.executionMaintenance.intervalMs | quote }}
+            - name: AGENTBAY_EXECUTION_MAINTENANCE_BATCH_SIZE
+              value: {{ .Values.orchestrator.executionMaintenance.batchSize | quote }}
+            - name: AGENTBAY_EXECUTION_MAX_ATTEMPTS
+              value: {{ .Values.orchestrator.executionMaintenance.maxAttempts | quote }}
+            - name: AGENTBAY_EXECUTION_RETRY_DELAY_MS
+              value: {{ .Values.orchestrator.executionMaintenance.retryDelayMs | quote }}
             {{- if eq $mode "in-cluster" }}
             - name: REDIS_URL
               value: "redis://{{ include "agentbay.redis.fullname" . }}.{{ .Release.Namespace }}.svc:6379"
