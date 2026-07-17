@@ -43,6 +43,7 @@ export type TransitionLeasedExecutionCommand = {
   result?: JsonValue;
   workloadName?: string;
   opencodeSessionId?: string;
+  retryDelayMs?: number;
 };
 
 export type TransitionLeasedExecutionResult =

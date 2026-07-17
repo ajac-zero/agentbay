@@ -35,7 +35,10 @@ describe("execution persistence", () => {
     const profile = await store.publishProfileVersion({
       createdAt,
       definition: {
+        schemaVersion: 1,
         runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: { prompt: "Test" } } } },
+        sandbox: { templateName: "opencode", warmPool: "none" },
+        permissions: { onRequest: "fail" },
         timeoutSeconds: 3_600,
       },
       id: randomUUID(),

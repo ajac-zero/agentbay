@@ -1,8 +1,7 @@
 # agentbay - Architecture and Product Definition
 
-> **Status:** Source of truth for the next generation of agentbay.
+> **Status:** Source of truth for agentbay architecture.
 > **Audience:** Engineers, operators, agent authors, and AI coding agents contributing to this repository.
-> **Implementation note:** The current codebase is the previous chat-centric orchestrator. It is useful as a prototype and source of reusable components, but it does not yet implement this architecture.
 
 ## 1. Definition
 
@@ -878,51 +877,7 @@ Later, one global control plane may route to multiple execution clusters. Each c
 3. The message thread becomes a destination reference, not the execution database.
 4. Agentbay posts an acknowledgement immediately and later publishes progress or the final result to the thread.
 
-## 20. Migration From the Current Prototype
-
-The current repository proves several valuable mechanics but centers execution on a Chat SDK `Thread`. Do not incrementally stretch that abstraction into the new core.
-
-### 20.1 Reuse
-
-Candidates for reuse include:
-
-- OpenCode client creation, health checking, SSE parsing, and session control
-- Kubernetes client and `SandboxClaim` lifecycle knowledge
-- OpenCode configuration validation and injection
-- Drizzle/Postgres setup and migration tooling
-- Hono/OpenAPI setup
-- Structured logging
-- Helm deployment patterns
-- Chat and vendor webhook authentication code
-- Kubernetes lifecycle and Helm tests
-
-### 20.2 Replace
-
-Replace these concepts:
-
-- `Thread` as the unit of execution
-- Chat state as execution persistence
-- Synchronous webhook-to-sandbox processing
-- Bot-to-agent mappings as the primary configuration model
-- Process-wide adapter configuration
-- One long-lived sandbox per conversation as the default
-- Cleanup based only on claim expiry
-- Automatic approval of all OpenCode permissions
-
-### 20.3 Migration strategy
-
-Build the new execution core alongside the prototype rather than attempting a flag-day rewrite of every integration:
-
-1. Introduce new database tables and modules for profiles, events, bindings, executions, attempts, transitions, outbox, and deliveries.
-2. Implement explicit invocation and generic webhooks against the new core.
-3. Build the asynchronous dispatcher and result collector using extracted OpenCode/Kubernetes components.
-4. Reimplement GitHub as an event connector and destination.
-5. Reimplement chat as a connector pair.
-6. Remove legacy runtime, bot, thread-state, and reconciler code after equivalent use cases migrate.
-
-Compatibility with legacy database records or APIs is not required unless a deployed user is identified. Prefer a coherent new model over permanent translation layers.
-
-## 21. Delivery Roadmap
+## 20. Delivery Roadmap
 
 ### Phase 1: Generic asynchronous execution
 
@@ -977,7 +932,7 @@ Compatibility with legacy database records or APIs is not required unless a depl
 
 **Exit criterion:** Multiple tenants can safely operate large event bursts with predictable isolation, cost, and latency.
 
-## 22. Open Decisions
+## 21. Open Decisions
 
 These decisions should be resolved by implementation evidence rather than hidden assumptions:
 
@@ -992,7 +947,7 @@ These decisions should be resolved by implementation evidence rather than hidden
 9. **Artifact log format:** Plain objects, OpenTelemetry logs, or a queryable log backend plus archival storage.
 10. **Conversation semantics:** Whether related chat messages create separate executions, append events to one execution, or start an explicit long-running workflow.
 
-## 23. Glossary
+## 22. Glossary
 
 | Term | Meaning |
 |---|---|

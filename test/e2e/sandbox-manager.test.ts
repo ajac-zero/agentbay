@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -20,12 +19,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAgentClient, waitForOpencodeReady } from "../../src/agent/client.js";
 import { createSession, runPrompt } from "../../src/agent/runner.js";
 import type { Config } from "../../src/config.js";
-import { sandboxProfileHash } from "../../src/runtime/store.js";
-import type { ResolvedRuntime } from "../../src/runtime/types.js";
-import { SandboxManager } from "../../src/sandbox/manager.js";
-import { claimNameForThread } from "../../src/sandbox/naming.js";
-import type { SandboxClaim } from "../../src/sandbox/types.js";
-import { runtimeSnapshot, TestRuntimeStore } from "./runtime-store-fixture.js";
+import { SandboxClaimExecutionAttemptProvisioner } from "../../src/sandbox/provisioner.js";
+import { claimNameForExecutionAttempt } from "../../src/sandbox/naming.js";
+import type { ExecutionAttemptProvisioningInput, SandboxClaim } from "../../src/sandbox/types.js";
 
 type ManifestObject = KubernetesObject & {
   apiVersion: string;
@@ -58,13 +54,13 @@ const AGENT_SANDBOX_MANIFEST_URLS = [
   `https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/extensions.yaml`,
 ];
 
-describe("SandboxManager e2e", () => {
+describe("SandboxClaimExecutionAttemptProvisioner e2e", () => {
   let k3s: StartedK3sContainer | undefined;
   let rawKubeConfig: string;
   let kubeConfig: KubeConfig;
   let coreApi: CoreV1Api;
   let customObjectsApi: CustomObjectsApi;
-  let manager: SandboxManager;
+  let provisioner: SandboxClaimExecutionAttemptProvisioner;
 
   beforeAll(async () => {
     k3s = await new K3sContainer(K3S_IMAGE).start();
@@ -92,10 +88,7 @@ describe("SandboxManager e2e", () => {
     });
     await applyObject(objectApi, sandboxTemplate());
 
-    manager = new SandboxManager(kubeConfig, testConfig(), {
-      ANTHROPIC_API_KEY_CODER: "per-agent-anthropic-key",
-      EXTRA_ENV_AGENT: "from-test",
-    });
+    provisioner = new SandboxClaimExecutionAttemptProvisioner(kubeConfig, testConfig());
   });
 
   afterAll(async () => {
@@ -103,10 +96,11 @@ describe("SandboxManager e2e", () => {
   });
 
   it("provisions a real sandbox and connects to its opencode server", async () => {
-    const threadId = `thread-${crypto.randomUUID()}`;
-    const claimName = claimNameForThread(threadId);
-    const runtime = await testRuntime();
-    const claimPromise = manager.claimFor(threadId, runtime);
+    const executionId = `execution-${crypto.randomUUID()}`;
+    const attempt = 2;
+    const claimName = claimNameForExecutionAttempt(executionId, attempt);
+    const input = testProvisioningInput(executionId, attempt);
+    const claimPromise = provisioner.provision(input, new AbortController().signal);
 
     const createdClaim = await waitForClaim(customObjectsApi, claimName);
     const password = createdClaim.spec?.env?.find((entry) => entry.name === "OPENCODE_SERVER_PASSWORD")?.value;
@@ -114,43 +108,39 @@ describe("SandboxManager e2e", () => {
     expect(createdClaim.metadata.namespace).toBe(NAMESPACE);
     expect(createdClaim.metadata.labels).toMatchObject({
       "app.kubernetes.io/managed-by": "agentbay",
-      "agentbay.dev/agent-profile": labelValue(runtime.agentProfile.id),
-      "agentbay.dev/bot": labelValue(runtime.bot.id),
-      "agentbay.dev/sandbox-profile": labelValue(runtime.sandboxProfile.id),
+      "agentbay.dev/execution": executionId,
+      "agentbay.dev/attempt": String(attempt),
+      "agentbay.dev/profile": input.profileVersion.profileId,
     });
     expect(createdClaim.metadata.annotations).toMatchObject({
-      "agentbay.dev/agent-profile-id": runtime.agentProfile.id,
-      "agentbay.dev/agent-profile-hash": expect.any(String),
-      "agentbay.dev/bot-id": runtime.bot.id,
-      "agentbay.dev/opencode-agent-name": "coder",
-      "agentbay.dev/opencode-config-hash": runtime.opencodeConfig.configHash,
-      "agentbay.dev/opencode-config-id": "opencode-config-default",
-      "agentbay.dev/sandbox-profile-hash": sandboxProfileHash(runtime.sandboxProfile),
-      "agentbay.dev/sandbox-profile-id": runtime.sandboxProfile.id,
-      "agentbay.dev/thread-id": threadId,
+      "agentbay.dev/tenant-id": input.tenantId,
+      "agentbay.dev/execution-id": executionId,
+      "agentbay.dev/attempt": String(attempt),
+      "agentbay.dev/profile-version-id": input.profileVersion.id,
+      "agentbay.dev/profile-id": input.profileVersion.profileId,
+      "agentbay.dev/profile-version": String(input.profileVersion.version),
     });
     expect(createdClaim.spec).toMatchObject({
       sandboxTemplateRef: { name: "opencode-template" },
       warmpool: "none",
       lifecycle: {
-        shutdownPolicy: "Delete",
+        shutdownPolicy: "DeleteForeground",
+        shutdownTime: input.timeoutAt.toISOString(),
         ttlSecondsAfterFinished: 60,
       },
       additionalPodMetadata: {
         labels: {
           "agentbay.dev/managed-by": "agentbay",
-          "agentbay.dev/agent-profile": labelValue(runtime.agentProfile.id),
-          "agentbay.dev/bot": labelValue(runtime.bot.id),
+          "agentbay.dev/execution": executionId,
+          "agentbay.dev/attempt": String(attempt),
+          "agentbay.dev/profile": input.profileVersion.profileId,
           "agentbay.dev/claim": claimName,
-          "agentbay.dev/sandbox-profile": labelValue(runtime.sandboxProfile.id),
         },
       },
     });
     expect(createdClaim.spec?.env).toEqual(
       expect.arrayContaining([
         { name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
-        { name: "ANTHROPIC_API_KEY", value: "per-agent-anthropic-key" },
-        { name: "EXTRA_ENV", value: "from-test" },
         {
           name: "OPENCODE_CONFIG_CONTENT",
           value: JSON.stringify({
@@ -171,24 +161,28 @@ describe("SandboxManager e2e", () => {
 
     const sandbox = await claimPromise;
 
-    expect(sandbox).toMatchObject({ claimName, password });
-    expect(sandbox.podFQDN).toEqual(expect.any(String));
+    expect(sandbox).toMatchObject({ workloadName: claimName, password });
+    expect(sandbox.host).toEqual(expect.any(String));
 
     const podName = await waitForSandboxPod(coreApi, claimName);
     const portForward = await startPortForward(rawKubeConfig, podName);
 
     try {
-      const portForwardedConfig = { ...testConfig(), opencodePort: portForward.localPort };
-      const portForwardedSandbox = { ...sandbox, podFQDN: "127.0.0.1" };
+      const connection = {
+        directory: testConfig().opencodeDirectory,
+        port: portForward.localPort,
+        readyTimeoutMs: testConfig().claimReadyTimeoutMs,
+      };
+      const portForwardedSandbox = { password: sandbox.password, host: "127.0.0.1" };
 
-      await waitForOpencodeReady(portForwardedSandbox, portForwardedConfig);
+      await waitForOpencodeReady(portForwardedSandbox, connection);
 
-      const client = createAgentClient(portForwardedSandbox, portForwardedConfig);
+      const client = createAgentClient(portForwardedSandbox, connection);
       const sessionID = await createSession(client, "e2e session");
       const chunks: string[] = [];
 
       for await (const chunk of runPrompt({
-        agentName: runtime.opencodeAgentName,
+        agentName: "coder",
         client,
         sessionID,
         text: "stream a greeting",
@@ -199,7 +193,7 @@ describe("SandboxManager e2e", () => {
       expect(sessionID).toBe("session-e2e");
       expect(chunks).toEqual(["Hello", " from runPrompt"]);
 
-      await manager.releaseClaim(claimName);
+      await provisioner.release(input, new AbortController().signal);
       await expect(waitForClaimDeleted(customObjectsApi, claimName)).resolves.toBeUndefined();
     } finally {
       await portForward.stop();
@@ -208,67 +202,52 @@ describe("SandboxManager e2e", () => {
 });
 
 function testConfig(): Config {
-  const disabled = { enabled: false };
-
   return {
-    botUserName: "agentbay",
+    dispatcherEnabled: false,
+    dispatcherIdlePollMs: 500,
+    dispatcherLeaseDurationMs: 60_000,
+    dispatcherRenewIntervalMs: 20_000,
+    dispatcherWorkerId: "test-worker",
     executionMaintenanceBatchSize: 100,
     executionMaintenanceEnabled: true,
     executionMaintenanceIntervalMs: 5_000,
     executionMaxAttempts: 3,
     executionRetryDelayMs: 30_000,
     claimReadyTimeoutMs: 120_000,
-    claimShutdownHours: 1,
-    claimTtlSecondsAfterFinished: 60,
     kubeNamespace: NAMESPACE,
     opencodeDirectory: "/workspace",
     opencodePort: 4096,
     port: 3000,
     sandboxClaimApiVersion: VERSION,
-    discord: disabled,
-    gchat: disabled,
-    github: disabled,
-    linear: disabled,
-    messenger: disabled,
-    slack: disabled,
-    teams: disabled,
-    telegram: disabled,
-    whatsapp: disabled,
   };
 }
 
-async function testRuntime(): Promise<ResolvedRuntime> {
-  return new TestRuntimeStore(
-    runtimeSnapshot({
-      agentClaimEnv: [
-        { name: "ANTHROPIC_API_KEY", valueFromEnv: "ANTHROPIC_API_KEY_CODER" },
-        { name: "EXTRA_ENV", valueFromEnv: "EXTRA_ENV_AGENT" },
-      ],
-      agentProfileID: "agent/profile/default:invalid-and-far-too-long-for-a-kubernetes-label-value",
-      botID: "bot/default:invalid-and-far-too-long-for-a-kubernetes-label-value",
-      botSlug: "agentbay",
-      opencodeAgentName: "coder",
-      opencodeConfigID: "opencode-config-default",
-      opencodeConfigSlug: "default",
-      opencodeConfig: {
-        permission: { "*": "allow" },
-        agent: {
-          coder: {
-            prompt: "sandbox test prompt",
-            model: "anthropic/claude-sonnet-4-5",
-            tools: { bash: false },
-          },
+function testProvisioningInput(executionId: string, attempt: number): ExecutionAttemptProvisioningInput {
+  return {
+    tenantId: "tenant-e2e",
+    executionId,
+    attempt,
+    profileVersion: {
+      id: "profile-version-e2e-7",
+      profileId: "profile-e2e",
+      version: 7,
+    },
+    sandboxTemplate: "opencode-template",
+    warmPool: "none",
+    opencodeConfig: {
+      permission: { "*": "allow" },
+      agent: {
+        coder: {
+          prompt: "sandbox test prompt",
+          model: "anthropic/claude-sonnet-4-5",
+          tools: { bash: false },
         },
-        default_agent: "coder",
       },
-      sandboxProfileID: "sandbox/profile/default:invalid-and-far-too-long-for-a-kubernetes-label-value",
-    }),
-  ).resolveByBotSlug("agentbay");
-}
-
-function labelValue(value: string): string {
-  if (value.length <= 63 && /^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$/.test(value)) return value;
-  return `h-${createHash("sha256").update(value).digest("hex").slice(0, 61)}`;
+      default_agent: "coder",
+    },
+    timeoutAt: new Date(Date.now() + 60 * 60 * 1_000),
+    ttlSecondsAfterFinished: 60,
+  };
 }
 
 async function installAgentSandbox(api: KubernetesObjectApi): Promise<void> {

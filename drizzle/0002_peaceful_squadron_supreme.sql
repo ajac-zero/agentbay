@@ -1,2 +1,0 @@
-ALTER TABLE "agentbay_agent_profiles" ADD COLUMN "claim_env" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
-ALTER TABLE "agentbay_bots" ADD COLUMN "adapters" jsonb DEFAULT '{}'::jsonb NOT NULL;

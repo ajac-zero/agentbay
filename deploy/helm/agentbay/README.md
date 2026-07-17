@@ -1,30 +1,27 @@
 # agentbay Helm chart
 
-Installs the agentbay orchestrator, RBAC scoped to `SandboxClaim` resources,
-optionally an in-cluster Redis for Chat SDK state, optionally an Ingress
-for chat platform webhooks, and optionally `SandboxTemplate` /
-`SandboxWarmPool` resources.
+Installs the agentbay execution API and its Kubernetes integration. The chart
+includes the API Deployment and Service, PostgreSQL migration Job,
+SandboxClaim RBAC, execution maintenance, sandbox reconciler, optional
+in-cluster PostgreSQL, optional Ingress, optional `SandboxTemplate` and
+`SandboxWarmPool` resources, and optional Envoy AI Gateway authorization.
+
+Each orchestrator replica includes a fenced dispatcher worker that claims queued executions and runs them in attempt-scoped SandboxClaims. A durable external event bus is not selected yet.
 
 ## Prerequisite: agent-sandbox
 
-The `agent-sandbox` CRDs **and** controllers must already exist in the
-cluster. The orchestrator creates `SandboxClaim` objects on every chat
-event; without the controllers nothing reconciles them into Pods and the
-orchestrator hangs. Install once per cluster, separately from this chart:
+Install the `agent-sandbox` CRDs and controllers once per cluster before using
+SandboxClaim-based execution:
 
 ```bash
-TAG=v0.4.6   # match what your platform has tested; e2e suite pins v0.4.6
+TAG=v0.4.6
 kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$TAG/manifest.yaml
 kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$TAG/extensions.yaml
-
 kubectl -n agent-sandbox-system rollout status deploy/agent-sandbox-controller
 ```
 
-This chart deliberately does **not** bundle agent-sandbox. It is a
-cluster-wide controller with its own upgrade cadence; co-managing it from
-a per-app Helm release would be the operator-in-a-chart antipattern. The
-e2e harness in [`test/e2e/`](../../../test/e2e) shows the full install
-flow used for tests.
+The chart deliberately does not bundle this cluster-wide controller because it
+has an independent lifecycle and upgrade cadence.
 
 ## Quick start
 
@@ -35,44 +32,40 @@ helm install agentbay deploy/helm/agentbay \
   --set image.tag=latest
 ```
 
-For production, reference an existing `Secret` instead of inlining values:
+The API exposes health, OpenAPI documentation, immutable profile versions, and
+execution submission and lookup:
 
-```bash
-helm install agentbay deploy/helm/agentbay \
-  --namespace agents --create-namespace \
-  --set secrets.existingSecret=agentbay-secrets
+```text
+GET  /healthz
+GET  /docs
+GET  /openapi.json
+POST /v1/agent-profiles/:profileID/versions
+GET  /v1/agent-profiles/:profileID/versions/:version
+POST /v1/executions
+GET  /v1/executions/:id
 ```
 
-## Redis (Chat SDK state)
+All `/v1/*` routes require `Authorization: Bearer <token>`.
+`POST /v1/executions` also requires an `Idempotency-Key` header. The generated
+OpenAPI document is the source of truth for request and response schemas.
 
-The chart supports three modes, selected by `redis.*`:
+## PostgreSQL and migrations
 
-| Mode | How to enable | Notes |
+PostgreSQL is required for durable profile, execution, attempt, transition,
+lease, and outbox state. Select a mode with `database.*`:
+
+| Mode | Configuration | Notes |
 |---|---|---|
-| In-cluster Redis (default) | `redis.enabled=true` | Single-replica Deployment + Service. Set `redis.persistence.enabled=true` for a PVC-backed volume. |
-| External Redis URL | `redis.enabled=false` + `redis.external.url=redis://...` | URL is rendered into the orchestrator Deployment env. |
-| External Redis from existing Secret | `redis.enabled=false` + `redis.external.existingSecret=my-redis` + `redis.external.existingSecretKey=REDIS_URL` | Recommended for production; keeps credentials out of values files. |
-| None (in-memory) | `redis.enabled=false`, no `external.*` set | Chat SDK falls back to in-memory state. Single replica only; state is lost on restart. |
+| In-cluster PostgreSQL | `database.enabled=true` | Default, intended for development and small installs. Enable `database.persistence.enabled` to retain data across Pod replacement. |
+| External URL | `database.enabled=false` and `database.external.url=postgres://...` | Renders the URL directly into workload environment configuration. |
+| External Secret | `database.enabled=false` and `database.external.existingSecret=my-postgres` | Recommended for production. The key defaults to `AGENTBAY_DATABASE_URL`. |
 
-## Postgres (runtime configuration)
+`migrations.enabled=true` runs pending Drizzle migrations. External databases
+use a `pre-install,pre-upgrade` hook. With chart-managed PostgreSQL, migrations
+run as a normal Job so the database can start before migration while API
+readiness waits for the schema.
 
-The chart supports three modes, selected by `database.*`:
-
-| Mode | How to enable | Notes |
-|---|---|---|
-| In-cluster Postgres (default) | `database.enabled=true` | Single-replica Deployment + Service + Secret. The orchestrator uses discrete host/user/password env vars. Set `database.persistence.enabled=true` for a PVC-backed volume. |
-| External Postgres URL | `database.enabled=false` + `database.external.url=postgres://...` | URL is rendered into the orchestrator Deployment env. |
-| External Postgres from existing Secret | `database.enabled=false` + `database.external.existingSecret=my-postgres` + `database.external.existingSecretKey=AGENTBAY_DATABASE_URL` | Recommended for production; keeps credentials out of values files. |
-
-The chart runs pending Drizzle migrations with a migration Job when `migrations.enabled=true` (the default). External databases use a `pre-install,pre-upgrade` hook so migrations complete before the orchestrator rollout. The chart-managed Postgres default renders migrations as a normal Job; the orchestrator can start, but its readiness probe stays unready until the Job creates the runtime tables.
-
-Runtime rows are explicit: create bots/profiles/configs through the admin API, your own SQL/bootstrap tooling, or the chart's optional runtime seed hook.
-
-For production, prefer an external database so the migration Job can run before the app Deployment is created. The in-cluster Postgres mode is intended for small installs and development.
-
-When `migrations.enabled=true`, configure external database credentials through `database.external.url` or `database.external.existingSecret`. A generic `secrets.existingSecret` containing `AGENTBAY_DATABASE_URL` is also supported, but chart-managed `secrets.data.AGENTBAY_DATABASE_URL` is rejected because pre-install hooks cannot read normal chart resources before they are created.
-
-For production, prefer an existing Secret:
+For an external database:
 
 ```bash
 helm install agentbay deploy/helm/agentbay \
@@ -81,158 +74,68 @@ helm install agentbay deploy/helm/agentbay \
   --set database.external.existingSecret=agentbay-postgres
 ```
 
-## Secrets
+## Secrets and API token
 
-All adapter credentials and orchestrator-side secrets (model API keys,
-Redis/Postgres URLs, `AGENTBAY_ADMIN_TOKEN`, etc.) are mounted via `envFrom: secretRef`. Choose one of:
+The API currently uses `AGENTBAY_ADMIN_TOKEN` as its bearer token. Despite the
+environment variable's historical name, it authenticates the execution API;
+there is no runtime-admin API.
 
-- **Chart-managed** (`secrets.create=true`, default): the chart creates a
-  `Secret` named after the release with the keys provided in
-  `secrets.data`. Convenient for dev / GitOps where the values file itself
-  is encrypted (e.g. SOPS, sealed-secrets).
-- **Existing Secret** (`secrets.existingSecret=<name>`): the chart skips
-  creating its own Secret and mounts the one you already manage. The Secret
-  must live in the release namespace and use the canonical env var names
-  (e.g. `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `ANTHROPIC_API_KEY`).
+Choose one secret mode:
 
-The full list of supported env var keys is in the project
-[README](../../../README.md#configuration).
+- `secrets.create=true` creates a Secret from `secrets.data`. If no
+  `admin.token` is supplied, Helm generates `AGENTBAY_ADMIN_TOKEN` and preserves
+  it across upgrades.
+- `secrets.existingSecret=<name>` mounts a Secret managed outside this chart.
+  It must contain `AGENTBAY_ADMIN_TOKEN` and any other process credentials under
+  their canonical environment variable names.
 
-When the chart creates its own Secret, it also creates or preserves an
-`AGENTBAY_ADMIN_TOKEN` value so a fresh install can create the initial
-runtime records through `/admin/runtime/*`. If you use `secrets.existingSecret`,
-put `AGENTBAY_ADMIN_TOKEN` in that Secret yourself.
+Do not put plaintext production credentials in a values file. Use an existing
+Secret, External Secrets, SOPS, Sealed Secrets, or workload identity. Profile
+documents should reference credential policy rather than embed secret values.
 
-## Runtime seed
+## Replicas and maintenance
 
-Set `runtimeSeed.enabled=true` to create/update runtime records after each
-install or upgrade. The chart renders a `post-install,post-upgrade` Job that
-waits for `/healthz`, reads `AGENTBAY_ADMIN_TOKEN` from the same Secret as the
-orchestrator, and upserts records through the admin API. It does not write SQL
-directly, so seed data goes through the same validation as manual admin API
-calls.
+API replicas share durable state in PostgreSQL, so `replicaCount` can be greater
+than one without a process-local session backend. Each replica runs execution
+maintenance by default to promote due retries and recover expired leases. The
+database operations are safe to run concurrently; tune or disable them under
+`orchestrator.executionMaintenance`.
 
-Seed arrays are empty by default. Define the records that match your
-environment-specific bots, sandbox profiles, and model/provider config:
-
-```yaml
-runtimeSeed:
-  enabled: true
-  opencodeConfigs:
-    - id: opencode-config-default
-      slug: default
-      displayName: Default
-      enabled: true
-      config:
-        model: azure-anthropic/claude-sonnet-4-5
-        provider:
-          azure-anthropic:
-            name: Azure AI Foundry (Anthropic)
-            npm: "@ai-sdk/anthropic"
-            options:
-              baseURL: https://example.openai.azure.com/anthropic/v1
-              apiKey: "{env:ANTHROPIC_API_KEY}"
-            models:
-              claude-sonnet-4-5:
-                id: claude-sonnet-4-5
-                name: Claude Sonnet 4.5
-                tool_call: true
-                attachment: true
-                reasoning: true
-                temperature: true
-        agent:
-          agentbay:
-            prompt: You are running inside an isolated Kubernetes sandbox. Help the user with the requested coding task.
-        default_agent: agentbay
-  sandboxProfiles:
-    - id: sandbox-profile-default
-      slug: default
-      templateName: opencode-template
-      warmpool: none
-      enabled: true
-  agentProfiles:
-    - id: agent-profile-agentbay
-      slug: agentbay
-      displayName: agentbay
-      opencodeConfigID: opencode-config-default
-      opencodeAgentName: agentbay
-      claimEnv:
-        - name: ANTHROPIC_API_KEY
-          valueFromEnv: ANTHROPIC_API_KEY_AGENTBAY
-      enabled: true
-  bots:
-    - id: bot-agentbay
-      slug: agentbay
-      displayName: agentbay
-      adapters:
-        telegram:
-          botTokenEnv: TELEGRAM_BOT_TOKEN_AGENTBAY
-      sandboxProfileID: sandbox-profile-default
-      defaultAgentProfileID: agent-profile-agentbay
-      enabled: true
-```
-
-The seed Job is intentionally idempotent. It uses `PUT` for bots, sandbox
-profiles, opencode configs, and agent profiles, and `POST` with conflict-ignore
-semantics for extra bot-agent allow-list entries.
-
-Use `helm install --wait` and `helm upgrade --wait` when runtime seed is
-enabled with an external database so the orchestrator is ready before the seed
-Job calls the admin API.
-For future upgrades that rename an opencode agent already referenced by an
-AgentProfile, seed a config containing both old and new agent names before
-switching the AgentProfile, then remove the old agent in a later upgrade.
-
-## Adapter configuration
-
-Adapter selection belongs to runtime bot records, not chart-wide values. Set
-per-bot adapter config under `runtimeSeed.bots[].adapters` when using the seed
-hook, or manage bot records through the admin API/SQL outside Helm. For
-example, a Telegram bot can reference its token with
-`runtimeSeed.bots[0].adapters.telegram.botTokenEnv=TELEGRAM_BOT_TOKEN_AGENTBAY`.
-
-Global adapter env vars such as `AGENTBAY_SLACK_ENABLED` are still supported by
-the orchestrator for deployments that intentionally use shared process-level
-credentials, but this chart does not expose them as top-level adapter values.
-Set them via `orchestrator.extraEnv` only when you explicitly need that legacy
-process-wide behavior.
+This maintenance loop complements the embedded execution dispatcher. Configure
+it with `orchestrator.dispatcher.enabled`, `idlePollMs`, `leaseDurationMs`, and
+`renewIntervalMs`. Each replica runs one worker when enabled.
 
 ## RBAC and namespaces
 
-- The orchestrator runs in the **release namespace**.
-- `SandboxClaim` objects are created in `claims.namespace` (defaults to the
-  release namespace).
-- `claims.apiVersion` defaults to `v1alpha1` for compatibility with the latest
-  public agent-sandbox release. Set it to `v1beta1` only when the cluster
-  serves beta agent-sandbox CRDs.
-- A `Role` + `RoleBinding` granting `create/delete/get/list/watch` on
-  `sandboxclaims.extensions.agents.x-k8s.io` is installed in
-  `claims.namespace`.
-- If you split orchestrator and tenant namespaces, set `claims.namespace`
-  and ensure that namespace exists.
+The API runs in the release namespace. SandboxClaims are created in
+`claims.namespace`, which defaults to the release namespace. When `rbac.create`
+is enabled, the chart installs a namespaced Role and RoleBinding for
+SandboxClaim access. `claims.apiVersion` defaults to `v1alpha1`; use `v1beta1`
+only when the installed CRDs serve it.
 
-## SandboxTemplates and SandboxWarmPools
+The separate reconciler CronJob lists agentbay-managed SandboxClaims and deletes
+claims beyond their shutdown time plus `reconciler.graceMinutes`. Its service
+account and RBAC are independently configurable under `reconciler.*`.
 
-The chart can optionally manage `SandboxTemplate` and `SandboxWarmPool`
-resources. Both are **off by default** — enable them when you want the
-chart to be the single source of truth for the orchestrator and the
-sandboxes it references.
+## Sandbox templates and warm pools
+
+`sandboxTemplates.enabled` and `sandboxWarmPools.enabled` are off by default so
+platform teams can own these resources independently. A minimal chart-managed
+configuration is:
 
 ```yaml
 sandboxTemplates:
   enabled: true
   templates:
-    - name: opencode-template          # referenced by SandboxProfile.templateName in the runtime DB
-      namespace: ""                    # defaults to claims.namespace
+    - name: opencode-template
       image:
         repository: ghcr.io/your-org/opencode-sandbox
         tag: v1.2.3
       resources:
         requests: { cpu: 500m, memory: 1Gi }
-        limits:   { cpu: "2",   memory: 4Gi }
+        limits: { cpu: "2", memory: 4Gi }
       workspace:
-        type: persistentVolumeClaim    # or emptyDir
-        size: 5Gi
+        type: emptyDir
 
 sandboxWarmPools:
   enabled: true
@@ -242,40 +145,17 @@ sandboxWarmPools:
       replicas: 2
 ```
 
-Why opt-in:
+The template renderer provides an OpenCode container, workspace, service, and
+managed NetworkPolicy. Use `sidecars`, `extraVolumes`, `extraVolumeMounts`,
+`containerOverrides`, and `podSpecOverrides` for common extensions, or
+`specOverride` for full control.
 
-- The agent-sandbox CRDs must be installed in the cluster first. Without
-  them, `helm install` fails when these resources are enabled.
-- Some platforms own `SandboxTemplate` / `NetworkPolicy` through GitOps
-  or admission policy (OPA, Kyverno) and prefer the orchestrator chart
-  to stay out of that domain.
+## Envoy AI Gateway authorization
 
-Why enabling is usually the right call:
-
-- `claims.templateName` and the actual `SandboxTemplate` name stay in
-  lockstep under one `helm upgrade`.
-- The template's NetworkPolicy `ingress.from.podSelector` is auto-rendered
-  from the orchestrator's own Pod labels, so the two cannot drift.
-- One image bump in values updates both the orchestrator and the
-  sandbox image references — no more "edit `deploy/examples/...` and
-  remember to apply it."
-
-For full takeover of a template's spec (e.g. fields the chart does not
-expose), set `specOverride: { ... }` on that entry. For common extensions,
-prefer `sidecars`, `extraVolumes`, `extraVolumeMounts`, `containerOverrides`,
-and `podSpecOverrides` so the chart still renders the standard opencode
-container, workspace volume, service, and NetworkPolicy.
-
-### Envoy AI Gateway authz pattern
-
-For deployments where sandbox Pods should not receive model-provider API keys,
-enable the chart's `aiGatewayAuthz` integration. The chart deploys the central
-`agentbay-authz` Envoy `ext_authz` service, adds an `agentbay-gateway-proxy`
-sidecar to chart-managed `SandboxTemplate`s, and projects a short-lived
-Kubernetes service account token only into that sidecar.
-
-Leave `agentProfiles[].claimEnv` empty and point opencode at the sidecar's
-localhost listener:
+Enable `aiGatewayAuthz` when sandbox Pods should reach model providers through
+an Envoy AI Gateway without receiving provider API keys. The chart deploys the
+central `agentbay-authz` `ext_authz` service and adds a localhost proxy sidecar
+and projected, audience-bound service account token to chart-managed templates.
 
 ```yaml
 aiGatewayAuthz:
@@ -293,35 +173,6 @@ aiGatewayAuthz:
         - protocol: TCP
           port: 8080
 
-runtimeSeed:
-  opencodeConfigs:
-    - id: opencode-config-default
-      config:
-        model: envoy-gateway/claude-sonnet-4-5
-        provider:
-          envoy-gateway:
-            name: Envoy AI Gateway
-            npm: "@ai-sdk/openai-compatible"
-            options:
-              baseURL: http://agentbay-gateway:8080/v1
-              apiKey: unused
-            models:
-              claude-sonnet-4-5:
-                id: claude-sonnet-4-5
-                tool_call: true
-        agent:
-          agentbay:
-            prompt: You are running inside an isolated Kubernetes sandbox.
-        default_agent: agentbay
-  agentProfiles:
-    - id: agent-profile-agentbay
-      slug: agentbay
-      displayName: agentbay
-      opencodeConfigID: opencode-config-default
-      opencodeAgentName: agentbay
-      claimEnv: []
-      enabled: true
-
 sandboxTemplates:
   enabled: true
   templates:
@@ -331,15 +182,7 @@ sandboxTemplates:
           allowInternetExceptPrivate: false
 ```
 
-The `agentbay-gateway` hostname is rendered as a Pod `hostAliases` entry
-pointing at `127.0.0.1`. Use `http://127.0.0.1:8080/v1` if you prefer not to
-rely on that alias. A URL without a port, such as `http://agentbay-gateway/v1`,
-would require the sidecar to bind port 80; the default non-root proxy image
-listens on 8080 instead.
-
-The orchestrator still injects `OPENCODE_SERVER_PASSWORD` and
-`OPENCODE_CONFIG_CONTENT` through each `SandboxClaim`, so keep
-`envVarsInjectionPolicy: Allowed` unless you also change that runtime contract.
-
-The legacy examples in [`deploy/examples/`](../../examples) remain as a
-reference for clusters that prefer applying YAML directly.
+Configure the published agent profile's native OpenCode provider to use
+`http://agentbay-gateway:8080/v1`. The hostname maps to the sandbox Pod's
+loopback proxy. Keep `envVarsInjectionPolicy: Allowed` because the execution
+runtime still injects per-execution OpenCode configuration and authentication.

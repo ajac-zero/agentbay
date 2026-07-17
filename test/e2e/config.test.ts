@@ -24,6 +24,23 @@ describe("loadConfig", () => {
     });
   });
 
+  it("provides dispatcher defaults", () => {
+    expect(loadConfig({ HOSTNAME: "worker-1" })).toMatchObject({
+      dispatcherEnabled: true,
+      dispatcherIdlePollMs: 500,
+      dispatcherLeaseDurationMs: 60_000,
+      dispatcherRenewIntervalMs: 20_000,
+      dispatcherWorkerId: "worker-1",
+    });
+  });
+
+  it("requires dispatcher renewal before lease expiry", () => {
+    expect(() => loadConfig({
+      AGENTBAY_DISPATCHER_LEASE_DURATION_MS: "1000",
+      AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS: "1000",
+    })).toThrow(/must be less/);
+  });
+
   it("reads execution maintenance overrides", () => {
     expect(loadConfig({
       AGENTBAY_EXECUTION_MAINTENANCE_BATCH_SIZE: "20",

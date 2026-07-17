@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import type { AgentProfileVersion, EmptyWorkspace, Execution, ExecutionInput, JsonObject, JsonValue } from "./types.js";
+import type { AgentProfileDefinition, AgentProfileVersion, EmptyWorkspace, Execution, ExecutionInput, JsonObject, JsonValue } from "./types.js";
 
 export type PublishProfileVersionCommand = {
   id: string;
   tenantId: string;
   profileId: string;
   version: number;
-  definition: JsonObject;
+  definition: AgentProfileDefinition;
   createdAt: string;
 };
 

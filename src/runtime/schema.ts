@@ -1,6 +1,5 @@
 import { sql } from "drizzle-orm";
 import {
-  boolean,
   check,
   foreignKey,
   index,
@@ -13,80 +12,9 @@ import {
   unique,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import type { BotAdapterConfig, EnvVarRef, OpencodeConfig } from "./types.js";
-
-export const sandboxProfiles = pgTable("agentbay_sandbox_profiles", {
-  enabled: boolean("enabled").notNull().default(true),
-  id: text("id").primaryKey(),
-  slug: text("slug").notNull().unique(),
-  templateName: text("template_name").notNull(),
-  warmpool: text("warmpool").notNull().default("none"),
-}, (table) => [
-  check("agentbay_sandbox_profiles_id_dns_label", sql`${table.id} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.id}) <= 63`),
-  check("agentbay_sandbox_profiles_slug_dns_label", sql`${table.slug} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.slug}) <= 63`),
-]);
-
-export const opencodeConfigs = pgTable("agentbay_opencode_configs", {
-  config: jsonb("config").$type<OpencodeConfig>().notNull().default({}),
-  configHash: text("config_hash").notNull(),
-  displayName: text("display_name").notNull(),
-  enabled: boolean("enabled").notNull().default(true),
-  id: text("id").primaryKey(),
-  slug: text("slug").notNull().unique(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [
-  check("agentbay_opencode_configs_id_dns_label", sql`${table.id} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.id}) <= 63`),
-  check("agentbay_opencode_configs_slug_dns_label", sql`${table.slug} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.slug}) <= 63`),
-]);
-
-export const agentProfiles = pgTable("agentbay_agent_profiles", {
-  claimEnv: jsonb("claim_env").$type<EnvVarRef[]>().notNull().default([]),
-  displayName: text("display_name").notNull(),
-  enabled: boolean("enabled").notNull().default(true),
-  id: text("id").primaryKey(),
-  opencodeAgentName: text("opencode_agent_name").notNull(),
-  opencodeConfigID: text("opencode_config_id")
-    .notNull()
-    .references(() => opencodeConfigs.id),
-  slug: text("slug").notNull().unique(),
-}, (table) => [
-  check("agentbay_agent_profiles_id_dns_label", sql`${table.id} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.id}) <= 63`),
-  check("agentbay_agent_profiles_slug_dns_label", sql`${table.slug} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.slug}) <= 63`),
-]);
-
-export const bots = pgTable("agentbay_bots", {
-  adapters: jsonb("adapters").$type<BotAdapterConfig>().notNull().default({}),
-  defaultAgentProfileID: text("default_agent_profile_id")
-    .notNull()
-    .references(() => agentProfiles.id),
-  displayName: text("display_name").notNull(),
-  enabled: boolean("enabled").notNull().default(true),
-  id: text("id").primaryKey(),
-  sandboxProfileID: text("sandbox_profile_id")
-    .notNull()
-    .references(() => sandboxProfiles.id),
-  slug: text("slug").notNull().unique(),
-}, (table) => [
-  check("agentbay_bots_id_dns_label", sql`${table.id} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.id}) <= 63`),
-  check("agentbay_bots_slug_dns_label", sql`${table.slug} ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$' AND length(${table.slug}) <= 63`),
-]);
-
-export const botAgentProfiles = pgTable(
-  "agentbay_bot_agent_profiles",
-  {
-    agentProfileID: text("agent_profile_id")
-      .notNull()
-      .references(() => agentProfiles.id, { onDelete: "cascade" }),
-    botID: text("bot_id")
-      .notNull()
-      .references(() => bots.id, { onDelete: "cascade" }),
-  },
-  (table) => [primaryKey({ columns: [table.botID, table.agentProfileID] })],
-);
-
 export const agentProfileVersions = pgTable("agentbay_agent_profile_versions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  definition: jsonb("definition").$type<Record<string, unknown>>().notNull(),
+  definition: jsonb("definition").$type<import("../execution/types.js").AgentProfileDefinition>().notNull(),
   id: text("id").primaryKey(),
   profileID: text("profile_id").notNull(),
   tenantID: text("tenant_id").notNull(),

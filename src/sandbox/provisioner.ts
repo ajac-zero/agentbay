@@ -1,0 +1,366 @@
+import { createHash, randomBytes } from "node:crypto";
+import { CustomObjectsApi, KubeConfig, Watch } from "@kubernetes/client-node";
+import { buildOpencodeConfigContent } from "../agent/config.js";
+import type { Config } from "../config.js";
+import { logger } from "../logger.js";
+import { claimNameForExecutionAttempt } from "./naming.js";
+import type {
+  ExecutionAttemptEndpoint,
+  ExecutionAttemptProvisioner,
+  ExecutionAttemptProvisioningInput,
+  SandboxClaim,
+  SandboxEnvVar,
+} from "./types.js";
+
+const GROUP = "extensions.agents.x-k8s.io";
+const PLURAL = "sandboxclaims";
+
+export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttemptProvisioner {
+  private readonly api: CustomObjectsApi;
+  private readonly watch: Watch;
+
+  constructor(kubeConfig: KubeConfig, private readonly config: Config) {
+    this.api = kubeConfig.makeApiClient(CustomObjectsApi);
+    this.watch = new Watch(kubeConfig);
+  }
+
+  async provision(input: ExecutionAttemptProvisioningInput, signal: AbortSignal): Promise<ExecutionAttemptEndpoint> {
+    throwIfAborted(signal);
+    const claimName = claimNameForExecutionAttempt(input.executionId, input.attempt);
+    const ownership = ownershipAnnotations(input);
+    const log = logger.child({ executionId: input.executionId, attempt: input.attempt, claimName });
+    let claim = await this.getClaim(claimName);
+
+    if (claim) {
+      assertOwnership(claim, ownership);
+      log.info("observing existing sandbox claim");
+    } else {
+      const password = randomBytes(24).toString("base64url");
+      log.info("creating sandbox claim");
+      try {
+        claim = (await this.api.createNamespacedCustomObject({
+          group: GROUP,
+          version: this.config.sandboxClaimApiVersion,
+          namespace: this.config.kubeNamespace,
+          plural: PLURAL,
+          body: this.buildClaim(input, claimName, password, ownership),
+        })) as SandboxClaim;
+      } catch (error) {
+        if (!isConflict(error)) throw error;
+        claim = await this.getClaim(claimName);
+        if (!claim) throw error;
+        assertOwnership(claim, ownership);
+      }
+    }
+
+    const password = passwordFromClaim(claim);
+    try {
+      const endpoint = await this.waitForReady(claim, password, ownership, signal, log);
+      return { ...endpoint, release: input };
+    } catch (error) {
+      try {
+        await this.release(input, AbortSignal.timeout(Math.min(this.config.claimReadyTimeoutMs, 10_000)));
+      } catch (cleanupError) {
+        log.error("failed to clean up sandbox claim after provisioning error", { error: String(cleanupError) });
+      }
+      throw error;
+    }
+  }
+
+  async release(input: ExecutionAttemptProvisioningInput, signal: AbortSignal): Promise<void> {
+    throwIfAborted(signal);
+    const claimName = claimNameForExecutionAttempt(input.executionId, input.attempt);
+    const claim = await this.getClaim(claimName);
+    if (!claim) return;
+    assertOwnership(claim, ownershipAnnotations(input));
+    logger.info("releasing sandbox claim", { claimName });
+    try {
+      await this.api.deleteNamespacedCustomObject({
+        group: GROUP,
+        version: this.config.sandboxClaimApiVersion,
+        namespace: this.config.kubeNamespace,
+        plural: PLURAL,
+        name: claimName,
+        propagationPolicy: "Foreground",
+        ...(claim.metadata.uid ? { body: { preconditions: { uid: claim.metadata.uid } } } : {}),
+      });
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+      return;
+    }
+    await this.waitForDeleted(claimName, signal);
+  }
+
+  private buildClaim(
+    input: ExecutionAttemptProvisioningInput,
+    claimName: string,
+    password: string,
+    ownership: Record<string, string>,
+  ): SandboxClaim {
+    const env: SandboxEnvVar[] = [
+      { name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
+      { name: "OPENCODE_SERVER_PASSWORD", value: password },
+    ];
+    const configContent = buildOpencodeConfigContent(input.opencodeConfig);
+    if (configContent) env.push({ name: "OPENCODE_CONFIG_CONTENT", value: configContent });
+
+    return {
+      apiVersion: `extensions.agents.x-k8s.io/${this.config.sandboxClaimApiVersion}`,
+      kind: "SandboxClaim",
+      metadata: {
+        name: claimName,
+        namespace: this.config.kubeNamespace,
+        labels: {
+          "app.kubernetes.io/managed-by": "agentbay",
+          "agentbay.dev/execution": labelValue(input.executionId),
+          "agentbay.dev/attempt": String(input.attempt),
+          "agentbay.dev/profile": labelValue(input.profileVersion.profileId),
+        },
+        annotations: ownership,
+      },
+      spec: {
+        sandboxTemplateRef: { name: input.sandboxTemplate },
+        ...(input.warmPool === undefined ? {} : { warmpool: input.warmPool }),
+        lifecycle: {
+          shutdownTime: input.timeoutAt.toISOString(),
+          shutdownPolicy: "DeleteForeground",
+          ttlSecondsAfterFinished: input.ttlSecondsAfterFinished,
+        },
+        env,
+        additionalPodMetadata: {
+          labels: {
+            "agentbay.dev/managed-by": "agentbay",
+            "agentbay.dev/execution": labelValue(input.executionId),
+            "agentbay.dev/attempt": String(input.attempt),
+            "agentbay.dev/profile": labelValue(input.profileVersion.profileId),
+            "agentbay.dev/claim": claimName,
+          },
+        },
+      },
+    };
+  }
+
+  private async getClaim(claimName: string): Promise<SandboxClaim | null> {
+    try {
+      return (await this.api.getNamespacedCustomObject({
+        group: GROUP,
+        version: this.config.sandboxClaimApiVersion,
+        namespace: this.config.kubeNamespace,
+        plural: PLURAL,
+        name: claimName,
+      })) as SandboxClaim;
+    } catch (error) {
+      if (isNotFound(error)) return null;
+      throw error;
+    }
+  }
+
+  private waitForReady(
+    initial: SandboxClaim,
+    password: string,
+    ownership: Record<string, string>,
+    signal: AbortSignal,
+    log: ReturnType<typeof logger.child>,
+  ): Promise<Omit<ExecutionAttemptEndpoint, "release">> {
+    throwIfAborted(signal);
+    if (isReady(initial)) return Promise.resolve(this.endpoint(initial, password));
+
+    const claimName = initial.metadata.name;
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let watchController: AbortController | undefined;
+      let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = Date.now() + this.config.claimReadyTimeoutMs;
+      const deadlineTimer = setTimeout(
+        () => settle(() => reject(new Error(`Timed out waiting for SandboxClaim ${claimName} to become Ready`))),
+        this.config.claimReadyTimeoutMs,
+      );
+
+      const settle = (finish: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(reconnectTimer);
+        clearTimeout(deadlineTimer);
+        signal.removeEventListener("abort", onAbort);
+        watchController?.abort();
+        finish();
+      };
+      const onAbort = (): void => settle(() => reject(abortError(signal)));
+      signal.addEventListener("abort", onAbort, { once: true });
+
+      const onEvent = (phase: string, object: unknown): void => {
+        if (phase === "DELETED") {
+          settle(() => reject(new Error(`SandboxClaim ${claimName} was deleted before becoming Ready`)));
+          return;
+        }
+        if (phase !== "ADDED" && phase !== "MODIFIED") return;
+        const claim = object as SandboxClaim;
+        try {
+          assertOwnership(claim, ownership);
+        } catch (error) {
+          settle(() => reject(asError(error)));
+          return;
+        }
+        if (!isReady(claim)) return;
+        try {
+          const endpoint = this.endpoint(claim, password);
+          log.info("sandbox claim ready", { host: endpoint.host });
+          settle(() => resolve(endpoint));
+        } catch (error) {
+          settle(() => reject(asError(error)));
+        }
+      };
+      const onDone = (error: unknown): void => {
+        if (settled) return;
+        if (error) log.debug("watch ended with error, will reconnect", { claim: claimName });
+        const remaining = deadline - Date.now();
+        if (remaining > 0) reconnectTimer = setTimeout(() => void startWatch(), Math.min(1_000, remaining));
+      };
+      const startWatch = async (): Promise<void> => {
+        if (settled) return;
+        try {
+          watchController = await this.watch.watch(
+            this.claimsWatchPath(),
+            { fieldSelector: `metadata.name=${claimName}` },
+            onEvent,
+            onDone,
+          );
+          if (settled) watchController.abort();
+          else {
+            const current = await this.getClaim(claimName);
+            if (!current) onEvent("DELETED", initial);
+            else onEvent("MODIFIED", current);
+          }
+        } catch (error) {
+          onDone(error);
+        }
+      };
+      void startWatch();
+    });
+  }
+
+  private waitForDeleted(claimName: string, signal: AbortSignal): Promise<void> {
+    throwIfAborted(signal);
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let watchController: AbortController | undefined;
+      let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = Date.now() + this.config.claimReadyTimeoutMs;
+      const deadlineTimer = setTimeout(
+        () => settle(() => reject(new Error(`Timed out waiting for SandboxClaim ${claimName} to be deleted`))),
+        this.config.claimReadyTimeoutMs,
+      );
+
+      const settle = (finish: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(reconnectTimer);
+        clearTimeout(deadlineTimer);
+        signal.removeEventListener("abort", onAbort);
+        watchController?.abort();
+        finish();
+      };
+      const onAbort = (): void => settle(() => reject(abortError(signal)));
+      signal.addEventListener("abort", onAbort, { once: true });
+      const onEvent = (phase: string): void => {
+        if (phase === "DELETED") settle(resolve);
+      };
+      const reconnect = (): void => {
+        const remaining = deadline - Date.now();
+        if (remaining > 0) reconnectTimer = setTimeout(() => void startWatch(), Math.min(1_000, remaining));
+      };
+      const onDone = (error: unknown): void => {
+        if (settled) return;
+        if (error) logger.debug("watch ended with error while waiting for deletion", { claim: claimName });
+        void this.getClaim(claimName).then((claim) => claim ? reconnect() : settle(resolve), reconnect);
+      };
+      const startWatch = async (): Promise<void> => {
+        if (settled) return;
+        try {
+          watchController = await this.watch.watch(
+            this.claimsWatchPath(),
+            { fieldSelector: `metadata.name=${claimName}` },
+            onEvent,
+            onDone,
+          );
+          if (settled) watchController.abort();
+          else if (!await this.getClaim(claimName)) settle(resolve);
+        } catch (error) {
+          onDone(error);
+        }
+      };
+      void this.getClaim(claimName).then((claim) => claim ? void startWatch() : settle(resolve), () => void startWatch());
+    });
+  }
+
+  private endpoint(claim: SandboxClaim, password: string): Omit<ExecutionAttemptEndpoint, "release"> {
+    const host = claim.status?.sandbox?.podIPs?.[0]
+      ?? (claim.status?.sandbox?.name ? `${claim.status.sandbox.name}.${this.config.kubeNamespace}.svc` : undefined);
+    if (!host) throw new Error(`Ready SandboxClaim ${claim.metadata.name} did not expose a service FQDN, sandbox name, or pod IP`);
+    return { workloadName: claim.metadata.name, host, password };
+  }
+
+  private claimsWatchPath(): string {
+    return `/apis/${GROUP}/${this.config.sandboxClaimApiVersion}/namespaces/${this.config.kubeNamespace}/${PLURAL}`;
+  }
+}
+
+function ownershipAnnotations(input: ExecutionAttemptProvisioningInput): Record<string, string> {
+  return {
+    "agentbay.dev/tenant-id": input.tenantId,
+    "agentbay.dev/execution-id": input.executionId,
+    "agentbay.dev/attempt": String(input.attempt),
+    "agentbay.dev/profile-version-id": input.profileVersion.id,
+    "agentbay.dev/profile-id": input.profileVersion.profileId,
+    "agentbay.dev/profile-version": String(input.profileVersion.version),
+  };
+}
+
+function assertOwnership(claim: SandboxClaim, expected: Record<string, string>): void {
+  const actual = claim.metadata.annotations ?? {};
+  const mismatch = Object.entries(expected).find(([key, value]) => actual[key] !== value);
+  if (mismatch) {
+    throw new Error(`Existing SandboxClaim ${claim.metadata.name} is not owned by this execution attempt: annotation ${mismatch[0]} does not match`);
+  }
+}
+
+function passwordFromClaim(claim: SandboxClaim): string {
+  const password = claim.spec?.env?.find((entry) => entry.name === "OPENCODE_SERVER_PASSWORD")?.value;
+  if (!password) throw new Error(`Existing SandboxClaim ${claim.metadata.name} is missing OPENCODE_SERVER_PASSWORD`);
+  return password;
+}
+
+function isReady(claim: SandboxClaim): boolean {
+  return claim.status?.conditions?.some((condition) => condition.type === "Ready" && condition.status === "True") ?? false;
+}
+
+function isNotFound(error: unknown): boolean {
+  return statusCode(error) === 404;
+}
+
+function isConflict(error: unknown): boolean {
+  return statusCode(error) === 409;
+}
+
+function statusCode(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const candidate = error as { code?: number; response?: { statusCode?: number; status?: number } };
+  return candidate.code ?? candidate.response?.statusCode ?? candidate.response?.status;
+}
+
+function labelValue(value: string): string {
+  if (value.length <= 63 && /^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$/.test(value)) return value;
+  return `h-${createHash("sha256").update(value).digest("hex").slice(0, 61)}`;
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw abortError(signal);
+}
+
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}

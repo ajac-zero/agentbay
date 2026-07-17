@@ -29,8 +29,8 @@ const attemptStateSet: ReadonlySet<string> = new Set(ATTEMPT_STATES);
 
 const attemptTransitions: Readonly<Record<AttemptState, ReadonlySet<AttemptState>>> = {
   PENDING: new Set(["LEASED"]),
-  LEASED: new Set(["RUNNING", "FAILED"]),
-  RUNNING: new Set(["SUCCEEDED", "FAILED"]),
+  LEASED: new Set(["RUNNING", "FAILED", "TIMED_OUT"]),
+  RUNNING: new Set(["SUCCEEDED", "FAILED", "TIMED_OUT"]),
   SUCCEEDED: new Set(),
   FAILED: new Set(),
   CANCELLED: new Set(),
@@ -41,8 +41,12 @@ const dispatcherTransitionKeys: ReadonlySet<string> = new Set([
   transitionKey("QUEUED", "PROVISIONING", "PENDING", "LEASED"),
   transitionKey("PROVISIONING", "RUNNING", "LEASED", "RUNNING"),
   transitionKey("PROVISIONING", "FAILED", "LEASED", "FAILED"),
+  transitionKey("PROVISIONING", "RETRY_WAIT", "LEASED", "FAILED"),
+  transitionKey("PROVISIONING", "TIMED_OUT", "LEASED", "TIMED_OUT"),
   transitionKey("RUNNING", "SUCCEEDED", "RUNNING", "SUCCEEDED"),
   transitionKey("RUNNING", "FAILED", "RUNNING", "FAILED"),
+  transitionKey("RUNNING", "RETRY_WAIT", "RUNNING", "FAILED"),
+  transitionKey("RUNNING", "TIMED_OUT", "RUNNING", "TIMED_OUT"),
 ]);
 
 export function isAttemptState(value: unknown): value is AttemptState {

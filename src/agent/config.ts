@@ -1,4 +1,4 @@
-import type { OpencodeConfigRecord } from "../runtime/types.js";
+import type { JsonObject } from "../execution/types.js";
 
 /**
  * Build the JSON blob to inject into a sandbox Pod as
@@ -10,7 +10,7 @@ import type { OpencodeConfigRecord } from "../runtime/types.js";
  * Returns `undefined` when the resulting object is empty so we don't add a
  * noise env var on claims that don't need it.
  */
-export function buildOpencodeConfigContent(opencodeConfig: OpencodeConfigRecord): string | undefined {
-  if (Object.keys(opencodeConfig.config).length === 0) return undefined;
-  return JSON.stringify(opencodeConfig.config);
+export function buildOpencodeConfigContent(opencodeConfig: JsonObject): string | undefined {
+  if (Object.keys(opencodeConfig).length === 0) return undefined;
+  return JSON.stringify(opencodeConfig);
 }

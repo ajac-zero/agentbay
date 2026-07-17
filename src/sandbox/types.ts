@@ -1,4 +1,9 @@
-import type { EnvVar } from "../types.js";
+import type { JsonObject } from "../execution/types.js";
+
+export type SandboxEnvVar = {
+  name: string;
+  value: string;
+};
 
 export type SandboxClaimAPIVersion = "v1alpha1" | "v1beta1";
 
@@ -19,13 +24,14 @@ export type SandboxClaim = {
     labels?: Record<string, string>;
     name: string;
     namespace?: string;
+    uid?: string;
   };
   spec?: {
     additionalPodMetadata?: {
       annotations?: Record<string, string>;
       labels?: Record<string, string>;
     };
-    env?: EnvVar[];
+    env?: SandboxEnvVar[];
     lifecycle?: {
       shutdownPolicy?: "Retain" | "Delete" | "DeleteForeground";
       shutdownTime?: string;
@@ -45,8 +51,32 @@ export type SandboxClaim = {
   };
 };
 
-export type ClaimedSandbox = {
-  claimName: string;
-  password: string;
-  podFQDN: string;
+export type ExecutionAttemptProvisioningInput = {
+  tenantId: string;
+  executionId: string;
+  attempt: number;
+  profileVersion: {
+    id: string;
+    profileId: string;
+    version: number;
+  };
+  sandboxTemplate: string;
+  warmPool?: string;
+  opencodeConfig: JsonObject;
+  timeoutAt: Date;
+  ttlSecondsAfterFinished: number;
 };
+
+export type ExecutionAttemptIdentity = Pick<ExecutionAttemptProvisioningInput, "executionId" | "attempt">;
+
+export type ExecutionAttemptEndpoint = {
+  workloadName: string;
+  host: string;
+  password: string;
+  release: ExecutionAttemptProvisioningInput;
+};
+
+export interface ExecutionAttemptProvisioner {
+  provision(input: ExecutionAttemptProvisioningInput, signal: AbortSignal): Promise<ExecutionAttemptEndpoint>;
+  release(input: ExecutionAttemptProvisioningInput, signal: AbortSignal): Promise<void>;
+}

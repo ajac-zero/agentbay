@@ -1,4 +1,3 @@
-{{- $mode := include "agentbay.redis.mode" . -}}
 {{- $secretName := include "agentbay.secretName" . -}}
 {{- $useChartSecret := or .Values.secrets.create .Values.secrets.existingSecret -}}
 apiVersion: apps/v1
@@ -68,19 +67,18 @@ spec:
               value: {{ .Values.orchestrator.executionMaintenance.maxAttempts | quote }}
             - name: AGENTBAY_EXECUTION_RETRY_DELAY_MS
               value: {{ .Values.orchestrator.executionMaintenance.retryDelayMs | quote }}
-            {{- if eq $mode "in-cluster" }}
-            - name: REDIS_URL
-              value: "redis://{{ include "agentbay.redis.fullname" . }}.{{ .Release.Namespace }}.svc:6379"
-            {{- else if eq $mode "external-url" }}
-            - name: REDIS_URL
-              value: {{ .Values.redis.external.url | quote }}
-            {{- else if eq $mode "external-secret" }}
-            - name: REDIS_URL
+            - name: AGENTBAY_DISPATCHER_ENABLED
+              value: {{ .Values.orchestrator.dispatcher.enabled | quote }}
+            - name: AGENTBAY_DISPATCHER_IDLE_POLL_MS
+              value: {{ .Values.orchestrator.dispatcher.idlePollMs | quote }}
+            - name: AGENTBAY_DISPATCHER_LEASE_DURATION_MS
+              value: {{ .Values.orchestrator.dispatcher.leaseDurationMs | quote }}
+            - name: AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS
+              value: {{ .Values.orchestrator.dispatcher.renewIntervalMs | quote }}
+            - name: AGENTBAY_DISPATCHER_WORKER_ID
               valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.redis.external.existingSecret }}
-                  key: {{ .Values.redis.external.existingSecretKey }}
-            {{- end }}
+                fieldRef:
+                  fieldPath: metadata.name
             {{- include "agentbay.databaseEnv" . | trim | nindent 12 }}
             {{- with .Values.orchestrator.extraEnv }}
             {{- toYaml . | nindent 12 }}
