@@ -8,6 +8,7 @@ import {
   PersistedExecutionCorruptionError,
   type PostgresRuntimeStore,
 } from "../../src/runtime/postgres.js";
+import { ExecutionCancellationConflictError } from "../../src/execution/types.js";
 
 const { Pool } = pg;
 
@@ -199,7 +200,7 @@ describe("dispatcher persistence", () => {
       fencingToken: claimed.lease.fencingToken,
       leaseOwner: claimed.lease.leaseOwner,
       leaseDurationMs: 120_000,
-    })).toBe(true);
+    })).toBe("RENEWED");
     expect(await store.renewExecutionLease({
       executionId,
       tenantId: "default",
@@ -207,7 +208,7 @@ describe("dispatcher persistence", () => {
       fencingToken: "stale-token",
       leaseOwner: claimed.lease.leaseOwner,
       leaseDurationMs: 120_000,
-    })).toBe(false);
+    })).toBe("LOST");
 
     await pool.query(
       "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
@@ -220,7 +221,7 @@ describe("dispatcher persistence", () => {
       fencingToken: claimed.lease.fencingToken,
       leaseOwner: claimed.lease.leaseOwner,
       leaseDurationMs: 120_000,
-    })).toBe(false);
+    })).toBe("LOST");
     await pool.query(
       "update agentbay_execution_attempts set lease_expires_at = now() + interval '1 hour' where execution_id = $1",
       [executionId],
@@ -429,7 +430,7 @@ describe("dispatcher persistence", () => {
       fencingToken: claimed.lease.fencingToken,
       leaseOwner: claimed.lease.leaseOwner,
       leaseDurationMs: 120_000,
-    })).toBe(true);
+    })).toBe("RENEWED");
     const before = await executionSnapshot(executionId);
 
     expect(await store.recoverExpiredExecutionLeases({ limit: 10, maxAttempts: 3, retryDelayMs: 0 })).toEqual([]);
@@ -460,6 +461,287 @@ describe("dispatcher persistence", () => {
       attempt: null,
       from_state: "RETRY_WAIT",
       to_state: "TIMED_OUT",
+    });
+  });
+
+  it("immediately and idempotently cancels queued executions with ordered history", async () => {
+    const executionId = await queueExecution();
+    const requestedAt = new Date().toISOString();
+    const command = {
+      actor: "test-user",
+      executionId,
+      reason: "no longer needed",
+      requestedAt,
+      tenantId: "default",
+      transitionId: randomUUID(),
+    };
+
+    await expect(store.requestExecutionCancellation(command)).resolves.toEqual({
+      id: executionId, outcome: "CANCELLED", state: "CANCELLED",
+    });
+    await expect(store.requestExecutionCancellation({ ...command, transitionId: randomUUID() })).resolves.toEqual({
+      id: executionId, outcome: "CANCELLED", state: "CANCELLED",
+    });
+
+    const detail = await store.getExecutionDetail("default", executionId);
+    expect(detail?.attempts).toEqual([]);
+    expect(detail?.transitions.map(({ sequence, fromState, toState }) => ({ sequence, fromState, toState }))).toEqual([
+      { sequence: 1, fromState: null, toState: "RECEIVED" },
+      { sequence: 2, fromState: "RECEIVED", toState: "PLANNED" },
+      { sequence: 3, fromState: "PLANNED", toState: "QUEUED" },
+      { sequence: 4, fromState: "QUEUED", toState: "CANCEL_REQUESTED" },
+      { sequence: 5, fromState: "CANCEL_REQUESTED", toState: "CANCELLED" },
+    ]);
+    expect((await pool.query("select completed_at from agentbay_executions where id = $1", [executionId])).rows[0]?.completed_at)
+      .toBeInstanceOf(Date);
+  });
+
+  it("immediately cancels an execution awaiting approval without creating an attempt", async () => {
+    const executionId = await queueExecution();
+    await pool.query("update agentbay_executions set state = 'AWAITING_APPROVAL' where id = $1", [executionId]);
+
+    await expect(store.requestExecutionCancellation({
+      actor: "test-user", executionId, reason: "approval withdrawn", requestedAt: new Date().toISOString(),
+      tenantId: "default", transitionId: randomUUID(),
+    })).resolves.toEqual({ id: executionId, outcome: "CANCELLED", state: "CANCELLED" });
+
+    const persisted = await executionSnapshot(executionId);
+    expect(persisted.execution.state).toBe("CANCELLED");
+    expect(persisted.attempts).toEqual([]);
+    expect(persisted.transitions.slice(-2)).toMatchObject([
+      { attempt: null, from_state: "AWAITING_APPROVAL", to_state: "CANCEL_REQUESTED" },
+      { attempt: null, from_state: "CANCEL_REQUESTED", to_state: "CANCELLED" },
+    ]);
+  });
+
+  it("rejects cancellation from a non-cancellable state", async () => {
+    const executionId = await queueExecution();
+    await pool.query("update agentbay_executions set state = 'SUCCEEDED' where id = $1", [executionId]);
+
+    await expect(store.requestExecutionCancellation({
+      actor: "test-user", executionId, reason: "too late", requestedAt: new Date().toISOString(),
+      tenantId: "default", transitionId: randomUUID(),
+    })).rejects.toBeInstanceOf(ExecutionCancellationConflictError);
+    expect((await pool.query("select state from agentbay_executions where id = $1", [executionId])).rows[0])
+      .toEqual({ state: "SUCCEEDED" });
+  });
+
+  it("serializes concurrent cancellation requests into one transition pair", async () => {
+    const executionId = await queueExecution();
+    const request = (actor: string) => store.requestExecutionCancellation({
+      actor, executionId, reason: "concurrent request", requestedAt: new Date().toISOString(),
+      tenantId: "default", transitionId: randomUUID(),
+    });
+    const results = await Promise.all([request("first"), request("second")]);
+
+    expect(results).toEqual([
+      { id: executionId, outcome: "CANCELLED", state: "CANCELLED" },
+      { id: executionId, outcome: "CANCELLED", state: "CANCELLED" },
+    ]);
+    expect((await pool.query(
+      "select count(*)::int as count from agentbay_execution_transitions where execution_id = $1 and to_state in ('CANCEL_REQUESTED', 'CANCELLED')",
+      [executionId],
+    )).rows[0]).toEqual({ count: 2 });
+  });
+
+  it("reports active cancellation through renewal and accepts only the live fence", async () => {
+    const executionId = await queueExecution();
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-cancel", leaseDurationMs: 60_000 });
+    if (!claimed) throw new Error("Expected execution attempt");
+    const cancellation = await store.requestExecutionCancellation({
+      actor: "test-user", executionId, reason: "stop", requestedAt: new Date().toISOString(),
+      tenantId: "default", transitionId: randomUUID(),
+    });
+    expect(cancellation).toEqual({ id: executionId, outcome: "REQUESTED", state: "CANCEL_REQUESTED" });
+    const leaseCommand = {
+      attempt: claimed.lease.attempt, executionId, fencingToken: claimed.lease.fencingToken,
+      leaseDurationMs: 60_000, leaseOwner: claimed.lease.leaseOwner, tenantId: "default",
+    };
+    await expect(store.renewExecutionLease(leaseCommand)).resolves.toBe("CANCEL_REQUESTED");
+    await expect(store.renewExecutionLease({ ...leaseCommand, fencingToken: "stale" })).resolves.toBe("LOST");
+    await expect(store.acknowledgeLeasedExecutionCancellation({
+      ...leaseCommand, fencingToken: "stale", actor: "stale-dispatcher", reason: "late acknowledgement",
+    })).resolves.toEqual({ applied: false, reason: "LEASE_MISMATCH" });
+    await expect(store.acknowledgeLeasedExecutionCancellation({
+      ...leaseCommand, actor: "dispatcher-cancel", reason: "stopped",
+    })).resolves.toEqual({ applied: true });
+
+    const persisted = await executionSnapshot(executionId);
+    expect(persisted.execution).toMatchObject({ state: "CANCELLED" });
+    expect(persisted.execution.completed_at).toBeInstanceOf(Date);
+    expect(persisted.attempts[0]).toMatchObject({ state: "CANCELLED", lease_owner: null, lease_expires_at: null });
+    const detail = await store.getExecutionDetail("default", executionId);
+    expect(detail?.attempts[0]).not.toHaveProperty("fencingToken");
+    expect(detail?.attempts[0]).not.toHaveProperty("leaseOwner");
+  });
+
+  it("lists expired cancellation cleanup without mutating it", async () => {
+    const executionId = await queueExecution();
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-expiring", leaseDurationMs: 60_000 });
+    if (!claimed) throw new Error("Expected execution attempt");
+    await store.requestExecutionCancellation({
+      actor: "test-user", executionId, reason: "stop", requestedAt: new Date().toISOString(),
+      tenantId: "default", transitionId: randomUUID(),
+    });
+
+    expect(await store.listRequestedCancellationCleanups({ limit: 10 })).toEqual([]);
+    await pool.query("update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1", [executionId]);
+    const candidates = await store.listRequestedCancellationCleanups({ limit: 10 });
+    const candidate = candidates.find((item) => item.executionId === executionId);
+    expect(candidate).toEqual({ attempt: 1, executionId, tenantId: "default", workloadName: null });
+    expect(await executionSnapshot(executionId)).toMatchObject({
+      execution: { state: "CANCEL_REQUESTED" },
+      attempts: [{ state: "LEASED" }],
+    });
+    if (!candidate) throw new Error("Expected cancellation cleanup candidate");
+    await store.finalizeRequestedExecutionCancellation(candidate);
+  });
+
+  it("rotates expired cancellation cleanups after a failed cleanup without mutating state or history", async () => {
+    const oldestExecutionId = await queueExecution();
+    const oldestClaim = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-rotation-oldest", leaseDurationMs: 60_000 });
+    if (!oldestClaim) throw new Error("Expected oldest execution attempt");
+    await store.requestExecutionCancellation({
+      actor: "test-user", executionId: oldestExecutionId, reason: "stop", requestedAt: new Date().toISOString(),
+      tenantId: "default", transitionId: randomUUID(),
+    });
+
+    const otherExecutionId = await queueExecution();
+    const otherClaim = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-rotation-other", leaseDurationMs: 60_000 });
+    if (!otherClaim) throw new Error("Expected other execution attempt");
+    await store.requestExecutionCancellation({
+      actor: "test-user", executionId: otherExecutionId, reason: "stop", requestedAt: new Date().toISOString(),
+      tenantId: "default", transitionId: randomUUID(),
+    });
+
+    await pool.query(
+      `UPDATE agentbay_execution_attempts
+       SET lease_expires_at = now() - interval '1 second'
+       WHERE execution_id = ANY($1::text[])`,
+      [[oldestExecutionId, otherExecutionId]],
+    );
+    await pool.query(
+      `UPDATE agentbay_executions
+       SET updated_at = CASE id WHEN $1 THEN '2000-01-01T00:00:00Z'::timestamptz
+                                    ELSE '2000-01-02T00:00:00Z'::timestamptz END
+       WHERE id = ANY($2::text[])`,
+      [oldestExecutionId, [oldestExecutionId, otherExecutionId]],
+    );
+    const before = {
+      oldest: await executionSnapshot(oldestExecutionId),
+      other: await executionSnapshot(otherExecutionId),
+    };
+    const beforeUpdatedAt = await cancellationCleanupUpdatedAt(oldestExecutionId, otherExecutionId);
+
+    await expect(store.listRequestedCancellationCleanups({ limit: 1 })).resolves.toEqual([{
+      attempt: oldestClaim.lease.attempt,
+      executionId: oldestExecutionId,
+      tenantId: "default",
+      workloadName: null,
+    }]);
+    const afterFirstUpdatedAt = await cancellationCleanupUpdatedAt(oldestExecutionId, otherExecutionId);
+    expect(afterFirstUpdatedAt[oldestExecutionId]!.getTime()).toBeGreaterThan(beforeUpdatedAt[oldestExecutionId]!.getTime());
+    expect(afterFirstUpdatedAt[otherExecutionId]).toEqual(beforeUpdatedAt[otherExecutionId]);
+
+    await expect(store.listRequestedCancellationCleanups({ limit: 1 })).resolves.toEqual([{
+      attempt: otherClaim.lease.attempt,
+      executionId: otherExecutionId,
+      tenantId: "default",
+      workloadName: null,
+    }]);
+    const afterSecondUpdatedAt = await cancellationCleanupUpdatedAt(oldestExecutionId, otherExecutionId);
+    expect(afterSecondUpdatedAt[oldestExecutionId]).toEqual(afterFirstUpdatedAt[oldestExecutionId]);
+    expect(afterSecondUpdatedAt[otherExecutionId]!.getTime()).toBeGreaterThan(afterFirstUpdatedAt[otherExecutionId]!.getTime());
+    expect({
+      oldest: await executionSnapshot(oldestExecutionId),
+      other: await executionSnapshot(otherExecutionId),
+    }).toEqual(before);
+  });
+
+  it("finalizes an expired cancellation after cleanup", async () => {
+    const executionId = await queueExecution();
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-cleanup", leaseDurationMs: 60_000 });
+    if (!claimed) throw new Error("Expected execution attempt");
+    await pool.query("update agentbay_execution_attempts set workload_name = $2 where execution_id = $1", [executionId, "sandbox-cleanup"]);
+    await store.requestExecutionCancellation({
+      actor: "test-user", executionId, reason: "stop", requestedAt: new Date().toISOString(),
+      tenantId: "default", transitionId: randomUUID(),
+    });
+    await pool.query("update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1", [executionId]);
+
+    const candidate = (await store.listRequestedCancellationCleanups({ limit: 10 }))
+      .find((item) => item.executionId === executionId);
+    expect(candidate).toEqual({ attempt: 1, executionId, tenantId: "default", workloadName: "sandbox-cleanup" });
+    if (!candidate) throw new Error("Expected cancellation cleanup candidate");
+    await expect(store.finalizeRequestedExecutionCancellation(candidate)).resolves.toEqual({
+      ...candidate,
+      finalizedAt: expect.any(Date),
+    });
+    expect((await executionSnapshot(executionId))).toMatchObject({
+      execution: { state: "CANCELLED", completed_at: expect.any(Date) },
+      attempts: [{ state: "CANCELLED", lease_owner: null, lease_expires_at: null }],
+    });
+  });
+
+  it("rejects a stale cancellation cleanup candidate after the fence changes", async () => {
+    const executionId = await queueExecution();
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-stale", leaseDurationMs: 60_000 });
+    if (!claimed) throw new Error("Expected execution attempt");
+    await store.requestExecutionCancellation({
+      actor: "test-user", executionId, reason: "stop", requestedAt: new Date().toISOString(),
+      tenantId: "default", transitionId: randomUUID(),
+    });
+    await pool.query("update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1", [executionId]);
+    const candidate = (await store.listRequestedCancellationCleanups({ limit: 10 }))
+      .find((item) => item.executionId === executionId);
+    if (!candidate) throw new Error("Expected cancellation cleanup candidate");
+    await pool.query("update agentbay_execution_attempts set fencing_token = $2 where execution_id = $1", [executionId, randomUUID()]);
+
+    await expect(store.finalizeRequestedExecutionCancellation(candidate)).resolves.toBeUndefined();
+    expect(await executionSnapshot(executionId)).toMatchObject({
+      execution: { state: "CANCEL_REQUESTED" },
+      attempts: [{ state: "LEASED" }],
+    });
+    const currentCandidate = (await store.listRequestedCancellationCleanups({ limit: 10 }))
+      .find((item) => item.executionId === executionId);
+    if (!currentCandidate) throw new Error("Expected current cancellation cleanup candidate");
+    await store.finalizeRequestedExecutionCancellation(currentCandidate);
+  });
+
+  it("skips cancellation cleanup while the active lease is live", async () => {
+    const executionId = await queueExecution();
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-live", leaseDurationMs: 60_000 });
+    if (!claimed) throw new Error("Expected execution attempt");
+    await store.requestExecutionCancellation({
+      actor: "test-user", executionId, reason: "stop", requestedAt: new Date().toISOString(),
+      tenantId: "default", transitionId: randomUUID(),
+    });
+
+    expect((await store.listRequestedCancellationCleanups({ limit: 10 }))
+      .some((candidate) => candidate.executionId === executionId)).toBe(false);
+    expect((await executionSnapshot(executionId)).execution.state).toBe("CANCEL_REQUESTED");
+    await store.acknowledgeLeasedExecutionCancellation({
+      actor: "dispatcher-live", attempt: claimed.lease.attempt, executionId,
+      fencingToken: claimed.lease.fencingToken, leaseOwner: claimed.lease.leaseOwner,
+      reason: "test cleanup", tenantId: "default",
+    });
+  });
+
+  it("finalizes requested cancellation with no active attempt", async () => {
+    const executionId = await queueExecution();
+    await pool.query("update agentbay_executions set state = 'CANCEL_REQUESTED' where id = $1", [executionId]);
+
+    const candidate = (await store.listRequestedCancellationCleanups({ limit: 10 }))
+      .find((item) => item.executionId === executionId);
+    expect(candidate).toEqual({ attempt: null, executionId, tenantId: "default", workloadName: null });
+    if (!candidate) throw new Error("Expected cancellation cleanup candidate");
+    await expect(store.finalizeRequestedExecutionCancellation(candidate)).resolves.toEqual({
+      ...candidate,
+      finalizedAt: expect.any(Date),
+    });
+    expect(await executionSnapshot(executionId)).toMatchObject({
+      execution: { state: "CANCELLED", completed_at: expect.any(Date) },
+      attempts: [],
     });
   });
 
@@ -503,6 +785,14 @@ describe("dispatcher persistence", () => {
       [executionId],
     )).rows;
     return { attempts, execution, transitions };
+  }
+
+  async function cancellationCleanupUpdatedAt(...executionIds: string[]): Promise<Record<string, Date>> {
+    const rows = (await pool.query<{ id: string; updated_at: Date }>(
+      "select id, updated_at from agentbay_executions where id = any($1::text[])",
+      [executionIds],
+    )).rows;
+    return Object.fromEntries(rows.map((row) => [row.id, row.updated_at]));
   }
 });
 

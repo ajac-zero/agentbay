@@ -312,6 +312,7 @@ GET  /v1/bindings/:bindingID/versions/:version
 POST /v1/bindings/:bindingID/versions/:version/disable
 POST /v1/triggers/:triggerID/events
 GET  /v1/executions/:id
+POST /v1/executions/:id/cancel
 POST /hooks/github/:triggerID
 ```
 
@@ -330,6 +331,27 @@ event; it never creates an execution directly. Signed pings and unsupported
 event/action pairs produce no event and return `204 No Content`. For supported
 events, disabled-trigger behavior follows the durable admission semantics above:
 an exact persisted replay may return `202`, while a new delivery returns `404`.
+
+`GET /v1/executions/:id` returns the materialized current execution, its ordered
+attempt records, and its append-only transition history. Execution state and
+attempt status are intentionally separate: retries preserve earlier terminal
+attempts while the execution advances through a later attempt. The history is
+ordered by transition sequence and remains the audit record behind the current
+materialized state.
+
+`POST /v1/executions/:id/cancel` requires a JSON object whose `reason` field is
+optional; `{}` requests cancellation without a caller-supplied reason. Work in
+`AWAITING_APPROVAL`, like other work without an active attempt, can be finalized
+immediately as `CANCELLED`. Active `PROVISIONING` or `RUNNING` work is durably
+moved to `CANCEL_REQUESTED` before the worker is interrupted. Repeating the
+request while the execution is `CANCEL_REQUESTED` or `CANCELLED` is idempotent.
+`SUCCEEDED` is intentionally not cancellable because agent work has already
+committed and the delivery lifecycle is not implemented; it returns `409
+Conflict`. Non-cancellable terminal outcomes likewise retain their state and
+return `409 Conflict`. Immediate or already-complete cancellation returns `200
+OK` with state `CANCELLED`; active cancellation returns `202 Accepted` with
+state `CANCEL_REQUESTED`. A `202` confirms durable acceptance, not immediate
+workload deletion.
 
 ## 7. Canonical Event Model
 
@@ -593,6 +615,10 @@ Workers claim executions using time-bounded, fenced leases. Every mutation from 
 
 A retry creates a new attempt under the same execution unless policy explicitly creates a new execution. Attempt-specific artifacts and logs remain distinguishable.
 
+The execution read model exposes these attempts alongside transition history.
+An attempt's terminal status describes that attempt only; it does not override
+the current execution state after a retry has created a newer attempt.
+
 ### 10.3 Idempotency and effective-once behavior
 
 Exactly-once behavior is not assumed across webhooks, databases, queues, Kubernetes, and external APIs. Agentbay uses:
@@ -621,15 +647,45 @@ For example, a new pull-request commit should usually supersede a queued review 
 
 ### 10.5 Cancellation and timeout
 
-Cancellation is cooperative first and destructive second:
+Cancellation is a durable, best-effort interruption protocol:
 
 1. Persist `CANCEL_REQUESTED`.
-2. Abort the OpenCode session if reachable.
-3. Allow a short cleanup period for artifacts.
-4. Delete or terminate the Kubernetes workload.
-5. Persist `CANCELLED` with the actor and reason.
+2. Return the cancellation request without waiting for the active workload to
+   stop.
+3. Deliver cancellation to an active attempt through lease renewal and abort
+   in-flight provisioning or OpenCode work.
+4. Have the owning worker delete or terminate the provisioned Kubernetes
+   workload.
+5. Only after that cleanup, have the worker acknowledge `CANCELLED` with its
+   attempt and fencing token.
 
-Timeout follows the same path but terminates as `TIMED_OUT`. Control-plane reconciliation guarantees cleanup if a worker crashes during cancellation.
+`AWAITING_APPROVAL` and other work that has no active attempt move directly to
+`CANCELLED`. For active work, detection latency is normally bounded by the
+dispatcher lease renewal interval plus the time required for an in-flight
+operation to observe its abort signal. The fenced acknowledgement prevents a
+stale worker from finalizing cancellation after ownership has changed. If
+worker cleanup fails, the execution remains `CANCEL_REQUESTED` until its lease
+expires. Existing claim shutdown behavior and the Kubernetes reconciler are
+fallbacks for workload cleanup; execution maintenance handles expired durable
+ownership and cancellation state, but does not itself delete Kubernetes
+resources. Therefore an API `202 Accepted` response proves only that the
+cancellation request was persisted, not that deletion has already occurred.
+
+`SUCCEEDED` is intentionally excluded from cancellation even though delivery
+would normally follow it: the agent work has already committed, and the
+delivery lifecycle is not implemented. A cancellation request in `SUCCEEDED`
+returns `409 Conflict`.
+
+Cancellation cannot retract an external side effect that has already committed.
+For example, aborting an execution after GitHub accepted a branch, content,
+comment, or pull-request mutation leaves that mutation in GitHub. Such effects
+must be reconciled or compensated through their connector-specific contract;
+the cancellation state means Agentbay stopped further work on a best-effort
+basis, not that all effects were rolled back.
+
+Timeout follows the same cleanup model but terminates as `TIMED_OUT`. Current
+crash recovery does not adopt an existing OpenCode session: a recovered retry
+creates a new fenced attempt and a new session.
 
 ## 11. Execution Plane
 
@@ -670,7 +726,7 @@ OpenCode runs headlessly inside the workload. The execution worker:
 6. Persists progress, text, tool calls, permission requests, usage, and errors.
 7. Produces a structured result when the session becomes idle.
 
-The platform must tolerate SSE disconnects and worker restarts. Durable execution state, OpenCode session status, and artifact checkpoints determine whether to reconnect, resume, retry, or fail.
+The platform must tolerate SSE disconnects and worker restarts. Durable execution state, OpenCode session status, and artifact checkpoints will eventually determine whether to reconnect, resume, retry, or fail. The current dispatcher does not adopt an existing OpenCode session after ownership is lost; recovery creates a new attempt and session.
 
 Sandbox templates may include authenticated API, proxy, or MCP sidecars that expose standard, policy-bounded tools to OpenCode over localhost. Profile `connections: [{ id, sidecar }]` entries authorize named connections for those template-owned sidecars; they do not create or mutate containers. Agentbay validates each connection reference and sends the grant only to the named container. The agent-sandbox controller rejects a claim when that container is absent. The selected sidecar remains the enforcement boundary and must parse `AGENTBAY_CONNECTIONS` at startup and fail closed; Agentbay does not introspect or certify arbitrary sidecar implementations. Connection-enabled attempts use cold sandboxes rather than a `SandboxWarmPool` so claim-specific authorization cannot arrive after a sidecar has initialized.
 

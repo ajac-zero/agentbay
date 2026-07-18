@@ -12,6 +12,9 @@ import { SandboxClaimExecutionAttemptProvisioner } from "./sandbox/provisioner.j
 
 const config = loadConfig();
 const runtimeStore = await createRuntimeStore();
+const provisioner = config.executionMaintenanceEnabled || config.dispatcherEnabled
+  ? new SandboxClaimExecutionAttemptProvisioner(createKubeConfig(), config)
+  : undefined;
 const dispatcherController = new AbortController();
 const maintenanceController = new AbortController();
 const maintenanceTask = config.executionMaintenanceEnabled
@@ -21,6 +24,7 @@ const maintenanceTask = config.executionMaintenanceEnabled
       maxAttempts: config.executionMaxAttempts,
       retryDelayMs: config.executionRetryDelayMs,
       signal: maintenanceController.signal,
+      cancellationCleaner: provisioner!,
       store: runtimeStore,
     })
   : Promise.resolve();
@@ -32,7 +36,7 @@ const dispatcherTask = config.dispatcherEnabled
       idlePollMs: config.dispatcherIdlePollMs,
       leaseDurationMs: config.dispatcherLeaseDurationMs,
       maxAttempts: config.executionMaxAttempts,
-      provisioner: new SandboxClaimExecutionAttemptProvisioner(createKubeConfig(), config),
+      provisioner: provisioner!,
       renewIntervalMs: config.dispatcherRenewIntervalMs,
       retryDelayMs: config.executionRetryDelayMs,
       runner: new OpenCodeExecutionAttemptRunner({

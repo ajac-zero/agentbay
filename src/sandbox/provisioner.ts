@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { CustomObjectsApi, KubeConfig, Watch } from "@kubernetes/client-node";
 import { buildOpencodeConfigContent } from "../agent/config.js";
 import type { Config } from "../config.js";
+import type { RequestedCancellationCleanup } from "../dispatch/types.js";
 import { logger } from "../logger.js";
 import { claimNameForExecutionAttempt } from "./naming.js";
 import type {
@@ -27,6 +28,13 @@ export class SandboxClaimRejectedError extends Error {
   constructor(claimName: string, reason: string) {
     super(`SandboxClaim ${claimName} was rejected: ${reason}`);
     this.name = "SandboxClaimRejectedError";
+  }
+}
+
+export class SandboxClaimCleanupError extends Error {
+  constructor(options: ErrorOptions) {
+    super("Failed to clean up sandbox claim after provisioning error", options);
+    this.name = "SandboxClaimCleanupError";
   }
 }
 
@@ -86,6 +94,7 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
         await this.release(input, AbortSignal.timeout(Math.min(this.config.claimReadyTimeoutMs, 10_000)));
       } catch (cleanupError) {
         log.error("failed to clean up sandbox claim after provisioning error", { error: String(cleanupError) });
+        throw new SandboxClaimCleanupError({ cause: cleanupError });
       }
       throw error;
     }
@@ -113,6 +122,52 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
       return;
     }
     await this.waitForDeleted(claimName, signal);
+  }
+
+  async releaseCancelledExecution(candidate: RequestedCancellationCleanup, signal: AbortSignal): Promise<void> {
+    throwIfAborted(signal);
+    if (candidate.attempt === null) {
+      if (candidate.workloadName !== null) {
+        throw new Error(`Cancellation cleanup for execution ${candidate.executionId} has a workload but no attempt`);
+      }
+      return;
+    }
+    const expectedName = claimNameForExecutionAttempt(candidate.executionId, candidate.attempt);
+    if (candidate.workloadName !== null && candidate.workloadName !== expectedName) {
+      throw new Error(`Cancellation cleanup workload ${candidate.workloadName} does not match expected claim ${expectedName}`);
+    }
+    const deadline = Date.now() + this.config.claimReadyTimeoutMs;
+    const quietWindowMs = Math.min(2_000, Math.max(250, Math.floor(this.config.claimReadyTimeoutMs / 5)));
+    const pollIntervalMs = Math.min(100, Math.max(25, Math.floor(quietWindowMs / 4)));
+    let absentSince: number | undefined;
+
+    while (Date.now() < deadline) {
+      throwIfAborted(signal);
+      const claim = await this.getClaim(expectedName);
+      if (claim) {
+        absentSince = undefined;
+        assertCancellationOwnership(claim, candidate);
+        logger.info("releasing cancelled execution sandbox claim", { claimName: expectedName });
+        try {
+          await this.api.deleteNamespacedCustomObject({
+            group: GROUP,
+            version: this.config.sandboxClaimApiVersion,
+            namespace: this.config.kubeNamespace,
+            plural: PLURAL,
+            name: expectedName,
+            propagationPolicy: "Foreground",
+            ...(claim.metadata.uid ? { body: { preconditions: { uid: claim.metadata.uid } } } : {}),
+          });
+        } catch (error) {
+          if (!isNotFound(error)) throw error;
+        }
+      } else {
+        absentSince ??= Date.now();
+        if (Date.now() - absentSince >= quietWindowMs) return;
+      }
+      await abortableDelay(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())), signal);
+    }
+    throw new Error(`Timed out waiting for SandboxClaim ${expectedName} to remain deleted`);
   }
 
   private buildClaim(
@@ -309,7 +364,11 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
       const onAbort = (): void => settle(() => reject(abortError(signal)));
       signal.addEventListener("abort", onAbort, { once: true });
       const onEvent = (phase: string): void => {
-        if (phase === "DELETED") settle(resolve);
+        if (phase === "DELETED") {
+          void this.getClaim(claimName).then((claim) => {
+            if (!claim) settle(resolve);
+          }, reconnect);
+        }
       };
       const reconnect = (): void => {
         const remaining = deadline - Date.now();
@@ -412,6 +471,25 @@ function assertOwnership(claim: SandboxClaim, expected: Record<string, string>):
   }
 }
 
+function assertCancellationOwnership(claim: SandboxClaim, candidate: RequestedCancellationCleanup): void {
+  const labels = claim.metadata.labels ?? {};
+  const annotations = claim.metadata.annotations ?? {};
+  const expected = {
+    "app.kubernetes.io/managed-by": "agentbay",
+    "agentbay.dev/tenant-id": candidate.tenantId,
+    "agentbay.dev/execution-id": candidate.executionId,
+    "agentbay.dev/attempt": String(candidate.attempt),
+  };
+  const actual: Record<string, string | undefined> = {
+    ...annotations,
+    "app.kubernetes.io/managed-by": labels["app.kubernetes.io/managed-by"],
+  };
+  const mismatch = Object.entries(expected).find(([key, value]) => actual[key] !== value);
+  if (mismatch) {
+    throw new Error(`SandboxClaim ${claim.metadata.name} is not owned by this cancellation candidate: ${mismatch[0]} does not match`);
+  }
+}
+
 function passwordFromClaim(claim: SandboxClaim): string {
   const password = claim.spec?.env?.find((entry) => entry.name === "OPENCODE_SERVER_PASSWORD")?.value;
   if (!password) throw new Error(`Existing SandboxClaim ${claim.metadata.name} is missing OPENCODE_SERVER_PASSWORD`);
@@ -454,6 +532,22 @@ function throwIfAborted(signal: AbortSignal): void {
 
 function abortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
+}
+
+function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(abortError(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function asError(error: unknown): Error {

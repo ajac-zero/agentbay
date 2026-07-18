@@ -6,7 +6,15 @@ import { planAdmission, type AdmissionCommand, type AdmissionResult } from "../.
 import { BindingVersionAlreadyExistsError, type PublishedBindingVersion } from "../../src/control/binding.js";
 import { TriggerAlreadyExistsError, TriggerNotFoundError, type Trigger } from "../../src/control/trigger.js";
 import type { PublishProfileVersionCommand } from "../../src/execution/store.js";
-import { IdempotencyConflictError, ProfileVersionAlreadyExistsError, type AgentProfileVersion, type Execution } from "../../src/execution/types.js";
+import {
+  ExecutionCancellationConflictError,
+  IdempotencyConflictError,
+  ProfileVersionAlreadyExistsError,
+  type AgentProfileVersion,
+  type ExecutionDetail,
+  type RequestExecutionCancellationCommand,
+  type RequestExecutionCancellationResult,
+} from "../../src/execution/types.js";
 import { createOpenApiApp } from "../../src/openapi.js";
 
 describe("public API", () => {
@@ -137,7 +145,7 @@ describe("public API", () => {
 
     const execution = (admitted.body as AdmissionResult).executions[0]!;
     const fetched = await request(app, "GET", `/v1/executions/${execution.id}`);
-    expect(fetched.body).toMatchObject({ id: execution.id, binding: { id: "issues", version: 1 } });
+    expect(fetched.body).toMatchObject({ id: execution.id, binding: { id: "issues", version: 1 }, attempts: [], transitions: [] });
 
     const replay = await request(app, "POST", "/v1/triggers/github/events", event, { "Idempotency-Key": "delivery-1" });
     expect(replay.status).toBe(202);
@@ -165,6 +173,81 @@ describe("public API", () => {
     expect((await request(app, "POST", "/v1/triggers/missing/events", event, { "Idempotency-Key": "x" })).status).toBe(404);
     expect((await request(app, "POST", "/v1/triggers/github/events", event, { "Idempotency-Key": "same" })).status).toBe(202);
     expect((await request(app, "POST", "/v1/triggers/github/events", { ...event, data: { changed: true } }, { "Idempotency-Key": "same" })).status).toBe(409);
+  });
+
+  it("requests execution cancellation with a fixed actor and default reason", async () => {
+    const store = new FakeControlStore();
+    const execution = fakeExecution("running", "RUNNING");
+    store.executions.set("default:running", execution);
+
+    const response = await request(testApp(store), "POST", "/v1/executions/running/cancel", {});
+
+    expect(response).toEqual({ body: { id: "running", state: "CANCEL_REQUESTED" }, headers: response.headers, status: 202 });
+    expect(store.lastCancellation).toMatchObject({
+      actor: "control-api",
+      executionId: "running",
+      reason: "cancellation requested",
+      tenantId: "default",
+      requestedAt: expect.any(String),
+      transitionId: expect.any(String),
+    });
+  });
+
+  it("returns public attempt and transition detail without lease credentials", async () => {
+    const store = new FakeControlStore();
+    const execution = fakeExecution("detailed", "RUNNING");
+    execution.attempts.push({
+      attempt: 1,
+      state: "RUNNING",
+      startedAt: execution.createdAt,
+      finishedAt: null,
+      leaseExpiresAt: execution.updatedAt,
+      opencodeSessionId: "session-1",
+      workloadName: "sandbox-1",
+    });
+    execution.transitions.push({
+      id: "transition-1",
+      attempt: 1,
+      sequence: 4,
+      fromState: "PROVISIONING",
+      toState: "RUNNING",
+      actor: "worker",
+      reason: "sandbox ready",
+      createdAt: execution.updatedAt,
+      traceContext: { traceparent: "trace" },
+    });
+    store.executions.set("default:detailed", execution);
+
+    const response = await request(testApp(store), "GET", "/v1/executions/detailed");
+
+    expect(response).toMatchObject({ status: 200, body: { attempts: [{ attempt: 1, state: "RUNNING" }], transitions: [{ id: "transition-1", toState: "RUNNING" }] } });
+    expect(JSON.stringify(response.body)).not.toMatch(/fencingToken|leaseOwner/);
+  });
+
+  it("returns immediate cancellation, not found, and typed conflicts", async () => {
+    const store = new FakeControlStore();
+    store.executions.set("default:queued", fakeExecution("queued", "QUEUED"));
+    store.executions.set("default:completed", fakeExecution("completed", "COMPLETED"));
+    const app = testApp(store);
+
+    expect(await request(app, "POST", "/v1/executions/queued/cancel", { reason: "  no longer needed  " })).toMatchObject({
+      body: { id: "queued", state: "CANCELLED" },
+      status: 200,
+    });
+    expect(store.lastCancellation?.reason).toBe("no longer needed");
+    expect(await request(app, "POST", "/v1/executions/missing/cancel", {})).toMatchObject({ status: 404 });
+    expect(await request(app, "POST", "/v1/executions/completed/cancel", {})).toMatchObject({
+      body: { error: "Execution completed cannot be cancelled in its current state" },
+      status: 409,
+    });
+  });
+
+  it("requires a strict cancellation JSON body with a bounded non-blank reason", async () => {
+    const app = testApp();
+    expect((await request(app, "POST", "/v1/executions/id/cancel")).status).toBe(400);
+    expect((await request(app, "POST", "/v1/executions/id/cancel", { extra: true })).status).toBe(400);
+    expect((await request(app, "POST", "/v1/executions/id/cancel", { reason: "   " })).status).toBe(400);
+    expect((await request(app, "POST", "/v1/executions/id/cancel", { reason: "x".repeat(1025) })).status).toBe(400);
   });
 
   it.each([
@@ -215,9 +298,10 @@ class FakeControlStore implements ControlApiStore {
   readonly profiles = new Map<string, AgentProfileVersion>();
   readonly triggers = new Map<string, Trigger>();
   readonly bindings = new Map<string, PublishedBindingVersion>();
-  readonly executions = new Map<string, Execution>();
+  readonly executions = new Map<string, ExecutionDetail>();
   readonly admissions = new Map<string, { hash: string; result: AdmissionResult }>();
   lastAdmission?: AdmissionCommand;
+  lastCancellation?: RequestExecutionCancellationCommand;
   failure?: Error;
 
   async createConnection(command: CreateConnectionCommand) { this.maybeFail(); const key = `${command.tenantId}:${command.connection.id}`; if (this.connections.has(key)) throw new ConnectionAlreadyExistsError(command.connection.id); this.connections.set(key, command); return command; }
@@ -236,6 +320,22 @@ class FakeControlStore implements ControlApiStore {
   }
   async getProfileVersion(tenantId: string, profileId: string, version: number) { this.maybeFail(); return this.profiles.get(`${tenantId}:${profileId}:${version}`); }
   async getExecution(tenantId: string, executionId: string) { this.maybeFail(); return this.executions.get(`${tenantId}:${executionId}`); }
+  async getExecutionDetail(tenantId: string, executionId: string) { this.maybeFail(); return this.executions.get(`${tenantId}:${executionId}`); }
+  async requestExecutionCancellation(command: RequestExecutionCancellationCommand): Promise<RequestExecutionCancellationResult | undefined> {
+    this.maybeFail(); this.lastCancellation = command;
+    const key = `${command.tenantId}:${command.executionId}`;
+    const execution = this.executions.get(key);
+    if (!execution) return undefined;
+    if (["COMPLETED", "CANCELLED", "TIMED_OUT", "FAILED", "DEAD_LETTERED"].includes(execution.state)) {
+      throw new ExecutionCancellationConflictError(command.executionId);
+    }
+    const requested = execution.state === "PROVISIONING" || execution.state === "RUNNING" || execution.state === "CANCEL_REQUESTED";
+    const state = requested ? "CANCEL_REQUESTED" : "CANCELLED";
+    this.executions.set(key, { ...execution, state, updatedAt: command.requestedAt });
+    return requested
+      ? { outcome: "REQUESTED", id: execution.id, state: "CANCEL_REQUESTED" }
+      : { outcome: "CANCELLED", id: execution.id, state: "CANCELLED" };
+  }
   async createTrigger(trigger: Trigger) { this.maybeFail(); const key = `${trigger.tenantId}:${trigger.id}`; if (this.triggers.has(key)) throw new TriggerAlreadyExistsError(trigger.id); this.triggers.set(key, trigger); return trigger; }
   async getTrigger(tenantId: string, triggerId: string) { this.maybeFail(); return this.triggers.get(`${tenantId}:${triggerId}`); }
   async disableTrigger(tenantId: string, triggerId: string, disabledAt: string) { this.maybeFail(); const key = `${tenantId}:${triggerId}`; const value = this.triggers.get(key); if (!value) return undefined; if (!value.enabled) return value; const disabled = { ...value, enabled: false, disabledAt }; this.triggers.set(key, disabled); return disabled; }
@@ -250,7 +350,7 @@ class FakeControlStore implements ControlApiStore {
     if (previous) { if (previous.hash !== command.admissionHash) throw new IdempotencyConflictError(); return { ...previous.result, replayed: true }; }
     if (!this.triggers.get(`${command.tenantId}:${command.triggerId}`)?.enabled) throw new TriggerNotFoundError(command.triggerId);
     const result = planAdmission(command, await this.listBindingCandidates(command.tenantId, command.triggerId, command.event.type));
-    for (const execution of result.executions) this.executions.set(`${execution.tenantId}:${execution.id}`, execution);
+    for (const execution of result.executions) this.executions.set(`${execution.tenantId}:${execution.id}`, { ...execution, attempts: [], transitions: [] });
     this.admissions.set(key, { hash: command.admissionHash, result });
     return result;
   }
@@ -264,6 +364,7 @@ async function publishDependencies(app: ReturnType<typeof createOpenApiApp>) {
 function bindingBody() { return { version: 1, triggerId: "github", profile: { id: "coder", version: 1 }, definition: { schemaVersion: 1, eventTypes: ["issue.opened"], filter: { all: [{ path: "/action", op: "eq", value: "opened" }] }, prompt: { literal: "Handle issue", includeEvent: "data" }, workspace: { type: "empty" } } }; }
 function gitBindingBody() { return { ...bindingBody(), definition: { ...bindingBody().definition, workspace: { type: "git", repository: { url: { path: "/repository" } }, revision: { commit: { path: "/revision" } } } } }; }
 function cloudEvent(type: string, data: object) { return { specversion: "1.0", id: type === "push" ? "evt-2" : "evt-1", source: "https://github.example/hooks", type, data }; }
+function fakeExecution(id: string, state: ExecutionDetail["state"]): ExecutionDetail { const now = new Date().toISOString(); return { id, tenantId: "default", state, binding: { id: "binding", version: 1 }, profile: { id: "profile", version: 1 }, input: { text: "test" }, workspace: { type: "empty" }, eventId: "event", createdAt: now, updatedAt: now, result: null, attempts: [], transitions: [] }; }
 function profileDefinition(agent: string) { return { schemaVersion: 1 as const, runtime: { agent, opencodeConfig: { agent: { [agent]: { prompt: "Test" } } }, type: "opencode" as const }, sandbox: { templateName: "opencode" }, permissions: { onRequest: "fail" as const }, timeoutSeconds: 3600 }; }
 function testApp(store: ControlApiStore = new FakeControlStore(), readEnvironmentVariable?: (name: string) => string | undefined) { const app = createOpenApiApp(); mountControlApi(app, testConfig(), store, readEnvironmentVariable); return app; }
 async function request(app: ReturnType<typeof createOpenApiApp>, method: string, path: string, body?: unknown, headers: Record<string, string> = {}) { const response = await app.request(path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: { authorization: "Bearer test-token", ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers } }); const text = await response.text(); const contentType = response.headers.get("content-type"); return { body: text && contentType?.includes("json") ? JSON.parse(text) as unknown : text || undefined, headers: response.headers, status: response.status }; }

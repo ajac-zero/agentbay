@@ -19,6 +19,7 @@ describe("OpenAPI docs", () => {
       "/v1/agent-profiles/{profileID}/versions",
       "/v1/agent-profiles/{profileID}/versions/{version}",
       "/v1/executions/{id}",
+      "/v1/executions/{id}/cancel",
       "/v1/connections",
       "/v1/connections/{connectionID}",
       "/v1/triggers",
@@ -56,9 +57,33 @@ describe("OpenAPI docs", () => {
             },
           },
         },
+        "/v1/executions/{id}": {
+          get: {
+            responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/ExecutionDetail" } } } } },
+          },
+        },
+        "/v1/executions/{id}/cancel": {
+          post: {
+            requestBody: {
+              required: true,
+              content: { "application/json": { schema: { type: "object", additionalProperties: false } } },
+            },
+            responses: { "200": {}, "202": {}, "404": {}, "409": {} },
+          },
+        },
       },
       components: {
         schemas: {
+          ExecutionAttempt: {
+            type: "object",
+            additionalProperties: false,
+            properties: expect.not.objectContaining({ fencingToken: expect.anything(), leaseOwner: expect.anything() }),
+          },
+          ExecutionDetail: {
+            type: "object",
+            properties: { attempts: { type: "array" }, transitions: { type: "array" } },
+            required: expect.arrayContaining(["attempts", "transitions"]),
+          },
           WorkspaceResolutionError: {
             type: "object",
             properties: { error: { type: "string" } },
@@ -106,6 +131,8 @@ function emptyControlStore(): ControlApiStore {
     },
     getProfileVersion: async () => undefined,
     getExecution: async () => undefined,
+    getExecutionDetail: async () => undefined,
+    requestExecutionCancellation: async () => undefined,
     createTrigger: async () => { throw new Error("not used"); },
     getTrigger: async () => undefined,
     disableTrigger: async () => undefined,

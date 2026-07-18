@@ -1,7 +1,13 @@
 import type {
+  AcknowledgeLeasedExecutionCancellationCommand,
+  AcknowledgeLeasedExecutionCancellationResult,
   ClaimedExecution,
+  ExecutionLeaseRenewalResult,
+  FinalizeRequestedExecutionCancellationCommand,
+  FinalizedRequestedExecutionCancellation,
   PromotedExecutionRetry,
   RecoveredExecutionLease,
+  RequestedCancellationCleanup,
   TransitionLeasedExecutionCommand,
   TransitionLeasedExecutionResult,
 } from "./types.js";
@@ -20,7 +26,19 @@ export interface DispatcherExecutionStore {
     fencingToken: string;
     leaseOwner: string;
     leaseDurationMs: number;
-  }): Promise<boolean>;
+  }): Promise<ExecutionLeaseRenewalResult>;
+
+  acknowledgeLeasedExecutionCancellation(
+    command: AcknowledgeLeasedExecutionCancellationCommand,
+  ): Promise<AcknowledgeLeasedExecutionCancellationResult>;
+
+  listRequestedCancellationCleanups(input: {
+    limit: number;
+  }): Promise<RequestedCancellationCleanup[]>;
+
+  finalizeRequestedExecutionCancellation(
+    command: FinalizeRequestedExecutionCancellationCommand,
+  ): Promise<FinalizedRequestedExecutionCancellation | undefined>;
 
   recoverExpiredExecutionLeases(input: {
     limit: number;

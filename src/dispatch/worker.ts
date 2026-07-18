@@ -2,12 +2,16 @@ import { logger, toErrCtx, type Logger } from "../logger.js";
 import type { ExecutionAttemptProvisioner } from "../sandbox/types.js";
 import { parseExecutionAttemptProfile, type ExecutionAttemptProfile } from "./profile.js";
 import type { DispatcherExecutionStore } from "./store.js";
-import type { ClaimedExecution, TransitionLeasedExecutionCommand } from "./types.js";
-import { ExecutionLeaseLostError, startExecutionLeaseHeartbeat } from "./heartbeat.js";
+import type { ClaimedExecution, TransitionLeasedExecutionCommand, TransitionLeasedExecutionResult } from "./types.js";
+import {
+  ExecutionCancellationRequestedError,
+  ExecutionLeaseLostError,
+  startExecutionLeaseHeartbeat,
+} from "./heartbeat.js";
 import type { JsonValue } from "../execution/types.js";
 import { runExecutionAttempt } from "../agent/runner.js";
 import type { OpenCodeConnectionOptions } from "../agent/client.js";
-import { SandboxClaimRejectedError } from "../sandbox/provisioner.js";
+import { SandboxClaimCleanupError, SandboxClaimRejectedError } from "../sandbox/provisioner.js";
 
 type AttemptProfile = ExecutionAttemptProfile;
 type ProvisionedAttempt = Awaited<ReturnType<ExecutionAttemptProvisioner["provision"]>>;
@@ -138,6 +142,22 @@ export class DispatcherWorker {
     let provisioningStarted = false;
     let running = false;
     let terminal = false;
+    let cleanupAttempted = false;
+
+    const releaseProvisioned = async (): Promise<boolean> => {
+      cleanupAttempted = true;
+      if (!provisioned) return true;
+      try {
+        await this.#options.provisioner.release(
+          provisioned.release,
+          AbortSignal.timeout(this.#options.renewIntervalMs),
+        );
+        return true;
+      } catch (error) {
+        log.error("execution workload cleanup failed", { err: toErrCtx(error) });
+        return false;
+      }
+    };
 
     try {
       const profile = parseExecutionAttemptProfile(execution);
@@ -177,7 +197,7 @@ export class DispatcherWorker {
           targetExecutionState: "RUNNING",
           workloadName: provisioned?.workloadName,
         });
-        if (!transition) throw new ExecutionLeaseLostError();
+        if (!transition.applied) await this.#handleRejectedTransition(execution, transition);
         running = true;
       };
 
@@ -201,6 +221,13 @@ export class DispatcherWorker {
       });
       terminal = true;
     } catch (error) {
+      if (heartbeat.cancellationRequested || error instanceof ExecutionCancellationRequestedError) {
+        if (!(error instanceof SandboxClaimCleanupError) && await releaseProvisioned()) {
+          await this.#acknowledgeCancellation(execution);
+        }
+        log.info("execution processing stopped after cancellation request");
+        return;
+      }
       if (heartbeat.fenceLost || error instanceof ExecutionLeaseLostError || parentSignal?.aborted) {
         log.warn("execution processing stopped after lease loss or shutdown");
         return;
@@ -241,16 +268,12 @@ export class DispatcherWorker {
     } finally {
       await heartbeat.stop();
       deadline.stop();
-      if (provisioned && (
+      if (!cleanupAttempted && provisioned && (
         !terminal
         || provisioned.release.ttlSecondsAfterFinished === 0
         || Date.now() >= execution.timeoutAt.getTime()
       )) {
-        try {
-          await this.#options.provisioner.release(provisioned.release, AbortSignal.timeout(this.#options.renewIntervalMs));
-        } catch (error) {
-          log.error("execution workload cleanup failed", { err: toErrCtx(error) });
-        }
+        await releaseProvisioned();
       }
     }
   }
@@ -259,13 +282,14 @@ export class DispatcherWorker {
     execution: ClaimedExecution,
     command: Omit<TransitionLeasedExecutionCommand, "actor" | "attempt" | "executionId" | "fencingToken" | "leaseOwner" | "tenantId">,
   ): Promise<void> {
-    if (!await this.#transition(execution, command)) throw new ExecutionLeaseLostError();
+    const result = await this.#transition(execution, command);
+    if (!result.applied) await this.#handleRejectedTransition(execution, result);
   }
 
   async #transition(
     execution: ClaimedExecution,
     command: Omit<TransitionLeasedExecutionCommand, "actor" | "attempt" | "executionId" | "fencingToken" | "leaseOwner" | "tenantId">,
-  ): Promise<boolean> {
+  ): Promise<TransitionLeasedExecutionResult> {
     const { lease } = execution;
     const result = await this.#options.store.transitionLeasedExecution({
       ...command,
@@ -276,7 +300,33 @@ export class DispatcherWorker {
       leaseOwner: lease.leaseOwner,
       tenantId: execution.tenantId,
     });
-    return result.applied;
+    return result;
+  }
+
+  async #handleRejectedTransition(
+    _execution: ClaimedExecution,
+    result: Extract<TransitionLeasedExecutionResult, { applied: false }>,
+  ): Promise<never> {
+    if (result.reason === "STATE_MISMATCH") throw new ExecutionCancellationRequestedError();
+    throw new ExecutionLeaseLostError();
+  }
+
+  async #acknowledgeCancellation(execution: ClaimedExecution): Promise<boolean> {
+    const { lease } = execution;
+    try {
+      const result = await this.#options.store.acknowledgeLeasedExecutionCancellation({
+        actor: "dispatcher-worker",
+        attempt: lease.attempt,
+        executionId: execution.executionId,
+        fencingToken: lease.fencingToken,
+        leaseOwner: lease.leaseOwner,
+        reason: "execution cancellation acknowledged by worker",
+        tenantId: execution.tenantId,
+      });
+      return result.applied;
+    } catch {
+      return false;
+    }
   }
 }
 
