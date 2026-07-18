@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { CustomObjectsApi, KubeConfig, Watch } from "@kubernetes/client-node";
+import { CustomObjectsApi, KubeConfig, PatchStrategy, Watch, setHeaderOptions } from "@kubernetes/client-node";
 import { buildOpencodeConfigContent } from "../agent/config.js";
 import type { Config } from "../config.js";
 import type { RequestedCancellationCleanup } from "../dispatch/types.js";
@@ -16,6 +16,7 @@ import type {
 const GROUP = "extensions.agents.x-k8s.io";
 const PLURAL = "sandboxclaims";
 const CONNECTIONS_DIGEST_ANNOTATION = "agentbay.dev/connections-digest";
+const FENCING_TOKEN_ANNOTATION = "agentbay.dev/fencing-token";
 const TERMINAL_CLAIM_REASONS = new Set([
   "EnvVarsInjectionRejected",
   "InvalidMetadata",
@@ -100,6 +101,86 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
     }
   }
 
+  async adopt(
+    input: ExecutionAttemptProvisioningInput,
+    expectedWorkloadName: string,
+    signal: AbortSignal,
+  ): Promise<ExecutionAttemptEndpoint> {
+    throwIfAborted(signal);
+    const claimName = claimNameForExecutionAttempt(input.executionId, input.attempt);
+    if (claimName !== expectedWorkloadName) {
+      throw new Error(`Adoption workload ${expectedWorkloadName} does not match expected claim ${claimName}`);
+    }
+    let claim = await this.getClaim(claimName);
+    if (!claim) throw new Error(`SandboxClaim ${claimName} was not found for adoption`);
+
+    const ownership = ownershipAnnotations(input);
+    assertOwnership(claim, ownership, new Set([FENCING_TOKEN_ANNOTATION]));
+    const previousFence = claim.metadata.annotations?.[FENCING_TOKEN_ANNOTATION];
+    if (!previousFence) {
+      throw new Error(`SandboxClaim ${claimName} is missing ${FENCING_TOKEN_ANNOTATION} for adoption`);
+    }
+    const deadline = Date.now() + this.config.claimReadyTimeoutMs;
+    let fenceTransferred = claim.metadata.annotations?.[FENCING_TOKEN_ANNOTATION] === input.fencingToken;
+    try {
+      while (!fenceTransferred) {
+        throwIfAborted(signal);
+        const resourceVersion = claim.metadata.resourceVersion;
+        if (!resourceVersion) throw new Error(`SandboxClaim ${claimName} is missing metadata.resourceVersion for adoption`);
+        if (claim.metadata.annotations?.[FENCING_TOKEN_ANNOTATION] !== previousFence) {
+          throw new Error(`SandboxClaim ${claimName} fencing ownership changed during adoption`);
+        }
+        try {
+          await this.api.patchNamespacedCustomObject({
+            group: GROUP,
+            version: this.config.sandboxClaimApiVersion,
+            namespace: this.config.kubeNamespace,
+            plural: PLURAL,
+            name: claimName,
+            body: {
+              metadata: {
+                annotations: { [FENCING_TOKEN_ANNOTATION]: input.fencingToken },
+                resourceVersion,
+              },
+            },
+          }, setHeaderOptions("Content-Type", PatchStrategy.MergePatch));
+          fenceTransferred = true;
+        } catch (error) {
+          if (!isConflict(error)) throw error;
+        }
+        claim = await this.getClaim(claimName);
+        if (!claim) throw new Error(`SandboxClaim ${claimName} disappeared during adoption`);
+        assertOwnership(claim, ownership, new Set([FENCING_TOKEN_ANNOTATION]));
+        fenceTransferred = claim.metadata.annotations?.[FENCING_TOKEN_ANNOTATION] === input.fencingToken;
+        if (Date.now() >= deadline) throw new Error(`Timed out transferring SandboxClaim ${claimName} fencing ownership`);
+        if (!fenceTransferred) {
+          await abortableDelay(Math.min(100, Math.max(1, deadline - Date.now())), signal);
+        }
+      }
+
+      throwIfAborted(signal);
+      const adopted = await this.getClaim(claimName);
+      if (!adopted) throw new Error(`SandboxClaim ${claimName} disappeared after adoption`);
+      assertOwnership(adopted, ownership);
+      const password = passwordFromClaim(adopted);
+      const log = logger.child({ executionId: input.executionId, attempt: input.attempt, claimName });
+      const endpoint = await this.waitForReady(adopted, password, ownership, signal, log);
+      return { ...endpoint, release: input };
+    } catch (error) {
+      const reasonName = signal.reason instanceof Error ? signal.reason.name : undefined;
+      if (signal.aborted && reasonName !== "ExecutionCancellationRequestedError" && reasonName !== "TimeoutError") {
+        throw error;
+      }
+      if (!fenceTransferred) throw error;
+      try {
+        await this.release(input, AbortSignal.timeout(Math.min(this.config.claimReadyTimeoutMs, 10_000)));
+      } catch (cleanupError) {
+        throw new SandboxClaimCleanupError({ cause: cleanupError });
+      }
+      throw error;
+    }
+  }
+
   async release(input: ExecutionAttemptProvisioningInput, signal: AbortSignal): Promise<void> {
     throwIfAborted(signal);
     const claimName = claimNameForExecutionAttempt(input.executionId, input.attempt);
@@ -115,7 +196,7 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
         plural: PLURAL,
         name: claimName,
         propagationPolicy: "Foreground",
-        ...(claim.metadata.uid ? { body: { preconditions: { uid: claim.metadata.uid } } } : {}),
+        ...deletePreconditions(claim),
       });
     } catch (error) {
       if (!isNotFound(error)) throw error;
@@ -412,6 +493,7 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
 
 function ownershipAnnotations(input: ExecutionAttemptProvisioningInput): Record<string, string> {
   return {
+    [FENCING_TOKEN_ANNOTATION]: input.fencingToken,
     "agentbay.dev/tenant-id": input.tenantId,
     "agentbay.dev/execution-id": input.executionId,
     "agentbay.dev/attempt": String(input.attempt),
@@ -463,12 +545,20 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-function assertOwnership(claim: SandboxClaim, expected: Record<string, string>): void {
+function assertOwnership(claim: SandboxClaim, expected: Record<string, string>, ignored = new Set<string>()): void {
   const actual = claim.metadata.annotations ?? {};
-  const mismatch = Object.entries(expected).find(([key, value]) => actual[key] !== value);
+  const mismatch = Object.entries(expected).find(([key, value]) => !ignored.has(key) && actual[key] !== value);
   if (mismatch) {
     throw new Error(`Existing SandboxClaim ${claim.metadata.name} is not owned by this execution attempt: annotation ${mismatch[0]} does not match`);
   }
+}
+
+function deletePreconditions(claim: SandboxClaim): { body: { preconditions: { uid?: string; resourceVersion?: string } } } | object {
+  const preconditions = {
+    ...(claim.metadata.uid ? { uid: claim.metadata.uid } : {}),
+    ...(claim.metadata.resourceVersion ? { resourceVersion: claim.metadata.resourceVersion } : {}),
+  };
+  return Object.keys(preconditions).length > 0 ? { body: { preconditions } } : {};
 }
 
 function assertCancellationOwnership(claim: SandboxClaim, candidate: RequestedCancellationCleanup): void {

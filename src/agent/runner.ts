@@ -6,6 +6,7 @@ import { logger } from "../logger.js";
 export const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
 
 export type ExecutionAttemptInput = {
+  abortSessionOnSignal?: (reason: unknown) => boolean;
   agent: string;
   endpoint: OpenCodeEndpoint;
   maxOutputBytes?: number;
@@ -19,6 +20,106 @@ export type ExecutionAttemptResult = {
   output: string;
   sessionId: string;
 };
+
+export type ObserveExecutionAttemptInput = {
+  abortSessionOnSignal?: (reason: unknown) => boolean;
+  endpoint: OpenCodeEndpoint;
+  sessionId: string;
+  maxOutputBytes?: number;
+  signal?: AbortSignal;
+};
+
+export async function observeExecutionAttempt(
+  input: ObserveExecutionAttemptInput,
+  client?: OpencodeClient,
+): Promise<ExecutionAttemptResult> {
+  const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+  if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 0) {
+    throw new Error("maxOutputBytes must be a nonnegative safe integer");
+  }
+
+  input.signal?.throwIfAborted();
+  if (!client) {
+    await waitForOpencodeReady(input.endpoint, input.endpoint, input.signal);
+    client = createAgentClient(input.endpoint, input.endpoint);
+  }
+
+  const { sessionId } = input;
+  const log = logger.child({ sessionId });
+  let abortPromise: Promise<never> | undefined;
+  let removeAbortListener: (() => void) | undefined;
+  let events: Awaited<ReturnType<OpencodeClient["event"]["subscribe"]>> | undefined;
+
+  if (input.signal) {
+    abortPromise = new Promise<never>((_resolve, reject) => {
+      const abort = () => {
+        if (input.abortSessionOnSignal?.(input.signal?.reason) !== false) {
+          void client.session.abort({ path: { id: sessionId } }).catch((error: unknown) => {
+            log.warn("failed to abort opencode session", { error: String(error) });
+          });
+        }
+        reject(input.signal?.reason ?? new DOMException("The operation was aborted", "AbortError"));
+      };
+      removeAbortListener = () => input.signal?.removeEventListener("abort", abort);
+      if (input.signal?.aborted) abort();
+      else input.signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
+
+  const raceAbort = <T>(promise: Promise<T>): Promise<T> => abortPromise
+    ? Promise.race([promise, abortPromise])
+    : promise;
+
+  try {
+    await raceAbort(client.session.get({
+      path: { id: sessionId },
+      signal: input.signal,
+      throwOnError: true,
+    }));
+
+    events = await raceAbort(client.event.subscribe({ signal: input.signal }));
+    const { data: statuses } = await raceAbort(client.session.status({
+      signal: input.signal,
+      throwOnError: true,
+    }));
+    const status = parseSessionStatus(statuses, sessionId);
+
+    if (status === "busy" || status === "retry") {
+      const iterator = events.stream[Symbol.asyncIterator]();
+      while (true) {
+        const next = await raceAbort(iterator.next());
+        if (next.done) throw new Error(`opencode event stream ended before session ${sessionId} became idle`);
+
+        const event = next.value;
+        if (!isSessionEvent(event, sessionId)) continue;
+
+        if (event.type === "permission.updated") {
+          await raceAbort(client.postSessionIdPermissionsPermissionId({
+            path: { id: sessionId, permissionID: event.properties.id },
+            body: { response: "reject" },
+            throwOnError: true,
+          }));
+          throw new Error(`opencode session ${sessionId} requested permission ${event.properties.id}`);
+        }
+        if (event.type === "session.error") {
+          throw new Error(`opencode session ${sessionId} error: ${formatOpencodeError(event.properties.error)}`);
+        }
+        if (event.type === "session.idle"
+          || (event.type === "session.status" && event.properties.status.type === "idle")) break;
+      }
+    }
+
+    const { data: messages } = await raceAbort(client.session.messages({
+      path: { id: sessionId },
+      signal: input.signal,
+      throwOnError: true,
+    }));
+    return { output: assistantText(messages, sessionId, maxOutputBytes), sessionId };
+  } finally {
+    removeAbortListener?.();
+    if (events) void events.stream.return(undefined).catch(() => undefined);
+  }
+}
 
 export async function runExecutionAttempt(
   input: ExecutionAttemptInput,
@@ -51,9 +152,11 @@ export async function runExecutionAttempt(
   if (input.signal) {
     abortPromise = new Promise<never>((_resolve, reject) => {
       const abort = () => {
-        void client.session.abort({ path: { id: sessionId } }).catch((error: unknown) => {
-          log.warn("failed to abort opencode session", { error: String(error) });
-        });
+        if (input.abortSessionOnSignal?.(input.signal?.reason) !== false) {
+          void client.session.abort({ path: { id: sessionId } }).catch((error: unknown) => {
+            log.warn("failed to abort opencode session", { error: String(error) });
+          });
+        }
         reject(input.signal?.reason ?? new DOMException("The operation was aborted", "AbortError"));
       };
       removeAbortListener = () => input.signal?.removeEventListener("abort", abort);
@@ -174,6 +277,74 @@ function appendWithinByteLimit(value: string, remainingBytes: number): string {
     bytes += characterBytes;
   }
   return result;
+}
+
+function parseSessionStatus(value: unknown, sessionId: string): "idle" | "busy" | "retry" | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("opencode session status response was malformed");
+  }
+
+  const entry = (value as Record<string, unknown>)[sessionId];
+  if (entry === undefined) return undefined;
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error(`opencode status for session ${sessionId} was malformed`);
+  }
+
+  const type = (entry as { type?: unknown }).type;
+  if (type === "idle" || type === "busy" || type === "retry") return type;
+  throw new Error(`opencode status for session ${sessionId} was malformed`);
+}
+
+function assistantText(value: unknown, sessionId: string, maxOutputBytes: number): string {
+  if (!Array.isArray(value)) throw new Error("opencode session messages response was malformed");
+
+  let output = "";
+  let outputBytes = 0;
+  let userMessages = 0;
+  let assistantMessages = 0;
+  for (const message of value) {
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      throw new Error("opencode session messages response was malformed");
+    }
+    const { info, parts } = message as { info?: unknown; parts?: unknown };
+    if (!info || typeof info !== "object" || Array.isArray(info) || !Array.isArray(parts)) {
+      throw new Error("opencode session messages response was malformed");
+    }
+
+    const messageInfo = info as { error?: unknown; role?: unknown; sessionID?: unknown; time?: { completed?: unknown } };
+    if ((messageInfo.role !== "assistant" && messageInfo.role !== "user")
+      || typeof messageInfo.sessionID !== "string") {
+      throw new Error("opencode session messages response was malformed");
+    }
+    if (messageInfo.sessionID !== sessionId) continue;
+    if (messageInfo.role === "user") {
+      userMessages += 1;
+      continue;
+    }
+    if (messageInfo.error !== undefined || typeof messageInfo.time?.completed !== "number") {
+      throw new Error(`opencode session ${sessionId} does not contain a completed prompt exchange`);
+    }
+    assistantMessages += 1;
+
+    for (const part of parts) {
+      if (!part || typeof part !== "object" || Array.isArray(part) || typeof (part as { type?: unknown }).type !== "string") {
+        throw new Error("opencode session messages response was malformed");
+      }
+      const textPart = part as { sessionID?: unknown; text?: unknown; type: string };
+      if (textPart.type !== "text") continue;
+      if (textPart.sessionID !== sessionId || typeof textPart.text !== "string") {
+        throw new Error("opencode session messages response was malformed");
+      }
+      if (outputBytes >= maxOutputBytes) continue;
+      const appended = appendWithinByteLimit(textPart.text, maxOutputBytes - outputBytes);
+      output += appended;
+      outputBytes += Buffer.byteLength(appended);
+    }
+  }
+  if (userMessages === 0 || assistantMessages === 0) {
+    throw new Error(`opencode session ${sessionId} does not contain a completed prompt exchange`);
+  }
+  return output;
 }
 
 function textDelta(event: Event, sessionId: string): string | undefined {

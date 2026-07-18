@@ -9,7 +9,7 @@ import {
   startExecutionLeaseHeartbeat,
 } from "./heartbeat.js";
 import type { JsonValue } from "../execution/types.js";
-import { runExecutionAttempt } from "../agent/runner.js";
+import { observeExecutionAttempt, runExecutionAttempt } from "../agent/runner.js";
 import type { OpenCodeConnectionOptions } from "../agent/client.js";
 import { SandboxClaimCleanupError, SandboxClaimRejectedError } from "../sandbox/provisioner.js";
 
@@ -28,6 +28,7 @@ export interface ExecutionAttemptRunner {
     provisioned: ProvisionedAttempt;
     signal: AbortSignal;
     onSession(sessionId: string): Promise<void>;
+    sessionId?: string;
   }): Promise<ExecutionAttemptRunnerResult>;
 }
 
@@ -35,18 +36,27 @@ export class OpenCodeExecutionAttemptRunner implements ExecutionAttemptRunner {
   constructor(private readonly connection: OpenCodeConnectionOptions) {}
 
   async run(input: Parameters<ExecutionAttemptRunner["run"]>[0]): Promise<ExecutionAttemptRunnerResult> {
-    const result = await runExecutionAttempt({
+    const endpoint = {
+      ...this.connection,
+      host: input.provisioned.host,
+      password: input.provisioned.password,
+    };
+    const result = input.sessionId
+      ? await observeExecutionAttempt({
+          abortSessionOnSignal: (reason) => reason instanceof ExecutionCancellationRequestedError,
+          endpoint,
+          sessionId: input.sessionId,
+          signal: input.signal,
+        })
+      : await runExecutionAttempt({
       agent: input.profile.resolvedPolicy.runtime.agent,
-      endpoint: {
-        ...this.connection,
-        host: input.provisioned.host,
-        password: input.provisioned.password,
-      },
+      abortSessionOnSignal: (reason) => reason instanceof ExecutionCancellationRequestedError,
+      endpoint,
       onSession: input.onSession,
       prompt: input.execution.input.text,
       signal: input.signal,
       title: `agentbay execution ${input.execution.executionId} attempt ${input.execution.lease.attempt}`,
-    });
+      });
     return { result: { output: result.output }, sessionId: result.sessionId };
   }
 }
@@ -71,6 +81,7 @@ export class DispatcherWorker {
     & Omit<DispatcherWorkerOptions, "maxErrorLength" | "maxResultBytes">;
   readonly #log: Logger;
   #active = false;
+  #preferAdoption = true;
 
   constructor(options: DispatcherWorkerOptions) {
     requireNonempty("workerId", options.workerId);
@@ -99,11 +110,14 @@ export class DispatcherWorker {
     this.#active = true;
     try {
       signal?.throwIfAborted();
-      const execution = await this.#options.store.claimNextQueuedExecution({
-        leaseDurationMs: this.#options.leaseDurationMs,
-        leaseOwner: this.#options.workerId,
-      });
+      const lease = { leaseDurationMs: this.#options.leaseDurationMs, leaseOwner: this.#options.workerId };
+      const execution = this.#preferAdoption
+        ? await this.#options.store.claimExpiredRunningExecution(lease)
+          ?? await this.#options.store.claimNextQueuedExecution(lease)
+        : await this.#options.store.claimNextQueuedExecution(lease)
+          ?? await this.#options.store.claimExpiredRunningExecution(lease);
       if (!execution) return false;
+      this.#preferAdoption = !Boolean(execution.adoption);
       await this.#runClaimed(execution, signal);
       return true;
     } finally {
@@ -140,9 +154,10 @@ export class DispatcherWorker {
     });
     let provisioned: ProvisionedAttempt | undefined;
     let provisioningStarted = false;
-    let running = false;
+    let running = Boolean(execution.adoption);
     let terminal = false;
     let cleanupAttempted = false;
+    let leaseLost = false;
 
     const releaseProvisioned = async (): Promise<boolean> => {
       cleanupAttempted = true;
@@ -163,10 +178,11 @@ export class DispatcherWorker {
       const profile = parseExecutionAttemptProfile(execution);
       heartbeat.assertOwned();
       provisioningStarted = true;
-      provisioned = await this.#options.provisioner.provision({
+      const provisioningInput = {
         attempt: execution.lease.attempt,
         connections: profile.resolvedPolicy.connections,
         executionId: execution.executionId,
+        fencingToken: execution.lease.fencingToken,
         opencodeConfig: profile.resolvedPolicy.runtime.opencodeConfig,
         profileVersion: {
           id: profile.profileVersion.id,
@@ -179,7 +195,10 @@ export class DispatcherWorker {
         ttlSecondsAfterFinished: profile.resolvedPolicy.retention?.sandboxSecondsAfterFinished ?? 0,
         warmPool: profile.resolvedPolicy.sandbox.warmPool,
         workspace: execution.workspace,
-      }, heartbeat.signal);
+      };
+      provisioned = execution.adoption
+        ? await this.#options.provisioner.adopt(provisioningInput, execution.adoption.workloadName, heartbeat.signal)
+        : await this.#options.provisioner.provision(provisioningInput, heartbeat.signal);
       heartbeat.assertOwned();
 
       const markRunning = async (sessionId?: string): Promise<void> => {
@@ -206,6 +225,7 @@ export class DispatcherWorker {
         onSession: markRunning,
         profile,
         provisioned,
+        sessionId: execution.adoption?.opencodeSessionId,
         signal: heartbeat.signal,
       });
       heartbeat.assertOwned();
@@ -229,6 +249,7 @@ export class DispatcherWorker {
         return;
       }
       if (heartbeat.fenceLost || error instanceof ExecutionLeaseLostError || parentSignal?.aborted) {
+        leaseLost = true;
         log.warn("execution processing stopped after lease loss or shutdown");
         return;
       }
@@ -264,11 +285,12 @@ export class DispatcherWorker {
         terminal = true;
       } catch (transitionError) {
         if (!(transitionError instanceof ExecutionLeaseLostError)) throw transitionError;
+        leaseLost = true;
       }
     } finally {
       await heartbeat.stop();
       deadline.stop();
-      if (!cleanupAttempted && provisioned && (
+      if (!cleanupAttempted && provisioned && !heartbeat.fenceLost && !leaseLost && (
         !terminal
         || provisioned.release.ttlSecondsAfterFinished === 0
         || Date.now() >= execution.timeoutAt.getTime()

@@ -312,8 +312,14 @@ lease expires. Existing claim shutdown behavior and the Kubernetes reconciler
 provide workload-cleanup fallbacks; execution maintenance does not itself
 delete Kubernetes resources. Consequently, `202 Accepted` confirms that the
 cancellation request is durable, not that the workload was deleted immediately.
-Recovery currently does not adopt an existing OpenCode session: a recovered
-retry starts a new attempt and session.
+Recovery adopts an expired `RUNNING` attempt only when both its exact sandbox
+workload and OpenCode session were durably checkpointed. The dispatcher rotates
+the database fence, transfers the SandboxClaim fence with Kubernetes optimistic
+concurrency, and observes the existing session without submitting another
+prompt. The session must contain a persisted user/assistant exchange before an
+idle session can succeed. Earlier crash windows remain non-adoptable and use
+the ordinary failed-attempt/retry path; Agentbay never guesses by replaying a
+prompt into a checkpointed session.
 
 Cancellation is best effort at the external-effect boundary. Aborting the
 OpenCode request and deleting its sandbox can prevent later work, but cannot

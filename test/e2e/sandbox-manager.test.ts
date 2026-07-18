@@ -113,6 +113,7 @@ describe("SandboxClaimExecutionAttemptProvisioner e2e", () => {
       "agentbay.dev/profile": input.profileVersion.profileId,
     });
     expect(createdClaim.metadata.annotations).toMatchObject({
+      "agentbay.dev/fencing-token": input.fencingToken,
       "agentbay.dev/tenant-id": input.tenantId,
       "agentbay.dev/execution-id": executionId,
       "agentbay.dev/attempt": String(attempt),
@@ -231,6 +232,7 @@ function testConfig(): Config {
 
 function testProvisioningInput(executionId: string, attempt: number): ExecutionAttemptProvisioningInput {
   return {
+    fencingToken: `fence-${executionId}-${attempt}`,
     tenantId: "tenant-e2e",
     executionId,
     attempt,

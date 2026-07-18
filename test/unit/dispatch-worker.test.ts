@@ -45,6 +45,30 @@ describe("DispatcherWorker", () => {
     );
   });
 
+  it("adopts a checkpointed running attempt without replaying its prompt", async () => {
+    const fixture = workerFixture();
+    fixture.execution.adoption = { workloadName: "workload-1", opencodeSessionId: "session-existing" };
+    fixture.store.claimExpiredRunningExecution = vi.fn().mockResolvedValue(fixture.execution);
+    fixture.store.claimNextQueuedExecution = vi.fn();
+
+    await expect(fixture.worker.runOne()).resolves.toBe(true);
+
+    expect(fixture.store.claimNextQueuedExecution).not.toHaveBeenCalled();
+    expect(fixture.provisioner.provision).not.toHaveBeenCalled();
+    expect(fixture.provisioner.adopt).toHaveBeenCalledWith(
+      expect.objectContaining({ fencingToken: "fence-1" }),
+      "workload-1",
+      expect.any(AbortSignal),
+    );
+    expect(fixture.runner.run).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session-existing" }));
+    expect(fixture.store.transitions).toMatchObject([{
+      expectedAttemptState: "RUNNING",
+      expectedExecutionState: "RUNNING",
+      targetAttemptState: "SUCCEEDED",
+      targetExecutionState: "SUCCEEDED",
+    }]);
+  });
+
   it("retries an ordinary provisioning failure", async () => {
     const fixture = workerFixture();
     fixture.provisioner.provision = vi.fn().mockRejectedValue(new Error("bad\u0000 secret-ish failure"));
@@ -149,7 +173,7 @@ describe("DispatcherWorker", () => {
 
     expect(fixture.store.renewExecutionLease).toHaveBeenCalledOnce();
     expect(fixture.store.transitions).toHaveLength(1);
-    expect(fixture.provisioner.release).toHaveBeenCalledOnce();
+    expect(fixture.provisioner.release).not.toHaveBeenCalled();
   });
 
   it("aborts provisioning and acknowledges a heartbeat cancellation with the exact lease", async () => {
@@ -281,6 +305,7 @@ describe("DispatcherWorker", () => {
     await expect(fixture.worker.runOne()).resolves.toBe(false);
     finish();
     await first;
+    expect(fixture.store.claimExpiredRunningExecution).toHaveBeenCalledOnce();
     expect(fixture.store.claimNextQueuedExecution).toHaveBeenCalledOnce();
   });
 });
@@ -289,6 +314,7 @@ function workerFixture(overrides: { renew?: ExecutionLeaseRenewalResult } = {}) 
   const execution = claimedExecution();
   const transitions: TransitionLeasedExecutionCommand[] = [];
   const store = {
+    claimExpiredRunningExecution: vi.fn().mockResolvedValue(undefined),
     claimNextQueuedExecution: vi.fn().mockResolvedValue(execution),
     acknowledgeLeasedExecutionCancellation: vi.fn().mockResolvedValue({ applied: true as const }),
     listRequestedCancellationCleanups: vi.fn().mockResolvedValue([]),
@@ -306,6 +332,7 @@ function workerFixture(overrides: { renew?: ExecutionLeaseRenewalResult } = {}) 
   store.transitions = transitions;
 
   const provisioner: ExecutionAttemptProvisioner = {
+    adopt: vi.fn().mockResolvedValue({ host: "sandbox", password: "password", workloadName: "workload-1", release: provisioningInput() }),
     provision: vi.fn().mockResolvedValue({ host: "sandbox", password: "password", workloadName: "workload-1", release: provisioningInput() }),
     release: vi.fn().mockResolvedValue(undefined),
   };
@@ -332,6 +359,7 @@ function provisioningInput() {
   return {
     attempt: 1,
     connections: [],
+    fencingToken: "fence-1",
     executionId: "execution-1",
     opencodeConfig: { agent: { coder: {} } },
     profileVersion: { id: "profile-version-1", profileId: "coder", version: 1 },

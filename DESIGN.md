@@ -684,8 +684,13 @@ the cancellation state means Agentbay stopped further work on a best-effort
 basis, not that all effects were rolled back.
 
 Timeout follows the same cleanup model but terminates as `TIMED_OUT`. Current
-crash recovery does not adopt an existing OpenCode session: a recovered retry
-creates a new fenced attempt and a new session.
+crash recovery may adopt an expired `RUNNING` attempt when its exact workload
+and OpenCode session are both durably checkpointed. Adoption rotates the
+database fencing token, transfers the SandboxClaim fence using Kubernetes
+resource-version concurrency, and observes persisted session state without
+submitting another prompt. An idle session succeeds only with a persisted
+user/assistant exchange. Attempts lost before those checkpoints remain
+non-adoptable and follow normal failed-attempt retry semantics.
 
 ## 11. Execution Plane
 
@@ -726,7 +731,7 @@ OpenCode runs headlessly inside the workload. The execution worker:
 6. Persists progress, text, tool calls, permission requests, usage, and errors.
 7. Produces a structured result when the session becomes idle.
 
-The platform must tolerate SSE disconnects and worker restarts. Durable execution state, OpenCode session status, and artifact checkpoints will eventually determine whether to reconnect, resume, retry, or fail. The current dispatcher does not adopt an existing OpenCode session after ownership is lost; recovery creates a new attempt and session.
+The platform must tolerate SSE disconnects and worker restarts. Durable execution state, OpenCode session status, and artifact checkpoints determine whether to reconnect, retry, or fail. The dispatcher reconnects only to fully checkpointed `RUNNING` attempts, reconstructs output from persisted messages, and never resubmits their prompt. Missing workload/session checkpoints or incomplete prompt history fail closed into ordinary retry semantics.
 
 Sandbox templates may include authenticated API, proxy, or MCP sidecars that expose standard, policy-bounded tools to OpenCode over localhost. Profile `connections: [{ id, sidecar }]` entries authorize named connections for those template-owned sidecars; they do not create or mutate containers. Agentbay validates each connection reference and sends the grant only to the named container. The agent-sandbox controller rejects a claim when that container is absent. The selected sidecar remains the enforcement boundary and must parse `AGENTBAY_CONNECTIONS` at startup and fail closed; Agentbay does not introspect or certify arbitrary sidecar implementations. Connection-enabled attempts use cold sandboxes rather than a `SandboxWarmPool` so claim-specific authorization cannot arrive after a sidecar has initialized.
 

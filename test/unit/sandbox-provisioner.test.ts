@@ -12,6 +12,7 @@ import type { ExecutionAttemptProvisioningInput, SandboxClaim } from "../../src/
 const NAMESPACE = "test-ns";
 const input: ExecutionAttemptProvisioningInput = {
   connections: [],
+  fencingToken: "fence-2",
   tenantId: "tenant-1",
   executionId: "execution-1",
   attempt: 2,
@@ -63,6 +64,7 @@ users:
 function ownership(): Record<string, string> {
   const authorization = "[]";
   return {
+    "agentbay.dev/fencing-token": input.fencingToken,
     "agentbay.dev/tenant-id": input.tenantId,
     "agentbay.dev/execution-id": input.executionId,
     "agentbay.dev/attempt": String(input.attempt),
@@ -314,6 +316,128 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it("adopts an existing claim by replacing its fence and returns its endpoint", async () => {
+    const existing = claim(true);
+    existing.metadata.resourceVersion = "17";
+    existing.metadata.annotations!["agentbay.dev/fencing-token"] = "old-fence";
+    const adopted = claim(true);
+    adopted.metadata.resourceVersion = "18";
+    adopted.metadata.annotations!["agentbay.dev/fencing-token"] = input.fencingToken;
+    const get = vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject")
+      .mockResolvedValueOnce(existing)
+      .mockResolvedValue(adopted);
+    const patch = vi.spyOn(CustomObjectsApi.prototype, "patchNamespacedCustomObject").mockResolvedValue(adopted);
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject");
+
+    await expect(provisioner().adopt(
+      input,
+      claimNameForExecutionAttempt(input.executionId, input.attempt),
+      new AbortController().signal,
+    )).resolves.toEqual({
+      workloadName: claimNameForExecutionAttempt(input.executionId, input.attempt),
+      host: `sandbox-1.${NAMESPACE}.svc`,
+      password: "existing-password",
+      release: input,
+    });
+    expect(get).toHaveBeenCalledTimes(3);
+    expect(patch).toHaveBeenCalledWith(expect.objectContaining({
+      name: claimNameForExecutionAttempt(input.executionId, input.attempt),
+      body: {
+        metadata: {
+          annotations: { "agentbay.dev/fencing-token": input.fencingToken },
+          resourceVersion: "17",
+        },
+      },
+    }), expect.objectContaining({ middleware: expect.any(Array) }));
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("rereads and retries a conflicting fence transfer without deleting the claim", async () => {
+    const existing = claim(true);
+    existing.metadata.resourceVersion = "17";
+    existing.metadata.annotations!["agentbay.dev/fencing-token"] = "old-fence";
+    const refreshed = structuredClone(existing);
+    refreshed.metadata.resourceVersion = "18";
+    const adopted = claim(true);
+    adopted.metadata.resourceVersion = "19";
+    adopted.metadata.annotations!["agentbay.dev/fencing-token"] = input.fencingToken;
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject")
+      .mockResolvedValueOnce(existing)
+      .mockResolvedValueOnce(refreshed)
+      .mockResolvedValue(adopted);
+    const patch = vi.spyOn(CustomObjectsApi.prototype, "patchNamespacedCustomObject")
+      .mockRejectedValueOnce({ code: 409 })
+      .mockResolvedValueOnce(adopted);
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject");
+
+    await expect(provisioner().adopt(
+      input,
+      claimNameForExecutionAttempt(input.executionId, input.attempt),
+      new AbortController().signal,
+    )).resolves.toMatchObject({ workloadName: claimNameForExecutionAttempt(input.executionId, input.attempt) });
+    expect(patch).toHaveBeenCalledTimes(2);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("does not create or delete when adoption cannot find the claim", async () => {
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockRejectedValue({ code: 404 });
+    const create = vi.spyOn(CustomObjectsApi.prototype, "createNamespacedCustomObject");
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject");
+
+    await expect(provisioner().adopt(
+      input,
+      claimNameForExecutionAttempt(input.executionId, input.attempt),
+      new AbortController().signal,
+    )).rejects.toThrow(/not found for adoption/);
+    expect(create).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("preserves an adopted claim when readiness is aborted for takeover", async () => {
+    const existing = claim();
+    existing.metadata.resourceVersion = "17";
+    existing.metadata.annotations!["agentbay.dev/fencing-token"] = "old-fence";
+    const adopted = claim();
+    adopted.metadata.resourceVersion = "18";
+    let reads = 0;
+    let present = true;
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockImplementation(async () => {
+      reads += 1;
+      if (!present) throw { code: 404 };
+      return reads === 1 ? existing : adopted;
+    });
+    vi.spyOn(CustomObjectsApi.prototype, "patchNamespacedCustomObject").mockResolvedValue(adopted);
+    const watchController = new AbortController();
+    vi.spyOn(Watch.prototype, "watch").mockResolvedValue(watchController);
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject").mockImplementation(async () => {
+      present = false;
+      return {};
+    });
+    const controller = new AbortController();
+
+    const result = provisioner().adopt(
+      input,
+      claimNameForExecutionAttempt(input.executionId, input.attempt),
+      controller.signal,
+    );
+    await flush();
+    controller.abort();
+
+    await expect(result).rejects.toMatchObject({ name: "AbortError" });
+    expect(watchController.signal.aborted).toBe(true);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("does not let a stale fence release an adopted claim", async () => {
+    const adopted = claim(true);
+    adopted.metadata.annotations!["agentbay.dev/fencing-token"] = "new-fence";
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(adopted);
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject");
+
+    await expect(provisioner().release(input, new AbortController().signal)).rejects.toThrow(/fencing-token/);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
   it("throws on an ownership mismatch without deleting the claim", async () => {
     const existing = claim(true);
     existing.metadata.annotations!["agentbay.dev/tenant-id"] = "other-tenant";
@@ -503,9 +627,12 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
   });
 
   it("releases the deterministic claim with foreground propagation", async () => {
+    const existing = claim(true);
+    existing.metadata.uid = "claim-uid";
+    existing.metadata.resourceVersion = "23";
     const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject").mockResolvedValue({});
     vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject")
-      .mockResolvedValueOnce(claim(true))
+      .mockResolvedValueOnce(existing)
       .mockRejectedValue({ code: 404 });
 
     await provisioner().release(input, new AbortController().signal);
@@ -513,6 +640,7 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     expect(remove).toHaveBeenCalledWith(expect.objectContaining({
       name: claimNameForExecutionAttempt(input.executionId, input.attempt),
       propagationPolicy: "Foreground",
+      body: { preconditions: { uid: "claim-uid", resourceVersion: "23" } },
     }));
   });
 

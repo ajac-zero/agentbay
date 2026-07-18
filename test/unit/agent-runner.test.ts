@@ -1,6 +1,6 @@
 import type { Event, OpencodeClient } from "@opencode-ai/sdk/client";
 import { describe, expect, it, vi } from "vitest";
-import { runExecutionAttempt } from "../../src/agent/runner.js";
+import { observeExecutionAttempt, runExecutionAttempt } from "../../src/agent/runner.js";
 
 const endpoint = {
   directory: "/workspace",
@@ -111,6 +111,72 @@ describe("runExecutionAttempt", () => {
   });
 });
 
+describe("observeExecutionAttempt", () => {
+  it("returns bounded messages for an already idle session without creating or prompting", async () => {
+    const calls: string[] = [];
+    const client = existingSessionClient({
+      calls,
+      messages: [userMessage("session-1"), assistantMessage("session-1", ["hello ", "😀 world"])],
+      status: { "session-1": { type: "idle" } },
+    });
+
+    await expect(observeExecutionAttempt({
+      endpoint,
+      maxOutputBytes: 10,
+      sessionId: "session-1",
+    }, client)).resolves.toEqual({ output: "hello 😀", sessionId: "session-1" });
+    expect(calls).toEqual(["get", "subscribe", "status", "messages"]);
+    expect(client.session.create).not.toHaveBeenCalled();
+    expect(client.session.promptAsync).not.toHaveBeenCalled();
+  });
+
+  it("waits for a busy session to become idle and reconstructs messages", async () => {
+    const calls: string[] = [];
+    const client = existingSessionClient({
+      calls,
+      events: [textEvent("session-1", "ignored delta"), sessionEvent("session.idle", "session-1")],
+      messages: [userMessage("session-1"), assistantMessage("session-1", ["final output"])],
+      status: { "session-1": { type: "busy" } },
+    });
+
+    await expect(observeExecutionAttempt({ endpoint, sessionId: "session-1" }, client))
+      .resolves.toEqual({ output: "final output", sessionId: "session-1" });
+    expect(calls).toEqual(["get", "subscribe", "status", "messages"]);
+  });
+
+  it("rejects an idle session without a persisted prompt exchange", async () => {
+    const client = existingSessionClient({
+      messages: [assistantMessage("session-1", ["orphan output"])],
+      status: {},
+    });
+
+    await expect(observeExecutionAttempt({ endpoint, sessionId: "session-1" }, client))
+      .rejects.toThrow(/completed prompt exchange/);
+  });
+
+  it("best-effort aborts the existing session when cancelled", async () => {
+    const controller = new AbortController();
+    const client = existingSessionClient({
+      events: [],
+      hangAfterEvents: true,
+      status: { "session-1": { type: "busy" } },
+    });
+    const attempt = observeExecutionAttempt({
+      endpoint,
+      sessionId: "session-1",
+      signal: controller.signal,
+    }, client);
+
+    await vi.waitFor(() => expect(client.session.status).toHaveBeenCalled());
+    controller.abort(new Error("cancelled observation"));
+
+    await expect(attempt).rejects.toThrow("cancelled observation");
+    expect(client.session.abort).toHaveBeenCalledWith({ path: { id: "session-1" } });
+    expect(client.session.create).not.toHaveBeenCalled();
+    expect(client.session.promptAsync).not.toHaveBeenCalled();
+  });
+});
+
 function fakeClient(events: Event[], calls: string[] = [], hangAfterEvents = false): OpencodeClient {
   async function* stream(): AsyncGenerator<Event> {
     for (const event of events) yield event;
@@ -137,6 +203,67 @@ function fakeClient(events: Event[], calls: string[] = [], hangAfterEvents = fal
       }),
     },
   } as unknown as OpencodeClient;
+}
+
+function existingSessionClient(input: {
+  calls?: string[];
+  events?: Event[];
+  hangAfterEvents?: boolean;
+  messages?: unknown[];
+  status: Record<string, { type: "idle" | "busy" | "retry" }>;
+}): OpencodeClient {
+  const calls = input.calls ?? [];
+  async function* stream(): AsyncGenerator<Event> {
+    for (const event of input.events ?? []) yield event;
+    if (input.hangAfterEvents) await new Promise(() => undefined);
+  }
+
+  return {
+    event: {
+      subscribe: vi.fn(async () => {
+        calls.push("subscribe");
+        return { stream: stream() };
+      }),
+    },
+    postSessionIdPermissionsPermissionId: vi.fn(async () => ({ data: true })),
+    session: {
+      abort: vi.fn(async () => ({ data: true })),
+      create: vi.fn(),
+      get: vi.fn(async () => {
+        calls.push("get");
+        return { data: { id: "session-1" } };
+      }),
+      messages: vi.fn(async () => {
+        calls.push("messages");
+        return { data: input.messages ?? [] };
+      }),
+      promptAsync: vi.fn(),
+      status: vi.fn(async () => {
+        calls.push("status");
+        return { data: input.status };
+      }),
+    },
+  } as unknown as OpencodeClient;
+}
+
+function assistantMessage(sessionID: string, texts: string[]): unknown {
+  return {
+    info: { role: "assistant", sessionID, time: { completed: Date.now() } },
+    parts: texts.map((text, index) => ({
+      id: `part-${index}`,
+      messageID: "message-1",
+      sessionID,
+      text,
+      type: "text",
+    })),
+  };
+}
+
+function userMessage(sessionID: string): unknown {
+  return {
+    info: { role: "user", sessionID },
+    parts: [{ id: "prompt", messageID: "user-message", sessionID, text: "do work", type: "text" }],
+  };
 }
 
 function textEvent(sessionID: string, delta: string): Event {

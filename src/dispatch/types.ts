@@ -31,6 +31,10 @@ export type AcknowledgeLeasedExecutionCancellationResult =
 
 /** Immutable inputs needed to provision and run one execution. */
 export type ClaimedExecution = {
+  adoption?: {
+    workloadName: string;
+    opencodeSessionId: string;
+  };
   executionId: string;
   tenantId: string;
   eventId: string;

@@ -19,6 +19,11 @@ export interface DispatcherExecutionStore {
     leaseDurationMs: number;
   }): Promise<ClaimedExecution | undefined>;
 
+  claimExpiredRunningExecution(input: {
+    leaseOwner: string;
+    leaseDurationMs: number;
+  }): Promise<ClaimedExecution | undefined>;
+
   renewExecutionLease(input: {
     executionId: string;
     tenantId: string;

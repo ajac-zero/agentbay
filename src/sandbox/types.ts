@@ -31,6 +31,7 @@ export type SandboxClaim = {
     labels?: Record<string, string>;
     name: string;
     namespace?: string;
+    resourceVersion?: string;
     uid?: string;
   };
   spec?: {
@@ -60,6 +61,7 @@ export type SandboxClaim = {
 
 export type ExecutionAttemptProvisioningInput = {
   connections: readonly ConnectionAuthorizationGrant[];
+  fencingToken: string;
   tenantId: string;
   executionId: string;
   attempt: number;
@@ -86,6 +88,7 @@ export type ExecutionAttemptEndpoint = {
 };
 
 export interface ExecutionAttemptProvisioner {
+  adopt(input: ExecutionAttemptProvisioningInput, expectedWorkloadName: string, signal: AbortSignal): Promise<ExecutionAttemptEndpoint>;
   provision(input: ExecutionAttemptProvisioningInput, signal: AbortSignal): Promise<ExecutionAttemptEndpoint>;
   release(input: ExecutionAttemptProvisioningInput, signal: AbortSignal): Promise<void>;
 }
