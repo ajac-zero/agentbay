@@ -146,9 +146,34 @@ sandboxWarmPools:
 ```
 
 The template renderer provides an OpenCode container, workspace, service, and
-managed NetworkPolicy. Use `sidecars`, `extraVolumes`, `extraVolumeMounts`,
-`containerOverrides`, and `podSpecOverrides` for common extensions, or
-`specOverride` for full control.
+managed NetworkPolicy. It also runs a `workspace-materializer` init container
+from the sandbox image before OpenCode starts. The materializer mounts the
+workspace at `/workspace`; the Pod defaults to `fsGroup: 1000` with
+`fsGroupChangePolicy: OnRootMismatch`. The managed materializer and OpenCode
+containers run as UID/GID 1000, require a non-root user, disable privilege
+escalation, drop all capabilities, and use the runtime-default seccomp profile.
+Override Pod security-context fields or append init containers with
+`podSpecOverrides`; use `containerOverrides.securityContext` to customize the
+OpenCode container defaults.
+
+The chart owns the PodSpec `containers`, `initContainers`, `volumes`,
+`restartPolicy`, `automountServiceAccountToken`, and `securityContext` keys, so
+those keys are not emitted from the trailing `podSpecOverrides` block.
+`serviceAccountName` and `hostAliases` are also chart-owned while
+`aiGatewayAuthz` is enabled. Use `sidecars`, `extraVolumes`,
+`extraVolumeMounts`, and `containerOverrides` for the corresponding extensions.
+`specOverride` remains a full takeover: when set, the chart does not add the
+materializer, workspace, or security context.
+
+Keep `envVarsInjectionPolicy: Allowed` so each SandboxClaim can pass the Git
+materialization inputs to the init container. Git-backed workspaces require a
+cold sandbox: do not configure a `SandboxWarmPool` for templates used by Git
+executions. A warm Pod has already run its init containers before claim-specific
+environment variables are injected.
+
+By default, the materializer uses the template's `image.repository`, `tag`, and
+`pullPolicy`. If it is published as a separate image, override any of those
+fields under `workspaceMaterializer.image`.
 
 ## Envoy AI Gateway authorization
 

@@ -131,7 +131,7 @@ export const executions = pgTable("agentbay_executions", {
   tenantID: text("tenant_id").notNull(),
   timeoutAt: timestamp("timeout_at", { withTimezone: true }).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  workspace: jsonb("workspace").$type<Record<string, unknown>>().notNull().default({}),
+  workspace: jsonb("workspace").$type<import("../workspace/types.js").ResolvedWorkspace>().notNull().default({ type: "empty" }),
 }, (table) => [
   check("agentbay_executions_state_valid", sql`${table.state} IN ('RECEIVED', 'PLANNED', 'QUEUED', 'PROVISIONING', 'RUNNING', 'SUCCEEDED', 'DELIVERING', 'COMPLETED', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'CANCEL_REQUESTED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')`),
   foreignKey({

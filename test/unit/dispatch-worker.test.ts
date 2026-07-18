@@ -33,6 +33,10 @@ describe("DispatcherWorker", () => {
       expect.objectContaining({ attempt: 1, executionId: "execution-1" }),
       expect.any(AbortSignal),
     );
+    expect(fixture.provisioner.provision).toHaveBeenCalledWith(
+      expect.objectContaining({ workspace: fixture.execution.workspace }),
+      expect.any(AbortSignal),
+    );
   });
 
   it("fails the leased pair and attempts cleanup when provisioning fails", async () => {
@@ -50,6 +54,22 @@ describe("DispatcherWorker", () => {
       targetExecutionState: "RETRY_WAIT",
     });
     expect(fixture.provisioner.release).not.toHaveBeenCalled();
+  });
+
+  it("passes the persisted workspace through unchanged on a retry", async () => {
+    const fixture = workerFixture();
+    fixture.execution.lease.attempt = 2;
+    fixture.execution.workspace = {
+      repository: { url: "https://example.com/repo.git" },
+      revision: { commit: "0123456789abcdef", type: "commit" },
+      type: "git",
+    };
+
+    await fixture.worker.runOne();
+
+    const provisioned = vi.mocked(fixture.provisioner.provision).mock.calls[0]![0];
+    expect(provisioned.workspace).toBe(fixture.execution.workspace);
+    expect(provisioned.attempt).toBe(2);
   });
 
   it("fails the running pair when the runner fails", async () => {
@@ -159,6 +179,7 @@ function provisioningInput() {
     timeoutAt: new Date(Date.now() + 60_000),
     ttlSecondsAfterFinished: 0,
     warmPool: "none",
+    workspace: { type: "empty" as const },
   };
 }
 

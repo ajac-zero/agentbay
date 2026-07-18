@@ -1,5 +1,6 @@
 import type { ExecutionState } from "../execution/states.js";
 import type { ExecutionInput, JsonObject, JsonValue } from "../execution/types.js";
+import type { ResolvedWorkspace } from "../workspace/types.js";
 import type { AttemptState } from "./states.js";
 
 export type ExecutionLease = {
@@ -21,7 +22,7 @@ export type ClaimedExecution = {
     definition: JsonObject;
   };
   input: ExecutionInput;
-  workspace: JsonObject;
+  workspace: ResolvedWorkspace;
   resolvedPolicy: JsonObject;
   createdAt: Date;
   timeoutAt: Date;

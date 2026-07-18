@@ -94,6 +94,25 @@ describe("public API", () => {
     expect((await request(app, "POST", "/v1/triggers/github/events", { ...event, data: { changed: true } }, { "Idempotency-Key": "same" })).status).toBe(409);
   });
 
+  it.each([
+    ["missing selector", { action: "opened", revision: "a".repeat(40) }],
+    ["wrong selector type", { action: "opened", repository: 42, revision: "a".repeat(40) }],
+    ["invalid repository URL", { action: "opened", repository: "http://github.example/org/repo.git", revision: "a".repeat(40) }],
+    ["invalid commit", { action: "opened", repository: "https://github.example/org/repo.git", revision: "main" }],
+  ])("returns 422 for %s without admitting any part of the event", async (_case, data) => {
+    const store = new FakeControlStore();
+    const app = testApp(store);
+    await publishDependencies(app);
+    await request(app, "POST", "/v1/bindings/valid/versions", bindingBody());
+    await request(app, "POST", "/v1/bindings/git/versions", gitBindingBody());
+
+    const response = await request(app, "POST", "/v1/triggers/github/events", cloudEvent("issue.opened", data), { "Idempotency-Key": `workspace-${_case}` });
+
+    expect(response).toMatchObject({ body: { error: "Workspace could not be resolved from event data" }, status: 422 });
+    expect(store.admissions.size).toBe(0);
+    expect(store.executions.size).toBe(0);
+  });
+
   it.each(["tenantid", "agentbay"])("returns 400 for caller-supplied reserved %s extensions", async (name) => {
     const app = testApp();
     await request(app, "POST", "/v1/triggers", { id: "github", type: "cloudevents.http", config: { schemaVersion: 1 } });
@@ -163,6 +182,7 @@ async function publishDependencies(app: ReturnType<typeof createOpenApiApp>) {
   expect((await request(app, "POST", "/v1/triggers", { id: "github", type: "cloudevents.http", config: { schemaVersion: 1 } })).status).toBe(201);
 }
 function bindingBody() { return { version: 1, triggerId: "github", profile: { id: "coder", version: 1 }, definition: { schemaVersion: 1, eventTypes: ["issue.opened"], filter: { all: [{ path: "/action", op: "eq", value: "opened" }] }, prompt: { literal: "Handle issue", includeEvent: "data" }, workspace: { type: "empty" } } }; }
+function gitBindingBody() { return { ...bindingBody(), definition: { ...bindingBody().definition, workspace: { type: "git", repository: { url: { path: "/repository" } }, revision: { commit: { path: "/revision" } } } } }; }
 function cloudEvent(type: string, data: object) { return { specversion: "1.0", id: type === "push" ? "evt-2" : "evt-1", source: "https://github.example/hooks", type, data }; }
 function profileDefinition(agent: string) { return { schemaVersion: 1 as const, runtime: { agent, opencodeConfig: { agent: { [agent]: { prompt: "Test" } } }, type: "opencode" as const }, sandbox: { templateName: "opencode" }, permissions: { onRequest: "fail" as const }, timeoutSeconds: 3600 }; }
 function testApp(store: ControlApiStore = new FakeControlStore()) { const app = createOpenApiApp(); mountControlApi(app, testConfig(), store); return app; }

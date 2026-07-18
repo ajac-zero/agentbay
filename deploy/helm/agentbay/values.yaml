@@ -364,6 +364,14 @@ sandboxTemplates:
         type: emptyDir
         size: 1Gi
         storageClassName: ""
+      # -- The chart materializes a claim's Git workspace before OpenCode starts.
+      # -- By default this init container uses the sandbox image above. Set any
+      # -- image field here only when the materializer is published separately.
+      workspaceMaterializer:
+        image:
+          repository: ""
+          tag: ""
+          pullPolicy: ""
       # -- SandboxTemplate.spec.envVarsInjectionPolicy. Must be `Allowed`
       # -- for the orchestrator to inject per-claim secrets via
       # -- `claim.spec.env`.
@@ -397,10 +405,16 @@ sandboxTemplates:
       # -- Additional volumes appended to the sandbox Pod. Use with `sidecars`
       # -- for projected tokens, config, or sidecar-specific state.
       extraVolumes: []
-      # -- Pod-level overrides applied verbatim under spec.podTemplate.spec.
+      # -- Pod-level overrides applied under spec.podTemplate.spec. User init
+      # -- containers are appended after the workspace materializer, and Pod
+      # -- security-context fields override the chart defaults. The chart owns
+      # -- containers, initContainers, volumes, restartPolicy,
+      # -- automountServiceAccountToken, and securityContext; it also owns
+      # -- serviceAccountName and hostAliases when aiGatewayAuthz is enabled.
+      # -- Set other PodSpec fields here.
       podSpecOverrides: {}
-      # -- Container-level overrides applied verbatim under the opencode
-      # -- container.
+      # -- Container-level overrides applied under the opencode container.
+      # -- securityContext fields merge with the chart's restricted defaults.
       containerOverrides: {}
       # -- Full takeover of spec. When set, everything above is ignored and
       # -- this object is used as `spec` exactly.

@@ -38,6 +38,7 @@ import { bindingDefinitionSchema, publishedBindingVersionSchema, BindingVersionA
 import { triggerSchema, TriggerAlreadyExistsError, TriggerNotFoundError, type Trigger, type TriggerStore } from "../control/trigger.js";
 import { agentProfileDefinitionSchema } from "../execution/api-schema.js";
 import { hashCanonicalJson, type JsonValue } from "../json.js";
+import { resolvedWorkspaceSchema } from "../workspace/schema.js";
 import * as schema from "./schema.js";
 import {
   agentProfileVersions,
@@ -65,6 +66,13 @@ export type PostgresRuntimeStoreOptions = {
   sslRejectUnauthorized: boolean;
   user?: string;
 };
+
+export class PersistedExecutionCorruptionError extends Error {
+  constructor(executionId: string, field: string, options?: ErrorOptions) {
+    super(`Execution ${executionId} has an invalid persisted ${field}`, options);
+    this.name = "PersistedExecutionCorruptionError";
+  }
+}
 
 export async function createPostgresRuntimeStore(options: PostgresRuntimeStoreOptions): Promise<PostgresRuntimeStore> {
   const pool = new Pool({
@@ -466,8 +474,9 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         `,
         values: [randomUUID(), command.leaseOwner, command.leaseDurationMs, randomUUID(), "execution claimed"],
       });
+      const result = claimed.rows[0] ? claimedExecutionFromRow(claimed.rows[0]) : undefined;
       await client.query("COMMIT");
-      return claimed.rows[0] ? claimedExecutionFromRow(claimed.rows[0]) : undefined;
+      return result;
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -995,7 +1004,7 @@ function claimedExecutionFromRow(row: ClaimedExecutionRow): ClaimedExecution {
     resolvedPolicy: row.resolved_policy as ClaimedExecution["resolvedPolicy"],
     tenantId: row.tenant_id,
     timeoutAt: row.timeout_at,
-    workspace: row.workspace as ClaimedExecution["workspace"],
+    workspace: persistedWorkspace(row.id, row.workspace),
   };
 }
 
@@ -1090,8 +1099,16 @@ function executionRecordFromJoined(row: ExecutionJoinedRow): Execution {
     state: row.state as Execution["state"],
     tenantId: row.tenant_id,
     updatedAt: row.updated_at.toISOString(),
-    workspace: row.workspace as Execution["workspace"],
+    workspace: persistedWorkspace(row.id, row.workspace),
   };
+}
+
+function persistedWorkspace(executionId: string, value: unknown): Execution["workspace"] {
+  const parsed = resolvedWorkspaceSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new PersistedExecutionCorruptionError(executionId, "workspace", { cause: parsed.error });
+  }
+  return parsed.data;
 }
 
 function eventExtensions(event: AdmissionCommand["event"]): Record<string, unknown> {

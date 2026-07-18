@@ -1,6 +1,8 @@
 import type { JsonObject } from "../execution/types.js";
+import type { ResolvedWorkspace } from "../workspace/types.js";
 
 export type SandboxEnvVar = {
+  containerName?: string;
   name: string;
   value: string;
 };
@@ -63,6 +65,7 @@ export type ExecutionAttemptProvisioningInput = {
   sandboxTemplate: string;
   warmPool?: string;
   opencodeConfig: JsonObject;
+  workspace: ResolvedWorkspace;
   timeoutAt: Date;
   ttlSecondsAfterFinished: number;
 };

@@ -9,6 +9,7 @@ import { sourceDeliveryIdempotencyKey } from "../execution/idempotency.js";
 import type { EventAdmissionStore, ExecutionStore } from "../execution/store.js";
 import { IdempotencyConflictError, ProfileVersionNotFoundError } from "../execution/types.js";
 import { hashCanonicalJson, type JsonValue } from "../json.js";
+import { WorkspaceResolutionError } from "../workspace/resolver.js";
 import { BindingVersionAlreadyExistsError, BindingVersionNotFoundError, type BindingStore } from "./binding.js";
 import { TriggerAlreadyExistsError, TriggerNotFoundError, type TriggerStore } from "./trigger.js";
 import {
@@ -23,6 +24,7 @@ import {
 
 const TENANT_ID = "default";
 const MAX_BODY_BYTES = 128 * 1024;
+const WORKSPACE_RESOLUTION_MESSAGE = "Workspace could not be resolved from event data";
 export type ControlApiStore = ExecutionStore & TriggerStore & BindingStore & EventAdmissionStore;
 
 export function mountControlApi(app: OpenAPIHono<any>, config: Config, store: ControlApiStore): void {
@@ -109,6 +111,7 @@ async function handle(context: Context, run: () => Promise<Response>): Promise<R
   } catch (error) {
     if (error instanceof TriggerNotFoundError || error instanceof BindingVersionNotFoundError || error instanceof ProfileVersionNotFoundError) return context.json({ error: error.message }, 404);
     if (error instanceof TriggerAlreadyExistsError || error instanceof BindingVersionAlreadyExistsError || error instanceof IdempotencyConflictError) return context.json({ error: error.message }, 409);
+    if (error instanceof WorkspaceResolutionError) return context.json({ error: WORKSPACE_RESOLUTION_MESSAGE }, 422);
     return context.json({ error: "Internal server error" }, 500);
   }
 }

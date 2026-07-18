@@ -1,4 +1,5 @@
 import { CustomObjectsApi, KubeConfig, Watch } from "@kubernetes/client-node";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../src/config.js";
 import { claimNameForExecutionAttempt } from "../../src/sandbox/naming.js";
@@ -12,8 +13,9 @@ const input: ExecutionAttemptProvisioningInput = {
   attempt: 2,
   profileVersion: { id: "profile-version-7", profileId: "profile-1", version: 7 },
   sandboxTemplate: "opencode-template",
-  warmPool: "opencode-pool",
+  warmPool: "none",
   opencodeConfig: { agent: { coder: {} }, default_agent: "coder" },
+  workspace: { type: "empty" },
   timeoutAt: new Date("2026-07-17T12:00:00.000Z"),
   ttlSecondsAfterFinished: 60,
 };
@@ -62,6 +64,7 @@ function ownership(): Record<string, string> {
     "agentbay.dev/profile-version-id": input.profileVersion.id,
     "agentbay.dev/profile-id": input.profileVersion.profileId,
     "agentbay.dev/profile-version": String(input.profileVersion.version),
+    "agentbay.dev/workspace-digest": createHash("sha256").update('{"type":"empty"}').digest("hex"),
   };
 }
 
@@ -72,7 +75,7 @@ function claim(ready = false): SandboxClaim {
     metadata: { name: claimNameForExecutionAttempt(input.executionId, input.attempt), annotations: ownership() },
     spec: {
       sandboxTemplateRef: { name: input.sandboxTemplate },
-      env: [{ name: "OPENCODE_SERVER_PASSWORD", value: "existing-password" }],
+      env: [{ containerName: "opencode", name: "OPENCODE_SERVER_PASSWORD", value: "existing-password" }],
     },
     status: ready
       ? { conditions: [{ type: "Ready", status: "True", lastTransitionTime: "", message: "" }], sandbox: { name: "sandbox-1" } }
@@ -130,9 +133,60 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
       },
     });
     expect(created.spec?.env).toEqual(expect.arrayContaining([
-      { name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
-      { name: "OPENCODE_CONFIG_CONTENT", value: JSON.stringify(input.opencodeConfig) },
+      { containerName: "opencode", name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
+      { containerName: "opencode", name: "OPENCODE_CONFIG_CONTENT", value: JSON.stringify(input.opencodeConfig) },
+      { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_TYPE", value: "empty" },
     ]));
+    expect(created.spec?.env?.filter(({ name }) => name.startsWith("AGENTBAY_WORKSPACE_GIT_"))).toEqual([]);
+  });
+
+  it("adds git workspace materializer variables and omits credentials", async () => {
+    const gitInput: ExecutionAttemptProvisioningInput = {
+      ...input,
+      workspace: {
+        repository: { url: "https://example.com/repo.git" },
+        revision: { commit: "0123456789abcdef", type: "commit" },
+        type: "git",
+      },
+    };
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockRejectedValue({ code: 404 });
+    const create = vi.spyOn(CustomObjectsApi.prototype, "createNamespacedCustomObject").mockImplementation(async ({ body }) => ({
+      ...(body as SandboxClaim),
+      status: {
+        conditions: [{ type: "Ready", status: "True", lastTransitionTime: "", message: "" }],
+        sandbox: { podIPs: ["10.0.0.8"] },
+      },
+    }));
+
+    await provisioner().provision(gitInput, new AbortController().signal);
+
+    const created = create.mock.calls[0]![0].body as SandboxClaim;
+    const workspace = gitInput.workspace;
+    if (workspace.type !== "git") throw new Error("Expected git workspace");
+    expect(created.spec?.env).toEqual(expect.arrayContaining([
+      { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_TYPE", value: "git" },
+      { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_GIT_URL", value: workspace.repository.url },
+      { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_GIT_COMMIT", value: workspace.revision.commit },
+    ]));
+    expect(created.spec).not.toHaveProperty("containers");
+    expect(JSON.stringify(created)).not.toContain("credential");
+  });
+
+  it("rejects a git workspace with a warm pool before creating a claim", async () => {
+    const get = vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject");
+    const create = vi.spyOn(CustomObjectsApi.prototype, "createNamespacedCustomObject");
+
+    await expect(provisioner().provision({
+      ...input,
+      warmPool: "opencode-pool",
+      workspace: {
+        repository: { url: "https://example.com/repo.git" },
+        revision: { commit: "0123456789abcdef", type: "commit" },
+        type: "git",
+      },
+    }, new AbortController().signal)).rejects.toThrow(/warm pool/);
+    expect(get).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
   });
 
   it("observes an existing claim only when all ownership annotations match", async () => {
@@ -155,6 +209,16 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject");
 
     await expect(provisioner().provision(input, new AbortController().signal)).rejects.toThrow(/not owned/);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("rejects an existing claim when its workspace digest differs", async () => {
+    const existing = claim(true);
+    existing.metadata.annotations!["agentbay.dev/workspace-digest"] = "different";
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(existing);
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject");
+
+    await expect(provisioner().provision(input, new AbortController().signal)).rejects.toThrow(/workspace-digest/);
     expect(remove).not.toHaveBeenCalled();
   });
 

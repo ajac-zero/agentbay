@@ -1,6 +1,7 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { EXECUTION_STATES } from "./states.js";
 import type { AgentProfileDefinition, ExecutionInput, JsonObject } from "./types.js";
+import { resolvedWorkspaceSchema } from "../workspace/schema.js";
 
 export const simpleIdSchema = z
   .string()
@@ -60,7 +61,7 @@ export const executionInputSchema = z
     context: boundedJsonObjectSchema.optional(),
   })
   .strict() as z.ZodType<ExecutionInput>;
-export const workspaceSchema = z.object({ type: z.literal("empty") }).strict();
+export const workspaceSchema = resolvedWorkspaceSchema;
 
 export const publishProfileVersionBodySchema = z
   .object({

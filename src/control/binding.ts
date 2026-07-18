@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { jsonPointerSchema, type JsonPrimitive } from "../json.js";
+import { bindingWorkspaceSchema } from "../workspace/schema.js";
 
 const MAX_PROMPT_BYTES = 16 * 1024;
 const simpleIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/);
@@ -23,7 +24,7 @@ export const bindingDefinitionSchema = z
         includeEvent: z.enum(["none", "data", "envelope"]),
       })
       .strict(),
-    workspace: z.object({ type: z.literal("empty") }).strict(),
+    workspace: bindingWorkspaceSchema,
   })
   .strict();
 

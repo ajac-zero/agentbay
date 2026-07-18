@@ -74,6 +74,33 @@ describe("rendering and event-level planning", () => {
     expect(execution).toEqual(planExecution(binding, command));
   });
 
+  it("resolves Git selectors against event.data while planning", () => {
+    const gitBinding: PublishedBindingVersion = {
+      ...binding,
+      definition: {
+        ...binding.definition,
+        workspace: {
+          type: "git",
+          repository: { url: { path: "/repository/url" } },
+          revision: { commit: { path: "/revision" } },
+        },
+      },
+    };
+    const gitCommand = {
+      ...command,
+      event: {
+        ...event,
+        data: { state: "open", repository: { url: "https://git.example.test/acme/repo" }, revision: "A".repeat(40) },
+      },
+    };
+
+    expect(planExecution(gitBinding, gitCommand)?.workspace).toEqual({
+      type: "git",
+      repository: { url: "https://git.example.test/acme/repo" },
+      revision: { type: "commit", commit: "a".repeat(40) },
+    });
+  });
+
   it("returns the event summary, all matching executions, and replay status", () => {
     const nonmatch = { ...binding, id: "other-version", bindingId: "other", definition: { ...binding.definition, eventTypes: ["other"] } };
     const result = planAdmission(command, [binding, nonmatch], true);

@@ -41,6 +41,20 @@ spec:
     spec:
       automountServiceAccountToken: false
       restartPolicy: Never
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: workspace-materializer
+          image: ghcr.io/example/opencode-sandbox:latest
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/opt/agentbay/git-workspace-materializer.mjs"]
+          env:
+            - name: AGENTBAY_WORKSPACE_DIRECTORY
+              value: /workspace
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
       containers:
         - name: opencode
           image: ghcr.io/example/opencode-sandbox:latest
