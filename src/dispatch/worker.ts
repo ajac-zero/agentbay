@@ -156,6 +156,7 @@ export class DispatcherWorker {
         timeoutAt: execution.timeoutAt,
         ttlSecondsAfterFinished: profile.resolvedPolicy.retention?.sandboxSecondsAfterFinished ?? 0,
         warmPool: profile.resolvedPolicy.sandbox.warmPool,
+        workspace: execution.workspace,
       }, heartbeat.signal);
       heartbeat.assertOwned();
 

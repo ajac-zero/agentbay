@@ -26,6 +26,9 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
 
   async provision(input: ExecutionAttemptProvisioningInput, signal: AbortSignal): Promise<ExecutionAttemptEndpoint> {
     throwIfAborted(signal);
+    if (input.workspace.type === "git" && input.warmPool && input.warmPool !== "none") {
+      throw new Error("Git workspaces cannot be provisioned from a warm pool");
+    }
     const claimName = claimNameForExecutionAttempt(input.executionId, input.attempt);
     const ownership = ownershipAnnotations(input);
     const log = logger.child({ executionId: input.executionId, attempt: input.attempt, claimName });
@@ -98,11 +101,18 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
     ownership: Record<string, string>,
   ): SandboxClaim {
     const env: SandboxEnvVar[] = [
-      { name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
-      { name: "OPENCODE_SERVER_PASSWORD", value: password },
+      { containerName: "opencode", name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
+      { containerName: "opencode", name: "OPENCODE_SERVER_PASSWORD", value: password },
+      { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_TYPE", value: input.workspace.type },
     ];
     const configContent = buildOpencodeConfigContent(input.opencodeConfig);
-    if (configContent) env.push({ name: "OPENCODE_CONFIG_CONTENT", value: configContent });
+    if (configContent) env.push({ containerName: "opencode", name: "OPENCODE_CONFIG_CONTENT", value: configContent });
+    if (input.workspace.type === "git") {
+      env.push(
+        { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_GIT_URL", value: input.workspace.repository.url },
+        { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_GIT_COMMIT", value: input.workspace.revision.commit },
+      );
+    }
 
     return {
       apiVersion: `extensions.agents.x-k8s.io/${this.config.sandboxClaimApiVersion}`,
@@ -313,7 +323,19 @@ function ownershipAnnotations(input: ExecutionAttemptProvisioningInput): Record<
     "agentbay.dev/profile-version-id": input.profileVersion.id,
     "agentbay.dev/profile-id": input.profileVersion.profileId,
     "agentbay.dev/profile-version": String(input.profileVersion.version),
+    "agentbay.dev/workspace-digest": createHash("sha256").update(canonicalJson(input.workspace)).digest("hex"),
   };
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 function assertOwnership(claim: SandboxClaim, expected: Record<string, string>): void {

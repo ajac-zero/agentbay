@@ -3,6 +3,9 @@ import { bindingDefinitionSchema } from "./binding.js";
 import { executionSchema, idempotencyKeySchema, profileRefSchema, simpleIdSchema, versionSchema } from "../execution/api-schema.js";
 
 const errorSchema = z.object({ error: z.string().min(1) }).strict();
+const workspaceResolutionErrorSchema = z.object({
+  error: z.literal("Workspace could not be resolved from event data"),
+}).strict().openapi("WorkspaceResolutionError");
 const triggerConfigSchema = z.object({ schemaVersion: z.literal(1) }).strict();
 const triggerSchema = z.object({
   id: simpleIdSchema,
@@ -93,7 +96,13 @@ export const disableBindingVersionRoute = createRoute({
 export const admitEventRoute = createRoute({
   method: "post", path: "/triggers/{triggerID}/events", tags: ["events"], summary: "Admit a structured CloudEvent", security: [{ bearerAuth: [] }],
   request: { params: triggerParams, headers: z.object({ "Idempotency-Key": idempotencyKeySchema }), body: { required: true, content: { "application/cloudevents+json": { schema: cloudEventRequestSchema }, "application/json": { schema: cloudEventRequestSchema } } } },
-  responses: { 202: jsonResponse("Event admitted.", admissionResultSchema), ...securedErrors, 404: jsonResponse("Enabled trigger not found.", errorSchema), 409: jsonResponse("Idempotency key conflict.", errorSchema) },
+  responses: {
+    202: jsonResponse("Event admitted.", admissionResultSchema),
+    ...securedErrors,
+    404: jsonResponse("Enabled trigger not found.", errorSchema),
+    409: jsonResponse("Idempotency key conflict.", errorSchema),
+    422: jsonResponse("A matching binding's workspace could not be resolved. The event and all of its executions are rejected atomically.", workspaceResolutionErrorSchema),
+  },
 });
 
 function jsonResponse(description: string, schema: z.ZodType) {

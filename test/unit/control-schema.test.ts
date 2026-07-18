@@ -65,9 +65,25 @@ describe("binding schemas", () => {
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: [{ path: "/bad~2path", op: "exists", value: true }] } }).success).toBe(false);
   });
 
-  it("preserves prompt byte and workspace bounds", () => {
+  it("preserves prompt byte bounds and accepts exact Git selectors", () => {
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, prompt: { literal: "é".repeat(8_192), includeEvent: "none" } }).success).toBe(true);
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, prompt: { literal: `é${"x".repeat(16_383)}`, includeEvent: "none" } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({
+      ...validDefinition,
+      workspace: {
+        type: "git",
+        repository: { url: { path: "/repository/clone_url" } },
+        revision: { commit: { path: "/after" } },
+      },
+    }).success).toBe(true);
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, workspace: { type: "git" } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({
+      ...validDefinition,
+      workspace: {
+        type: "git",
+        repository: { url: { path: "/bad~2pointer" } },
+        revision: { commit: { path: "/after" } },
+      },
+    }).success).toBe(false);
   });
 });

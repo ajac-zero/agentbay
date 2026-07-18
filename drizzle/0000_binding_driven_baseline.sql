@@ -105,7 +105,7 @@ CREATE TABLE "agentbay_executions" (
 	"tenant_id" text NOT NULL,
 	"timeout_at" timestamp with time zone NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"workspace" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"workspace" jsonb DEFAULT '{"type":"empty"}'::jsonb NOT NULL,
 	CONSTRAINT "agentbay_executions_id_tenant_unique" UNIQUE("id","tenant_id"),
 	CONSTRAINT "agentbay_executions_state_valid" CHECK ("agentbay_executions"."state" IN ('RECEIVED', 'PLANNED', 'QUEUED', 'PROVISIONING', 'RUNNING', 'SUCCEEDED', 'DELIVERING', 'COMPLETED', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'CANCEL_REQUESTED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED'))
 );

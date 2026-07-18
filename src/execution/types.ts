@@ -1,4 +1,5 @@
 import type { ExecutionState } from "./states.js";
+import type { ResolvedWorkspace } from "../workspace/types.js";
 
 export type JsonPrimitive = boolean | null | number | string;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -47,10 +48,6 @@ export type ExecutionInput = {
   context?: Record<string, JsonValue>;
 };
 
-export type EmptyWorkspace = {
-  type: "empty";
-};
-
 export type Execution = {
   binding: BindingRef;
   id: string;
@@ -58,7 +55,7 @@ export type Execution = {
   state: ExecutionState;
   profile: AgentProfileRef;
   input: ExecutionInput;
-  workspace: EmptyWorkspace;
+  workspace: ResolvedWorkspace;
   eventId: string;
   createdAt: string;
   updatedAt: string;

@@ -132,8 +132,8 @@ GET  /v1/executions/:id
 Publish an exact profile version, create a `cloudevents.http` trigger, and
 publish an enabled binding version before admitting an event. The binding names
 one to 32 exact event types, applies up to 16 conjunctive filters to event
-`data`, selects an exact profile version, supplies a literal prompt, and uses an
-empty workspace. Filters use RFC 6901 JSON Pointers with `eq`, `in`, or `exists`;
+`data`, selects an exact profile version, supplies a literal prompt, and resolves
+an empty or Git workspace. Filters use RFC 6901 JSON Pointers with `eq`, `in`, or `exists`;
 comparison values are JSON primitives. The prompt's `includeEvent` is `none`,
 `data`, or `envelope`. It does not perform template expansion.
 
@@ -155,6 +155,25 @@ For example, a V1 binding-version request body is:
   }
 }
 ```
+
+A Git workspace selects a repository URL and commit from normalized event
+`data`, then persists their resolved values on the execution:
+
+```json
+"workspace": {
+  "type": "git",
+  "repository": { "url": { "path": "/repository/cloneUrl" } },
+  "revision": { "commit": { "path": "/headSha" } }
+}
+```
+
+V1 accepts public HTTPS repositories resolving exclusively to public IPv4 addresses and full 40-character SHA-1 commit object
+IDs only. It rejects credentials, mutable refs, local/private hosts, and mixed
+public/private DNS results. The sandbox materializer pins a validated DNS answer,
+fetches the exact commit without a shell, checks it out detached, and verifies
+`HEAD` before OpenCode starts. Git workspaces require a cold sandbox (`warmPool:
+none`); private repository credentials, submodules, Git LFS, and warm-pool Git
+materialization are not implemented yet.
 
 Callers, connectors, the CLI, and tests all invoke agents through generic
 normalized CloudEvent trigger ingress. `POST /v1/triggers/:triggerID/events`

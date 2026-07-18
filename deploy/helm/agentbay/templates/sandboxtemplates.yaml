@@ -4,6 +4,16 @@
 {{- $t := . -}}
 {{- $ns := default (include "agentbay.claimsNamespace" $root) $t.namespace -}}
 {{- $gatewayEnabled := $root.Values.aiGatewayAuthz.enabled -}}
+{{- $materializer := default dict $t.workspaceMaterializer -}}
+{{- $materializerImage := default dict $materializer.image -}}
+{{- $podSpecOverrides := default dict $t.podSpecOverrides -}}
+{{- $securityContext := mergeOverwrite (dict "fsGroup" 1000 "fsGroupChangePolicy" "OnRootMismatch") (deepCopy (default dict $podSpecOverrides.securityContext)) -}}
+{{- $unmanagedPodSpecOverrides := omit $podSpecOverrides "automountServiceAccountToken" "containers" "initContainers" "restartPolicy" "securityContext" "volumes" -}}
+{{- if $gatewayEnabled -}}
+{{- $unmanagedPodSpecOverrides = omit $unmanagedPodSpecOverrides "hostAliases" "serviceAccountName" -}}
+{{- end -}}
+{{- $containerOverrides := default dict $t.containerOverrides -}}
+{{- $containerSecurityContext := mergeOverwrite (dict "allowPrivilegeEscalation" false "capabilities" (dict "drop" (list "ALL")) "runAsGroup" 1000 "runAsNonRoot" true "runAsUser" 1000 "seccompProfile" (dict "type" "RuntimeDefault")) (deepCopy (default dict $containerOverrides.securityContext)) -}}
 ---
 apiVersion: extensions.agents.x-k8s.io/{{ $root.Values.claims.apiVersion }}
 kind: SandboxTemplate
@@ -89,10 +99,38 @@ spec:
       {{- end }}
       {{- end }}
       restartPolicy: Never
+      securityContext:
+        {{- toYaml $securityContext | nindent 8 }}
+      initContainers:
+        - name: workspace-materializer
+          image: "{{ default $t.image.repository $materializerImage.repository }}:{{ default $t.image.tag $materializerImage.tag }}"
+          imagePullPolicy: {{ default (default "IfNotPresent" $t.image.pullPolicy) $materializerImage.pullPolicy }}
+          command: ["node", "/opt/agentbay/git-workspace-materializer.mjs"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: AGENTBAY_WORKSPACE_DIRECTORY
+              value: /workspace
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+        {{- with $podSpecOverrides.initContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       containers:
         - name: opencode
           image: "{{ $t.image.repository }}:{{ $t.image.tag }}"
           imagePullPolicy: {{ $t.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            {{- toYaml $containerSecurityContext | nindent 12 }}
           {{- with $t.command }}
           command:
             {{- toYaml . | nindent 12 }}
@@ -119,7 +157,7 @@ spec:
           {{- with $t.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with $t.containerOverrides }}
+          {{- with omit $containerOverrides "securityContext" }}
           {{- toYaml . | nindent 10 }}
           {{- end }}
         {{- if $gatewayEnabled }}
@@ -184,7 +222,7 @@ spec:
         {{- with $t.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with $t.podSpecOverrides }}
+      {{- with $unmanagedPodSpecOverrides }}
       {{- toYaml . | nindent 6 }}
       {{- end }}
 {{- end }}

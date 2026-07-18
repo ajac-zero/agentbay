@@ -140,8 +140,10 @@ describe("SandboxClaimExecutionAttemptProvisioner e2e", () => {
     });
     expect(createdClaim.spec?.env).toEqual(
       expect.arrayContaining([
-        { name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
+        { containerName: "opencode", name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
+        { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_TYPE", value: "empty" },
         {
+          containerName: "opencode",
           name: "OPENCODE_CONFIG_CONTENT",
           value: JSON.stringify({
             permission: { "*": "allow" },
@@ -234,6 +236,7 @@ function testProvisioningInput(executionId: string, attempt: number): ExecutionA
     },
     sandboxTemplate: "opencode-template",
     warmPool: "none",
+    workspace: { type: "empty" },
     opencodeConfig: {
       permission: { "*": "allow" },
       agent: {
@@ -482,6 +485,14 @@ function sandboxTemplate(): ManifestObject {
         spec: {
           automountServiceAccountToken: false,
           restartPolicy: "Never",
+          initContainers: [
+            {
+              name: "workspace-materializer",
+              image: "node:25-alpine",
+              imagePullPolicy: "IfNotPresent",
+              command: ["node", "-e", "if (process.env.AGENTBAY_WORKSPACE_TYPE !== 'empty') process.exit(1)"],
+            },
+          ],
           containers: [
             {
               name: "opencode",

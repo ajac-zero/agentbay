@@ -7,7 +7,11 @@ import { TriggerAlreadyExistsError, TriggerNotFoundError } from "../../src/contr
 import { bindingExecutionIdempotencyKey } from "../../src/execution/idempotency.js";
 import { IdempotencyConflictError } from "../../src/execution/types.js";
 import { hashCanonicalJson, type JsonValue } from "../../src/json.js";
-import { createPostgresRuntimeStore, type PostgresRuntimeStore } from "../../src/runtime/postgres.js";
+import {
+  createPostgresRuntimeStore,
+  PersistedExecutionCorruptionError,
+  type PostgresRuntimeStore,
+} from "../../src/runtime/postgres.js";
 
 const { Pool } = pg;
 
@@ -121,6 +125,22 @@ describe("execution persistence", () => {
     const command = freshAdmissionCommand();
     await expect(store.admitEvent({ ...command, admissionHash: "caller-controlled" })).rejects.toBeInstanceOf(IdempotencyConflictError);
     expect((await pool.query("select count(*)::int as count from agentbay_events where id = $1", [command.internalEventId])).rows[0]).toEqual({ count: 0 });
+  });
+
+  it.each([
+    {},
+    { type: "empty", unexpected: true },
+    {
+      type: "git",
+      repository: { url: "https://Git.Example.test/repo" },
+      revision: { type: "commit", commit: "A".repeat(40) },
+    },
+  ])("rejects malformed persisted execution workspaces on API reads", async (workspace) => {
+    const admitted = await store.admitEvent(freshAdmissionCommand());
+    const execution = admitted.executions[0]!;
+    await pool.query("update agentbay_executions set workspace = $1 where id = $2", [workspace, execution.id]);
+
+    await expect(store.getExecution("default", execution.id)).rejects.toBeInstanceOf(PersistedExecutionCorruptionError);
   });
 
   it("serializes concurrent replay by either event identity", async () => {

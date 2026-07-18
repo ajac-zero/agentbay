@@ -3,7 +3,11 @@ import pg from "pg";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { hashCanonicalJson } from "../../src/json.js";
-import { createPostgresRuntimeStore, type PostgresRuntimeStore } from "../../src/runtime/postgres.js";
+import {
+  createPostgresRuntimeStore,
+  PersistedExecutionCorruptionError,
+  type PostgresRuntimeStore,
+} from "../../src/runtime/postgres.js";
 
 const { Pool } = pg;
 
@@ -53,6 +57,20 @@ describe("dispatcher persistence", () => {
       disabledAt: null, enabled: true, id: "dispatcher-v1", profile: { id: profileId, version: 1 },
       tenantId: "default", triggerId: "dispatcher-test", version: 1,
     });
+    await store.publishBindingVersion({
+      bindingId: "dispatcher-git", createdAt,
+      definition: {
+        eventTypes: ["dev.agentbay.git-execution.submitted"], filter: { all: [] },
+        prompt: { includeEvent: "none", literal: "Run" }, schemaVersion: 1,
+        workspace: {
+          type: "git",
+          repository: { url: { path: "/repository" } },
+          revision: { commit: { path: "/commit" } },
+        },
+      },
+      disabledAt: null, enabled: true, id: "dispatcher-git-v1", profile: { id: profileId, version: 1 },
+      tenantId: "default", triggerId: "dispatcher-test", version: 1,
+    });
   });
 
   afterAll(async () => {
@@ -86,6 +104,67 @@ describe("dispatcher persistence", () => {
       sequence: 4,
       to_state: "PROVISIONING",
     });
+  });
+
+  it("persists, replays, and claims a canonical git workspace unchanged", async () => {
+    const createdAt = new Date().toISOString();
+    const sequence = ++eventSequence;
+    const event = {
+      data: {
+        commit: "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+        repository: "https://Git.Example.test/acme/repo name",
+      },
+      datacontenttype: "application/json",
+      id: `git-event-${sequence}`,
+      source: "/test/dispatcher",
+      specversion: "1.0" as const,
+      time: createdAt,
+      type: "dev.agentbay.git-execution.submitted",
+    };
+    const command = {
+      admittedAt: createdAt,
+      admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId: "dispatcher-test", event }),
+      event,
+      internalEventId: randomUUID(),
+      sourceDeduplicationKey: `git-delivery-${sequence}`,
+      tenantId: "default",
+      triggerId: "dispatcher-test",
+    };
+    const expectedWorkspace = {
+      type: "git" as const,
+      repository: { url: "https://git.example.test/acme/repo%20name" },
+      revision: { type: "commit" as const, commit: "abcdef0123456789abcdef0123456789abcdef01" },
+    };
+
+    const admitted = await store.admitEvent(command);
+    const replayed = await store.admitEvent(command);
+    const execution = admitted.executions[0]!;
+    expect(execution.workspace).toEqual(expectedWorkspace);
+    expect(replayed).toEqual({ ...admitted, replayed: true });
+    expect((await pool.query("select workspace from agentbay_executions where id = $1", [execution.id])).rows[0]).toEqual({
+      workspace: expectedWorkspace,
+    });
+    expect((await store.getExecution("default", execution.id))?.workspace).toEqual(expectedWorkspace);
+
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-git", leaseDurationMs: 60_000 });
+    expect(claimed).toMatchObject({ executionId: execution.id, workspace: expectedWorkspace });
+  });
+
+  it("rejects malformed persisted workspaces when claiming without committing the claim", async () => {
+    const executionId = await queueExecution();
+    await pool.query("update agentbay_executions set workspace = '{}'::jsonb where id = $1", [executionId]);
+
+    await expect(store.claimNextQueuedExecution({ leaseOwner: "dispatcher-corrupt", leaseDurationMs: 60_000 }))
+      .rejects.toBeInstanceOf(PersistedExecutionCorruptionError);
+    expect((await pool.query("select state from agentbay_executions where id = $1", [executionId])).rows[0]).toEqual({ state: "QUEUED" });
+    expect((await pool.query(
+      "select count(*)::int as count from agentbay_execution_attempts where execution_id = $1",
+      [executionId],
+    )).rows[0]).toEqual({ count: 0 });
+
+    await pool.query("update agentbay_executions set workspace = $1 where id = $2", [{ type: "empty" }, executionId]);
+    expect(await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-cleanup", leaseDurationMs: 60_000 }))
+      .toMatchObject({ executionId });
   });
 
   it("allows only one dispatcher to claim one queued execution", async () => {

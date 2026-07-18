@@ -26,6 +26,29 @@ describe("OpenAPI docs", () => {
       "/v1/bindings/{bindingID}/versions/{version}/disable",
       "/v1/triggers/{triggerID}/events",
     ]);
+    expect(body).toMatchObject({
+      paths: {
+        "/v1/triggers/{triggerID}/events": {
+          post: {
+            responses: {
+              "422": {
+                description: "A matching binding's workspace could not be resolved. The event and all of its executions are rejected atomically.",
+                content: { "application/json": { schema: { $ref: "#/components/schemas/WorkspaceResolutionError" } } },
+              },
+            },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          WorkspaceResolutionError: {
+            type: "object",
+            properties: { error: { type: "string" } },
+            required: ["error"],
+          },
+        },
+      },
+    });
   });
 
   it("serves Swagger UI", async () => {

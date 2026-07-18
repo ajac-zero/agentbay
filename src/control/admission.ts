@@ -3,6 +3,7 @@ import type { NormalizedCloudEvent } from "../execution/events.js";
 import { bindingExecutionIdempotencyKey } from "../execution/idempotency.js";
 import { canonicalJson, resolveJsonPointer, type JsonPrimitive, type JsonValue } from "../json.js";
 import type { BindingDefinition, FilterClause, PublishedBindingVersion } from "./binding.js";
+import { resolveWorkspace } from "../workspace/resolver.js";
 
 export const UNTRUSTED_EVENT_BEGIN = "--- BEGIN UNTRUSTED EVENT ---";
 export const UNTRUSTED_EVENT_END = "--- END UNTRUSTED EVENT ---";
@@ -76,7 +77,7 @@ export function planExecution(binding: PublishedBindingVersion, command: Admissi
     state: "QUEUED",
     profile: binding.profile,
     input: renderBindingInput(binding, command.event),
-    workspace: binding.definition.workspace,
+    workspace: resolveWorkspace(binding.definition.workspace, command.event.data),
     eventId: command.internalEventId,
     createdAt: command.admittedAt,
     updatedAt: command.admittedAt,
