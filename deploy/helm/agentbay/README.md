@@ -41,12 +41,12 @@ GET  /docs
 GET  /openapi.json
 POST /v1/agent-profiles/:profileID/versions
 GET  /v1/agent-profiles/:profileID/versions/:version
-POST /v1/executions
+POST /v1/triggers/:triggerID/events
 GET  /v1/executions/:id
 ```
 
 All `/v1/*` routes require `Authorization: Bearer <token>`.
-`POST /v1/executions` also requires an `Idempotency-Key` header. The generated
+`POST /v1/triggers/:triggerID/events` also requires an `Idempotency-Key` header. The generated
 OpenAPI document is the source of truth for request and response schemas.
 
 ## PostgreSQL and migrations

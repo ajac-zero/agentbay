@@ -1,10 +1,13 @@
 import { readBoolean, readNumber } from "../util.js";
 import type { PostgresRuntimeStoreOptions } from "./postgres.js";
 import type { ExecutionStore } from "../execution/store.js";
+import type { EventAdmissionStore } from "../execution/store.js";
 import type { OutboxStore } from "../outbox/types.js";
 import type { DispatcherExecutionStore } from "../dispatch/store.js";
+import type { TriggerStore } from "../control/trigger.js";
+import type { BindingStore } from "../control/binding.js";
 
-export type RuntimeStore = ExecutionStore & OutboxStore & DispatcherExecutionStore & {
+export type RuntimeStore = ExecutionStore & TriggerStore & BindingStore & EventAdmissionStore & OutboxStore & DispatcherExecutionStore & {
   close: () => Promise<void>;
 };
 

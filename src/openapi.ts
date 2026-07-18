@@ -6,7 +6,7 @@ export function createOpenApiApp(): OpenAPIHono {
   app.openAPIRegistry.registerComponent("securitySchemes", "bearerAuth", {
     type: "http",
     scheme: "bearer",
-    description: "Bearer authentication for the agentbay execution API.",
+    description: "Bearer authentication for the agentbay API.",
   });
   return app;
 }
@@ -29,7 +29,7 @@ export function mountOpenApiDocs(app: OpenAPIHono): void {
     info: {
       title: "agentbay API",
       version: "1.0.0",
-      description: "HTTP API for agentbay health checks and asynchronous executions.",
+      description: "HTTP API for agentbay control, event admission, and asynchronous executions.",
     },
   });
   app.get("/docs", swaggerUI({ url: "/openapi.json", displayRequestDuration: true }));

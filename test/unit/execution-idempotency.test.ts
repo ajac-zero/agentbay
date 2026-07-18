@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bindingExecutionIdempotencyKey,
   createIdempotencyKey,
   deliveryIdempotencyKey,
   eventIdempotencyKey,
@@ -42,6 +43,13 @@ describe("domain idempotency keys", () => {
     expect(executionIdempotencyKey("binding-1", "github://acme/repo", "event-1")).toMatch(/^execution:/);
     expect(transitionIdempotencyKey("execution-1", "command-1")).toMatch(/^transition:/);
     expect(deliveryIdempotencyKey("execution-1", "destination-1")).toMatch(/^delivery:/);
+  });
+
+  it("identifies binding admission by exact binding version and internal event", () => {
+    const key = bindingExecutionIdempotencyKey("binding-version-internal-3", "internal-event-1");
+    expect(key).toMatch(/^binding-execution:[a-f0-9]{64}$/);
+    expect(key).not.toBe(bindingExecutionIdempotencyKey("binding-version-internal-4", "internal-event-1"));
+    expect(key).not.toBe(bindingExecutionIdempotencyKey("binding-version-internal-3", "internal-event-2"));
   });
 
   it("changes when any identity component changes", () => {

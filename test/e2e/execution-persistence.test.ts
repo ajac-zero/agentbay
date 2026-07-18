@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { BindingVersionAlreadyExistsError } from "../../src/control/binding.js";
+import { TriggerAlreadyExistsError, TriggerNotFoundError } from "../../src/control/trigger.js";
+import { bindingExecutionIdempotencyKey } from "../../src/execution/idempotency.js";
 import { IdempotencyConflictError } from "../../src/execution/types.js";
+import { hashCanonicalJson, type JsonValue } from "../../src/json.js";
 import { createPostgresRuntimeStore, type PostgresRuntimeStore } from "../../src/runtime/postgres.js";
 
 const { Pool } = pg;
@@ -30,7 +34,7 @@ describe("execution persistence", () => {
     await postgres?.stop();
   });
 
-  it("atomically publishes a profile and queues an idempotent execution", async () => {
+  it("atomically admits an event and queues matching executions", async () => {
     const createdAt = new Date().toISOString();
     const profile = await store.publishProfileVersion({
       createdAt,
@@ -48,21 +52,34 @@ describe("execution persistence", () => {
     });
     expect(await store.getProfileVersion("default", "coder", 1)).toEqual(profile);
 
-    const command = executionCommand(createdAt);
-    const first = await store.createExecution(command);
-    const replay = await store.createExecution({
-      ...command,
-      id: randomUUID(),
-      event: { ...command.event, id: randomUUID() },
+    await setupTriggerAndBinding(store, profile.id, createdAt);
+    expect(await store.getTrigger("default", "webhook")).toMatchObject({ enabled: true, id: "webhook" });
+    expect(await store.getBindingVersion("default", "review", 1)).toMatchObject({
+      enabled: true, profile: { id: "coder", version: 1 }, triggerId: "webhook",
     });
+    expect(await store.listBindingCandidates("default", "webhook", "dev.agentbay.review.requested")).toHaveLength(1);
+    const command = admissionCommand(createdAt);
+    const first = await store.admitEvent(command);
+    const replay = await store.admitEvent(command);
+    const execution = first.executions[0]!;
 
-    expect(first).toMatchObject({ replayed: false, execution: { state: "QUEUED", profile: { id: "coder", version: 1 } } });
-    expect(replay).toEqual({ execution: first.execution, replayed: true });
-    expect(await store.getExecution("default", first.execution.id)).toEqual(first.execution);
+    expect(first).toMatchObject({ replayed: false, executions: [{ state: "QUEUED", binding: { id: "review", version: 1 }, profile: { id: "coder", version: 1 } }] });
+    expect(replay).toEqual({ ...first, replayed: true });
+    expect(await store.getExecution("default", execution.id)).toEqual(execution);
+
+    const executionIdentity = (await pool.query(
+      "select id, idempotency_key from agentbay_executions where id = $1",
+      [execution.id],
+    )).rows[0];
+    expect(executionIdentity).toEqual({
+      id: execution.id,
+      idempotency_key: bindingExecutionIdempotencyKey("review-v1", command.internalEventId),
+    });
+    expect(execution.id).not.toBe(executionIdentity.idempotency_key);
 
     const transitions = await pool.query(
       "select sequence, from_state, to_state from agentbay_execution_transitions where execution_id = $1 order by sequence",
-      [first.execution.id],
+      [execution.id],
     );
     expect(transitions.rows).toEqual([
       { sequence: 1, from_state: null, to_state: "RECEIVED" },
@@ -72,13 +89,13 @@ describe("execution persistence", () => {
 
     const outbox = await pool.query(
       "select topic, aggregate_type, aggregate_id, payload, publish_attempts, published_at from agentbay_outbox where aggregate_id = $1",
-      [first.execution.id],
+      [execution.id],
     );
     expect(outbox.rows).toEqual([
       {
-        aggregate_id: first.execution.id,
+        aggregate_id: execution.id,
         aggregate_type: "execution",
-        payload: { schemaVersion: 1, tenantId: "default", executionId: first.execution.id },
+        payload: { schemaVersion: 1, tenantId: "default", executionId: execution.id },
         publish_attempts: 0,
         published_at: null,
         topic: "execution.requested",
@@ -87,21 +104,127 @@ describe("execution persistence", () => {
     expect((await pool.query("select count(*)::int as count from agentbay_events")).rows[0]).toEqual({ count: 1 });
   });
 
-  it("rejects conflicting idempotency without persisting another event", async () => {
-    const existing = (await pool.query("select id, idempotency_key from agentbay_executions limit 1")).rows[0] as {
-      id: string;
-      idempotency_key: string;
-    };
+  it("rejects conflicting event replay without rematching", async () => {
     const before = (await pool.query("select count(*)::int as count from agentbay_events")).rows[0].count as number;
+    const original = admissionCommand(new Date().toISOString());
+    const conflicting = withAdmissionHash({
+      ...original,
+      event: { ...original.event, data: { action: "different" } },
+    });
 
-    await expect(store.createExecution({
-      ...executionCommand(new Date().toISOString()),
-      idempotencyKey: existing.idempotency_key,
-      requestHash: "different-request",
-    })).rejects.toBeInstanceOf(IdempotencyConflictError);
+    await expect(store.admitEvent(conflicting)).rejects.toBeInstanceOf(IdempotencyConflictError);
 
     expect((await pool.query("select count(*)::int as count from agentbay_events")).rows[0]).toEqual({ count: before });
-    expect((await pool.query("select count(*)::int as count from agentbay_executions where id = $1", [existing.id])).rows[0]).toEqual({ count: 1 });
+  });
+
+  it("rejects an invalid admission hash before starting persistence", async () => {
+    const command = freshAdmissionCommand();
+    await expect(store.admitEvent({ ...command, admissionHash: "caller-controlled" })).rejects.toBeInstanceOf(IdempotencyConflictError);
+    expect((await pool.query("select count(*)::int as count from agentbay_events where id = $1", [command.internalEventId])).rows[0]).toEqual({ count: 0 });
+  });
+
+  it("serializes concurrent replay by either event identity", async () => {
+    const createdAt = new Date().toISOString();
+    const base = admissionCommand(createdAt);
+    const command = withAdmissionHash({
+      ...base,
+      internalEventId: randomUUID(),
+      sourceDeduplicationKey: randomUUID(),
+      event: { ...base.event, id: randomUUID() },
+    });
+    const [first, second] = await Promise.all([store.admitEvent(command), store.admitEvent(command)]);
+
+    expect([first.replayed, second.replayed].sort()).toEqual([false, true]);
+    expect(first.executions).toEqual(second.executions);
+    expect((await pool.query("select count(*)::int as count from agentbay_events where id = $1", [command.internalEventId])).rows[0]).toEqual({ count: 1 });
+  });
+
+  it("returns canonical publication lifecycle and rejects duplicate versions", async () => {
+    const createdAt = new Date().toISOString();
+    const requested = {
+      ...(await store.getBindingVersion("default", "review", 1))!,
+      bindingId: `canonical-${randomUUID()}`,
+      createdAt,
+      disabledAt: createdAt,
+      enabled: false,
+      id: randomUUID(),
+      version: 2,
+    };
+    const published = await store.publishBindingVersion(requested);
+
+    expect(published).toEqual({ ...requested, disabledAt: null, enabled: true });
+    await expect(store.publishBindingVersion({ ...requested, id: randomUUID() })).rejects.toBeInstanceOf(BindingVersionAlreadyExistsError);
+  });
+
+  it("disables triggers and bindings idempotently while preserving the first timestamp", async () => {
+    const createdAt = new Date().toISOString();
+    const triggerId = `lifecycle-${randomUUID()}`;
+    const bindingId = `lifecycle-${randomUUID()}`;
+    const sourceBinding = (await store.getBindingVersion("default", "review", 1))!;
+    await store.createTrigger({
+      config: { schemaVersion: 1 }, createdAt, disabledAt: null, enabled: true,
+      id: triggerId, tenantId: "default", type: "cloudevents.http",
+    });
+    await store.publishBindingVersion({
+      ...sourceBinding, bindingId, createdAt, disabledAt: null, enabled: true, id: randomUUID(), triggerId, version: 1,
+    });
+    const firstDisabledAt = new Date(Date.now() - 2_000).toISOString();
+    const laterDisabledAt = new Date().toISOString();
+    const firstTrigger = await store.disableTrigger("default", triggerId, firstDisabledAt);
+    const secondTrigger = await store.disableTrigger("default", triggerId, laterDisabledAt);
+    const firstBinding = await store.disableBindingVersion("default", bindingId, 1, firstDisabledAt);
+    const secondBinding = await store.disableBindingVersion("default", bindingId, 1, laterDisabledAt);
+
+    expect(secondTrigger).toEqual(firstTrigger);
+    expect(secondTrigger).toMatchObject({ disabledAt: firstDisabledAt, enabled: false });
+    expect(secondBinding).toEqual(firstBinding);
+    expect(secondBinding).toMatchObject({ disabledAt: firstDisabledAt, enabled: false });
+  });
+
+  it("uses typed trigger-not-found errors for publication and admission", async () => {
+    const binding = (await store.getBindingVersion("default", "review", 1))!;
+    await expect(store.publishBindingVersion({
+      ...binding,
+      bindingId: `missing-${randomUUID()}`,
+      id: randomUUID(),
+      triggerId: "missing-trigger",
+      version: 1,
+    })).rejects.toBeInstanceOf(TriggerNotFoundError);
+
+    const command = withAdmissionHash({ ...freshAdmissionCommand(), triggerId: "missing-trigger" });
+    await expect(store.admitEvent(command)).rejects.toBeInstanceOf(TriggerNotFoundError);
+  });
+
+  it("targets trigger identity conflicts", async () => {
+    const trigger = (await store.getTrigger("default", "webhook"))!;
+    await expect(store.createTrigger({ ...trigger, tenantId: `tenant-${randomUUID()}` })).rejects.toBeInstanceOf(TriggerAlreadyExistsError);
+  });
+
+  it("serializes publication and admission on the tenant trigger lock", async () => {
+    const client = await pool.connect();
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", ["control-trigger:default:webhook"]);
+    const command = freshAdmissionCommand();
+    const binding = (await store.getBindingVersion("default", "review", 1))!;
+    const admission = store.admitEvent(command);
+    const publication = store.publishBindingVersion({
+      ...binding,
+      bindingId: `locked-${randomUUID()}`,
+      createdAt: new Date().toISOString(),
+      disabledAt: null,
+      enabled: true,
+      id: randomUUID(),
+      version: 1,
+    });
+    const blocked = Symbol("blocked");
+
+    expect(await Promise.race([admission.then(() => false), delay(100).then(() => blocked)])).toBe(blocked);
+    expect(await Promise.race([publication.then(() => false), delay(100).then(() => blocked)])).toBe(blocked);
+    await client.query("commit");
+    client.release();
+
+    await expect(admission).resolves.toMatchObject({ replayed: false });
+    await expect(publication).resolves.toMatchObject({ enabled: true });
   });
 
   it("claims available outbox messages without overlapping concurrent publishers", async () => {
@@ -166,25 +289,59 @@ describe("execution persistence", () => {
   });
 });
 
-function executionCommand(createdAt: string) {
-  const id = randomUUID();
-  return {
-    createdAt,
+function admissionCommand(createdAt: string) {
+  return withAdmissionHash({
+    admittedAt: createdAt,
     event: {
-      data: { profile: { id: "coder", version: 1 }, input: { text: "Review this" }, workspace: { type: "empty" } } as const,
-      id: randomUUID(),
-      source: "/v1/executions",
+      data: { action: "review" } as const,
+      datacontenttype: "application/json",
+      id: "event-1",
+      source: "/test/events",
+      specversion: "1.0" as const,
       time: createdAt,
-      type: "dev.agentbay.execution.submitted",
+      type: "dev.agentbay.review.requested",
     },
-    id,
-    idempotencyKey: "execution-persistence-test",
-    input: { text: "Review this" },
-    profile: { id: "coder", version: 1 },
-    requestHash: "same-request",
+    internalEventId: "internal-event-1",
+    sourceDeduplicationKey: "delivery-1",
     tenantId: "default",
-    workspace: { type: "empty" as const },
-  };
+    triggerId: "webhook",
+  });
+}
+
+function freshAdmissionCommand() {
+  const createdAt = new Date().toISOString();
+  const command = admissionCommand(createdAt);
+  return withAdmissionHash({
+    ...command,
+    event: { ...command.event, id: randomUUID() },
+    internalEventId: randomUUID(),
+    sourceDeduplicationKey: randomUUID(),
+  });
+}
+
+function withAdmissionHash<T extends { triggerId: string; event: JsonValue }>(command: T): T & { admissionHash: string } {
+  return { ...command, admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId: command.triggerId, event: command.event }) };
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function setupTriggerAndBinding(store: PostgresRuntimeStore, profileVersionId: string, createdAt: string): Promise<void> {
+  await store.createTrigger({
+    config: { schemaVersion: 1 }, createdAt, disabledAt: null, enabled: true,
+    id: "webhook", tenantId: "default", type: "cloudevents.http",
+  });
+  await store.publishBindingVersion({
+    bindingId: "review", createdAt,
+    definition: {
+      eventTypes: ["dev.agentbay.review.requested"], filter: { all: [{ op: "eq", path: "/action", value: "review" }] },
+      prompt: { includeEvent: "data", literal: "Review this" }, schemaVersion: 1, workspace: { type: "empty" },
+    },
+    disabledAt: null, enabled: true, id: "review-v1", profile: { id: "coder", version: 1 },
+    tenantId: "default", triggerId: "webhook", version: 1,
+  });
+  expect(profileVersionId).toBeTruthy();
 }
 
 async function insertOutbox(pool: pg.Pool, options: { available?: boolean } = {}): Promise<string> {

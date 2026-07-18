@@ -69,14 +69,6 @@ export const publishProfileVersionBodySchema = z
   })
   .strict();
 
-export const createExecutionBodySchema = z
-  .object({
-    profile: profileRefSchema,
-    input: executionInputSchema,
-    workspace: workspaceSchema,
-  })
-  .strict();
-
 export const idempotencyKeySchema = z
   .string()
   .min(1)
@@ -97,6 +89,7 @@ export const profileVersionSchema = z
 export const executionSchema = z
   .object({
     id: z.string(),
+    binding: profileRefSchema,
     tenantId: z.string(),
     state: z.enum(EXECUTION_STATES),
     profile: profileRefSchema,
@@ -113,7 +106,7 @@ export const executionSchema = z
 export const executionErrorSchema = z.object({ error: z.string().min(1) }).strict().openapi("ExecutionError");
 
 const profileParams = z.object({ profileID: simpleIdSchema, version: versionSchema });
-const executionParams = z.object({ id: simpleIdSchema });
+const executionParams = z.object({ id: z.string().min(1).max(255).regex(/^[^/]+$/) });
 const securedErrors = {
   400: jsonResponse("Invalid request.", executionErrorSchema),
   401: jsonResponse("Missing or invalid bearer token.", executionErrorSchema),
@@ -149,27 +142,6 @@ export const getProfileVersionRoute = createRoute({
     200: jsonResponse("Profile version found.", profileVersionSchema),
     ...securedErrors,
     404: jsonResponse("Profile version not found.", executionErrorSchema),
-  },
-});
-
-export const createExecutionRoute = createRoute({
-  method: "post",
-  path: "/executions",
-  tags: ["executions"],
-  summary: "Submit an execution",
-  security: [{ bearerAuth: [] }],
-  request: {
-    headers: z.object({ "Idempotency-Key": idempotencyKeySchema }),
-    body: { required: true, content: { "application/json": { schema: createExecutionBodySchema } } },
-  },
-  responses: {
-    202: {
-      ...jsonResponse("Execution accepted.", executionSchema),
-      headers: { Location: { description: "Execution resource URL", schema: { type: "string" } } },
-    },
-    ...securedErrors,
-    404: jsonResponse("Profile version not found.", executionErrorSchema),
-    409: jsonResponse("Idempotency key conflict.", executionErrorSchema),
   },
 });
 

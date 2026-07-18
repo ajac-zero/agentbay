@@ -1,7 +1,7 @@
 import { serve } from "@hono/node-server";
 import { loadConfig } from "./config.js";
 import { logger } from "./logger.js";
-import { mountExecutionApi } from "./execution/api.js";
+import { mountControlApi } from "./control/api.js";
 import { runExecutionMaintenanceLoop } from "./dispatch/maintenance.js";
 import { DispatcherWorker, OpenCodeExecutionAttemptRunner } from "./dispatch/worker.js";
 import { createOpenApiApp, mountHealthRoute, mountOpenApiDocs } from "./openapi.js";
@@ -49,7 +49,7 @@ const dispatcher = dispatcherTask.catch((error: unknown) => {
 const app = createOpenApiApp();
 
 mountHealthRoute(app);
-mountExecutionApi(app, config, runtimeStore);
+mountControlApi(app, config, runtimeStore);
 mountOpenApiDocs(app);
 
 const server = serve({ fetch: (request) => app.fetch(request), port: config.port }, (info) => {

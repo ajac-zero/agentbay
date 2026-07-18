@@ -1,0 +1,101 @@
+import { createRoute, z } from "@hono/zod-openapi";
+import { bindingDefinitionSchema } from "./binding.js";
+import { executionSchema, idempotencyKeySchema, profileRefSchema, simpleIdSchema, versionSchema } from "../execution/api-schema.js";
+
+const errorSchema = z.object({ error: z.string().min(1) }).strict();
+const triggerConfigSchema = z.object({ schemaVersion: z.literal(1) }).strict();
+const triggerSchema = z.object({
+  id: simpleIdSchema,
+  tenantId: simpleIdSchema,
+  type: z.literal("cloudevents.http"),
+  config: triggerConfigSchema,
+  enabled: z.boolean(),
+  createdAt: z.string().datetime(),
+  disabledAt: z.string().datetime().nullable(),
+}).strict().openapi("Trigger");
+const bindingVersionSchema = z.object({
+  id: simpleIdSchema,
+  bindingId: simpleIdSchema,
+  version: z.number().int().positive(),
+  tenantId: simpleIdSchema,
+  triggerId: simpleIdSchema,
+  profile: profileRefSchema,
+  definition: bindingDefinitionSchema,
+  enabled: z.boolean(),
+  createdAt: z.string().datetime(),
+  disabledAt: z.string().datetime().nullable(),
+}).strict().openapi("BindingVersion");
+const admittedEventSchema = z.object({
+  id: z.string(),
+  tenantId: z.string(),
+  triggerId: z.string(),
+  source: z.string(),
+  eventId: z.string(),
+  type: z.string(),
+  sourceDeduplicationKey: z.string(),
+  admissionHash: z.string(),
+  admittedAt: z.string().datetime(),
+}).strict();
+// Runtime normalization applies the byte, JSON data, URI-reference, and extension bounds.
+// Keep this boundary schema non-transforming and permissive enough not to reject valid extensions first.
+const cloudEventRequestSchema = z.object({
+  specversion: z.literal("1.0"),
+  id: z.string().min(1),
+  source: z.string().min(1),
+  type: z.string().min(1),
+  subject: z.string().optional(),
+  time: z.string().optional(),
+  datacontenttype: z.literal("application/json").optional(),
+  dataschema: z.string().optional(),
+  data: z.unknown(),
+}).catchall(z.union([z.string(), z.boolean(), z.number()]));
+const admissionResultSchema = z.object({
+  event: admittedEventSchema,
+  executions: z.array(executionSchema),
+  replayed: z.boolean(),
+}).strict().openapi("AdmissionResult");
+
+const securedErrors = {
+  400: jsonResponse("Invalid request.", errorSchema),
+  401: jsonResponse("Missing or invalid bearer token.", errorSchema),
+  413: jsonResponse("Request body too large.", errorSchema),
+  500: jsonResponse("Internal server error.", errorSchema),
+};
+const triggerParams = z.object({ triggerID: simpleIdSchema });
+const bindingParams = z.object({ bindingID: simpleIdSchema, version: versionSchema });
+
+export const createTriggerRoute = createRoute({
+  method: "post", path: "/triggers", tags: ["control"], summary: "Create a trigger", security: [{ bearerAuth: [] }],
+  request: { body: { required: true, content: { "application/json": { schema: z.object({ id: simpleIdSchema, type: z.literal("cloudevents.http"), config: triggerConfigSchema }).strict() } } } },
+  responses: { 201: jsonResponse("Trigger created.", triggerSchema), ...securedErrors, 409: jsonResponse("Trigger already exists.", errorSchema) },
+});
+export const getTriggerRoute = createRoute({
+  method: "get", path: "/triggers/{triggerID}", tags: ["control"], summary: "Read a trigger", security: [{ bearerAuth: [] }],
+  request: { params: triggerParams }, responses: { 200: jsonResponse("Trigger found.", triggerSchema), ...securedErrors, 404: jsonResponse("Trigger not found.", errorSchema) },
+});
+export const disableTriggerRoute = createRoute({
+  method: "post", path: "/triggers/{triggerID}/disable", tags: ["control"], summary: "Disable a trigger", security: [{ bearerAuth: [] }],
+  request: { params: triggerParams }, responses: { 200: jsonResponse("Trigger disabled.", triggerSchema), ...securedErrors, 404: jsonResponse("Trigger not found.", errorSchema) },
+});
+export const publishBindingVersionRoute = createRoute({
+  method: "post", path: "/bindings/{bindingID}/versions", tags: ["control"], summary: "Publish an immutable binding version", security: [{ bearerAuth: [] }],
+  request: { params: z.object({ bindingID: simpleIdSchema }), body: { required: true, content: { "application/json": { schema: z.object({ version: z.number().int().positive(), triggerId: simpleIdSchema, profile: profileRefSchema, definition: bindingDefinitionSchema }).strict() } } } },
+  responses: { 201: jsonResponse("Binding version published.", bindingVersionSchema), ...securedErrors, 404: jsonResponse("Dependency not found.", errorSchema), 409: jsonResponse("Binding version already exists.", errorSchema) },
+});
+export const getBindingVersionRoute = createRoute({
+  method: "get", path: "/bindings/{bindingID}/versions/{version}", tags: ["control"], summary: "Read an exact binding version", security: [{ bearerAuth: [] }],
+  request: { params: bindingParams }, responses: { 200: jsonResponse("Binding version found.", bindingVersionSchema), ...securedErrors, 404: jsonResponse("Binding version not found.", errorSchema) },
+});
+export const disableBindingVersionRoute = createRoute({
+  method: "post", path: "/bindings/{bindingID}/versions/{version}/disable", tags: ["control"], summary: "Disable a binding version", security: [{ bearerAuth: [] }],
+  request: { params: bindingParams }, responses: { 200: jsonResponse("Binding version disabled.", bindingVersionSchema), ...securedErrors, 404: jsonResponse("Binding version not found.", errorSchema) },
+});
+export const admitEventRoute = createRoute({
+  method: "post", path: "/triggers/{triggerID}/events", tags: ["events"], summary: "Admit a structured CloudEvent", security: [{ bearerAuth: [] }],
+  request: { params: triggerParams, headers: z.object({ "Idempotency-Key": idempotencyKeySchema }), body: { required: true, content: { "application/cloudevents+json": { schema: cloudEventRequestSchema }, "application/json": { schema: cloudEventRequestSchema } } } },
+  responses: { 202: jsonResponse("Event admitted.", admissionResultSchema), ...securedErrors, 404: jsonResponse("Enabled trigger not found.", errorSchema), 409: jsonResponse("Idempotency key conflict.", errorSchema) },
+});
+
+function jsonResponse(description: string, schema: z.ZodType) {
+  return { description, content: { "application/json": { schema } } };
+}
