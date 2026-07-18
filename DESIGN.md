@@ -141,7 +141,7 @@ definition:
     warmPool: none
   connections:
     - id: github-production
-      sidecar: github-api
+      sidecar: github-mcp
   permissions:
     onRequest: fail
   timeoutSeconds: 1800
@@ -675,6 +675,32 @@ The platform must tolerate SSE disconnects and worker restarts. Durable executio
 Sandbox templates may include authenticated API, proxy, or MCP sidecars that expose standard, policy-bounded tools to OpenCode over localhost. Profile `connections: [{ id, sidecar }]` entries authorize named connections for those template-owned sidecars; they do not create or mutate containers. Agentbay validates each connection reference and sends the grant only to the named container. The agent-sandbox controller rejects a claim when that container is absent. The selected sidecar remains the enforcement boundary and must parse `AGENTBAY_CONNECTIONS` at startup and fail closed; Agentbay does not introspect or certify arbitrary sidecar implementations. Connection-enabled attempts use cold sandboxes rather than a `SandboxWarmPool` so claim-specific authorization cannot arrive after a sidecar has initialized.
 
 Agentbay injects resolved, non-secret metadata through one canonical `AGENTBAY_CONNECTIONS` envelope per selected sidecar. Its JSON representation is `{"refs":["github-production"],"schemaVersion":1,"tenantId":"default"}`; `refs` contains only that sidecar's sorted connection IDs. The envelope is the complete authorized set for that sidecar and attempt; consumers must not merge it with ambient defaults. Credentials remain outside the envelope. A static compatibility deployment references an operator-managed Kubernetes Secret as a volume mounted only into the selected sidecar. OpenCode and the workspace materializer receive no credential mount, and Agentbay neither reads Secret values nor receives Kubernetes RBAC for Secrets.
+
+The initial concrete connection sidecar is a localhost-only remote MCP server
+for one selected github.com repository. OpenCode connects to
+`http://127.0.0.1:8082/mcp` with MCP OAuth disabled. The sidecar reads a GitHub
+App ID, installation ID, and private key from three mounted Secret files, checks
+the complete `AGENTBAY_CONNECTIONS` grant, and exchanges App credentials for a
+short-lived installation token internally. The token and private key never
+cross the MCP boundary or enter OpenCode. Its current one-tool slice exposes
+only `issue_comment`; the App requires only repository **Issues: read/write** and
+is installed on the selected repository. The sidecar fixes its upstream to
+github.com, validates every owner/repository argument against its configured
+repository, and has no workflow mutation policy or Workflows permission.
+It implements MCP 2025-11-25 for compatibility with the OpenCode 1.14.50
+runtime pinned by `opencode-sandbox.Dockerfile`.
+
+Issue-comment marker replay is best-effort at-least-once recovery, not a
+uniqueness guarantee. Callers derive stable idempotency keys for logical
+comments, and workflows tolerate duplicates. Overlapping sidecars or attempts
+can both fail to observe a marker before posting and therefore create duplicate
+comments even when they use the same stable key. The sidecar scans the newest
+2,000 comments; a marker outside that best-effort window is treated as absent
+and may result in a duplicate rather than failing closed. The marker HMAC key is
+derived from the GitHub App private key. Rotating the private key therefore
+makes markers written with the old key unauthenticatable and may produce
+duplicates. Operators preserve the old key and sidecars through the replay
+window or accept duplicate comments during rotation.
 
 These sidecars provide ordinary tool access to external systems; they are not a privileged execution-creation channel. If an agent uses a standard tool to create an issue, publish a message, enqueue work, or perform another external effect, the corresponding source connector may later normalize that effect into an event. An enabled binding can then create a delegated execution. No Agentbay-specific delegation MCP is required.
 

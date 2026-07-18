@@ -204,16 +204,73 @@ sandboxTemplates:
           allowDNS: false
           allowInternetExceptPrivate: false
       sidecars:
-        - name: github-api
-          image: example/github-api-sidecar:v1
+        - name: github-mcp
+          image: example/github-mcp-sidecar@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          env:
+            - name: AGENTBAY_GITHUB_TENANT
+              value: default
+            - name: AGENTBAY_GITHUB_CONNECTION
+              value: github-production
+            - name: AGENTBAY_GITHUB_REPOSITORY_OWNER
+              value: example-org
+            - name: AGENTBAY_GITHUB_REPOSITORY_NAME
+              value: example-repository
+            - name: AGENTBAY_GITHUB_REPOSITORY_ID
+              value: "123456789"
+            - name: AGENTBAY_GITHUB_APP_ID_FILE
+              value: /var/run/agentbay/github-app/app-id
+            - name: AGENTBAY_GITHUB_INSTALLATION_ID_FILE
+              value: /var/run/agentbay/github-app/installation-id
+            - name: AGENTBAY_GITHUB_PRIVATE_KEY_FILE
+              value: /var/run/agentbay/github-app/private-key.pem
+          startupProbe:
+            exec:
+              command:
+                - /nodejs/bin/node
+                - -e
+                - fetch('http://127.0.0.1:8082/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+            timeoutSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command:
+                - /nodejs/bin/node
+                - -e
+                - fetch('http://127.0.0.1:8082/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+            timeoutSeconds: 2
+          livenessProbe:
+            exec:
+              command:
+                - /nodejs/bin/node
+                - -e
+                - fetch('http://127.0.0.1:8082/livez',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+            timeoutSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
           volumeMounts:
-            - name: github-api-credentials
-              mountPath: /var/run/agentbay/credentials
+            - name: github-app-credentials
+              mountPath: /var/run/agentbay/github-app
               readOnly: true
       extraVolumes:
-        - name: github-api-credentials
+        - name: github-app-credentials
           secret:
-            secretName: placeholder-operator-managed-connection-secret
+            secretName: example-github-app-credentials
+            defaultMode: 0440
+            items:
+              - key: app-id
+                path: app-id
+              - key: installation-id
+                path: installation-id
+              - key: private-key.pem
+                path: private-key.pem
 EOF
 
 helm template demo "$chart_dir" \
@@ -221,10 +278,31 @@ helm template demo "$chart_dir" \
   --show-only templates/sandboxtemplates.yaml \
   -f "$work_dir/connection-sidecar-values.yaml" > "$work_dir/connection-sidecar.yaml"
 
-test "$(grep -c 'name: github-api-credentials' "$work_dir/connection-sidecar.yaml")" -eq 2
-test "$(grep -c 'mountPath: /var/run/agentbay/credentials' "$work_dir/connection-sidecar.yaml")" -eq 1
-test "$(grep -c 'secretName: placeholder-operator-managed-connection-secret' "$work_dir/connection-sidecar.yaml")" -eq 1
-test "$(grep -c 'name: github-api' "$work_dir/connection-sidecar.yaml")" -eq 1
+test "$(grep -c 'name: github-app-credentials' "$work_dir/connection-sidecar.yaml")" -eq 2
+test "$(grep -c 'mountPath: /var/run/agentbay/github-app' "$work_dir/connection-sidecar.yaml")" -eq 1
+test "$(grep -c 'secretName: example-github-app-credentials' "$work_dir/connection-sidecar.yaml")" -eq 1
+test "$(grep -c 'name: github-mcp' "$work_dir/connection-sidecar.yaml")" -eq 1
+grep -q 'example/github-mcp-sidecar@sha256:1111111111111111111111111111111111111111111111111111111111111111' "$work_dir/connection-sidecar.yaml"
+test "$(grep -c 'name: AGENTBAY_GITHUB_.*_FILE' "$work_dir/connection-sidecar.yaml")" -eq 3
+test "$(grep -c 'path: app-id\|path: installation-id\|path: private-key.pem' "$work_dir/connection-sidecar.yaml")" -eq 3
+grep -q 'name: AGENTBAY_GITHUB_TENANT' "$work_dir/connection-sidecar.yaml"
+grep -q 'name: AGENTBAY_GITHUB_CONNECTION' "$work_dir/connection-sidecar.yaml"
+grep -q 'name: AGENTBAY_GITHUB_REPOSITORY_OWNER' "$work_dir/connection-sidecar.yaml"
+grep -q 'name: AGENTBAY_GITHUB_REPOSITORY_NAME' "$work_dir/connection-sidecar.yaml"
+grep -q 'name: AGENTBAY_GITHUB_REPOSITORY_ID' "$work_dir/connection-sidecar.yaml"
+grep -q 'value: example-org' "$work_dir/connection-sidecar.yaml"
+grep -q 'value: example-repository' "$work_dir/connection-sidecar.yaml"
+grep -q 'value: "123456789"' "$work_dir/connection-sidecar.yaml"
+test "$(grep -c 'exec:' "$work_dir/connection-sidecar.yaml")" -eq 3
+test "$(grep -c -- '- /nodejs/bin/node' "$work_dir/connection-sidecar.yaml")" -eq 3
+test "$(grep -c 'http://127.0.0.1:8082/readyz' "$work_dir/connection-sidecar.yaml")" -eq 2
+test "$(grep -c 'http://127.0.0.1:8082/livez' "$work_dir/connection-sidecar.yaml")" -eq 1
+if grep -q 'httpGet:' "$work_dir/connection-sidecar.yaml"; then
+  echo "Loopback sidecar probe unexpectedly rendered as httpGet" >&2
+  exit 1
+fi
+grep -q 'readOnlyRootFilesystem: true' "$work_dir/connection-sidecar.yaml"
+grep -q 'runAsUser: 65532' "$work_dir/connection-sidecar.yaml"
 
 for template in rbac.yaml reconciler-rbac.yaml; do
   helm template demo "$chart_dir" \
