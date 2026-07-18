@@ -657,6 +657,100 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     }
   }
 
+  async claimExpiredRunningExecution(command: {
+    leaseOwner: string;
+    leaseDurationMs: number;
+  }): Promise<ClaimedExecution | undefined> {
+    assertPositiveInteger(command.leaseDurationMs, "Execution lease duration");
+
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const claimed = await client.query<ClaimedExecutionRow>({
+        text: `
+          WITH claim_clock AS MATERIALIZED (
+            SELECT clock_timestamp() AS claimed_at
+          ), candidate_execution AS MATERIALIZED (
+            SELECT execution.id, execution.tenant_id
+            FROM agentbay_executions AS execution, claim_clock
+            WHERE execution.state = 'RUNNING'
+              AND execution.timeout_at > claim_clock.claimed_at
+              AND EXISTS (
+                SELECT 1
+                FROM agentbay_execution_attempts AS attempt
+                WHERE attempt.execution_id = execution.id
+                  AND attempt.tenant_id = execution.tenant_id
+                  AND attempt.state = 'RUNNING'
+                  AND attempt.lease_expires_at <= claim_clock.claimed_at
+                  AND attempt.workload_name IS NOT NULL
+                  AND attempt.opencode_session_id IS NOT NULL
+              )
+            ORDER BY execution.updated_at, execution.created_at, execution.id
+            FOR UPDATE OF execution SKIP LOCKED
+            LIMIT 1
+          ), candidate_attempt AS MATERIALIZED (
+            SELECT attempt.execution_id, attempt.tenant_id, attempt.attempt
+            FROM agentbay_execution_attempts AS attempt
+            JOIN candidate_execution AS execution
+              ON execution.id = attempt.execution_id AND execution.tenant_id = attempt.tenant_id,
+                 claim_clock
+            WHERE attempt.state = 'RUNNING'
+              AND attempt.lease_expires_at <= claim_clock.claimed_at
+              AND attempt.workload_name IS NOT NULL
+              AND attempt.opencode_session_id IS NOT NULL
+            ORDER BY attempt.attempt DESC
+            FOR UPDATE OF attempt
+            LIMIT 1
+          ), updated_attempt AS (
+            UPDATE agentbay_execution_attempts AS attempt
+            SET fencing_token = $1, lease_owner = $2,
+                lease_expires_at = claim_clock.claimed_at + ($3::double precision * interval '1 millisecond')
+            FROM candidate_attempt AS candidate, claim_clock
+            WHERE attempt.execution_id = candidate.execution_id
+              AND attempt.tenant_id = candidate.tenant_id
+              AND attempt.attempt = candidate.attempt
+              AND attempt.state = 'RUNNING'
+              AND attempt.lease_expires_at <= claim_clock.claimed_at
+              AND attempt.workload_name IS NOT NULL
+              AND attempt.opencode_session_id IS NOT NULL
+            RETURNING attempt.*
+          ), updated_execution AS (
+            UPDATE agentbay_executions AS execution
+            SET updated_at = claim_clock.claimed_at
+            FROM candidate_execution AS candidate, updated_attempt AS attempt, claim_clock
+            WHERE execution.id = candidate.id AND execution.tenant_id = candidate.tenant_id
+              AND attempt.execution_id = execution.id AND attempt.tenant_id = execution.tenant_id
+              AND execution.state = 'RUNNING'
+              AND execution.timeout_at > claim_clock.claimed_at
+            RETURNING execution.*
+          )
+          SELECT execution.id, execution.tenant_id, execution.state AS execution_state,
+                 execution.event_id, execution.input, execution.workspace, execution.resolved_policy,
+                 execution.created_at, execution.timeout_at,
+                 profile.id AS profile_version_id, profile.profile_id, profile.version,
+                 profile.definition AS definition,
+                 attempt.attempt, attempt.fencing_token, attempt.state AS attempt_state,
+                 attempt.lease_owner, attempt.lease_expires_at,
+                 attempt.workload_name, attempt.opencode_session_id
+          FROM updated_execution AS execution
+          JOIN updated_attempt AS attempt
+            ON attempt.execution_id = execution.id AND attempt.tenant_id = execution.tenant_id
+          JOIN agentbay_agent_profile_versions AS profile
+            ON profile.id = execution.profile_version_id AND profile.tenant_id = execution.tenant_id
+        `,
+        values: [randomUUID(), command.leaseOwner, command.leaseDurationMs],
+      });
+      const result = claimed.rows[0] ? claimedExecutionFromRow(claimed.rows[0]) : undefined;
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async renewExecutionLease(command: {
     executionId: string;
     tenantId: string;
@@ -964,6 +1058,12 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
                 AND attempt.tenant_id = execution.tenant_id
                 AND attempt.state IN ('LEASED', 'RUNNING')
                 AND attempt.lease_expires_at <= recovery_clock.recovered_at
+                AND NOT (
+                  attempt.state = 'RUNNING'
+                  AND attempt.workload_name IS NOT NULL
+                  AND attempt.opencode_session_id IS NOT NULL
+                  AND execution.timeout_at > recovery_clock.recovered_at
+                )
             )
           ORDER BY execution.updated_at, execution.created_at, execution.id
           FOR UPDATE OF execution SKIP LOCKED
@@ -976,6 +1076,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       for (const execution of candidates.rows) {
         // Renewal locks only the attempt. Rechecking after this lock lets an in-flight
         // renewal win without introducing the execution/attempt lock-order cycle.
+        // Fully checkpointed running attempts remain adoptable rather than being failed here.
         const attemptResult = await client.query<ExpiredAttemptRow>({
           text: `
             WITH recovery_clock AS MATERIALIZED (SELECT clock_timestamp() AS recovered_at)
@@ -984,11 +1085,17 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
             WHERE attempt.execution_id = $1 AND attempt.tenant_id = $2
               AND attempt.state IN ('LEASED', 'RUNNING')
               AND attempt.lease_expires_at <= recovery_clock.recovered_at
+              AND NOT (
+                attempt.state = 'RUNNING'
+                AND attempt.workload_name IS NOT NULL
+                AND attempt.opencode_session_id IS NOT NULL
+                AND $3 > recovery_clock.recovered_at
+              )
             ORDER BY attempt.attempt DESC
             FOR UPDATE OF attempt
             LIMIT 1
           `,
-          values: [execution.id, execution.tenant_id],
+          values: [execution.id, execution.tenant_id, execution.timeout_at],
         });
         const attempt = attemptResult.rows[0];
         if (!attempt) continue;
@@ -1372,12 +1479,14 @@ type ClaimedExecutionRow = {
   input: unknown;
   lease_expires_at: Date;
   lease_owner: string;
+  opencode_session_id?: string | null;
   profile_id: string;
   profile_version_id: string;
   resolved_policy: Record<string, unknown>;
   tenant_id: string;
   timeout_at: Date;
   version: number;
+  workload_name?: string | null;
   workspace: Record<string, unknown>;
 };
 
@@ -1447,6 +1556,9 @@ function claimedExecutionFromRow(row: ClaimedExecutionRow): ClaimedExecution {
     throw new Error(`Claimed execution ${row.id} has an invalid persisted state`);
   }
   return {
+    ...(row.workload_name && row.opencode_session_id
+      ? { adoption: { workloadName: row.workload_name, opencodeSessionId: row.opencode_session_id } }
+      : {}),
     createdAt: row.created_at,
     eventId: row.event_id,
     executionId: row.id,

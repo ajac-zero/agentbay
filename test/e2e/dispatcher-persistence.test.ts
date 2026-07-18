@@ -279,6 +279,99 @@ describe("dispatcher persistence", () => {
     ]);
   });
 
+  it("takes over an expired checkpointed running attempt without changing its identity or history", async () => {
+    const executionId = await queueExecution();
+    const original = await startRunningExecution(executionId, "dispatcher-stale", {
+      workloadName: "execution-adoptable",
+      opencodeSessionId: "session-adoptable",
+    });
+    await pool.query(
+      "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      [executionId],
+    );
+    const before = await executionSnapshot(executionId);
+
+    expect(await store.recoverExpiredExecutionLeases({ limit: 10, maxAttempts: 3, retryDelayMs: 0 })).toEqual([]);
+    const adopted = await store.claimExpiredRunningExecution({ leaseOwner: "dispatcher-adopter", leaseDurationMs: 60_000 });
+
+    expect(adopted).toMatchObject({
+      adoption: { workloadName: "execution-adoptable", opencodeSessionId: "session-adoptable" },
+      executionId,
+      lease: { attempt: original.lease.attempt, leaseOwner: "dispatcher-adopter" },
+      profileVersion: { profileId, version: 1 },
+    });
+    expect(adopted?.lease.fencingToken).not.toBe(original.lease.fencingToken);
+    const persisted = await executionSnapshot(executionId);
+    expect(persisted.execution.state).toBe("RUNNING");
+    expect(persisted.attempts).toEqual([expect.objectContaining({
+      attempt: original.lease.attempt,
+      fencing_token: adopted?.lease.fencingToken,
+      lease_owner: "dispatcher-adopter",
+      opencode_session_id: "session-adoptable",
+      state: "RUNNING",
+      workload_name: "execution-adoptable",
+    })]);
+    expect(persisted.attempts[0]?.lease_expires_at.getTime()).toBeGreaterThan(Date.now());
+    expect(persisted.transitions).toEqual(before.transitions);
+  });
+
+  it("does not take over live or non-checkpointed running attempts", async () => {
+    const liveExecutionId = await queueExecution();
+    const live = await startRunningExecution(liveExecutionId, "dispatcher-live", {
+      workloadName: "execution-live",
+      opencodeSessionId: "session-live",
+    });
+    expect(await store.renewExecutionLease({
+      executionId: liveExecutionId,
+      tenantId: "default",
+      attempt: live.lease.attempt,
+      fencingToken: live.lease.fencingToken,
+      leaseOwner: live.lease.leaseOwner,
+      leaseDurationMs: 120_000,
+    })).toBe("RENEWED");
+    const incompleteExecutionId = await queueExecution();
+    await startRunningExecution(incompleteExecutionId, "dispatcher-incomplete");
+    await pool.query(
+      "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      [incompleteExecutionId],
+    );
+    const liveBefore = await executionSnapshot(liveExecutionId);
+    const incompleteBefore = await executionSnapshot(incompleteExecutionId);
+
+    expect(await store.claimExpiredRunningExecution({ leaseOwner: "dispatcher-adopter", leaseDurationMs: 60_000 }))
+      .toBeUndefined();
+    expect(await executionSnapshot(liveExecutionId)).toEqual(liveBefore);
+    expect(await executionSnapshot(incompleteExecutionId)).toEqual(incompleteBefore);
+    expect(await store.recoverExpiredExecutionLeases({ limit: 10, maxAttempts: 1, retryDelayMs: 0 }))
+      .toEqual([expect.objectContaining({ executionId: incompleteExecutionId, executionState: "FAILED" })]);
+  });
+
+  it("allows only one dispatcher to take over an expired running attempt", async () => {
+    const executionId = await queueExecution();
+    const original = await startRunningExecution(executionId, "dispatcher-stale", {
+      workloadName: "execution-contended",
+      opencodeSessionId: "session-contended",
+    });
+    await pool.query(
+      "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      [executionId],
+    );
+
+    const [first, second] = await Promise.all([
+      store.claimExpiredRunningExecution({ leaseOwner: "dispatcher-a", leaseDurationMs: 60_000 }),
+      store.claimExpiredRunningExecution({ leaseOwner: "dispatcher-b", leaseDurationMs: 60_000 }),
+    ]);
+    const claims = [first, second].filter((claim) => claim?.executionId === executionId);
+
+    expect(claims).toHaveLength(1);
+    expect(claims[0]).toMatchObject({
+      adoption: { workloadName: "execution-contended", opencodeSessionId: "session-contended" },
+      lease: { attempt: original.lease.attempt },
+    });
+    expect(claims[0]?.lease.fencingToken).not.toBe(original.lease.fencingToken);
+    expect((await executionSnapshot(executionId)).attempts).toHaveLength(1);
+  });
+
   it("fences a failed attempt into retry wait using database time", async () => {
     const executionId = await queueExecution();
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-a", leaseDurationMs: 60_000 });
@@ -769,6 +862,30 @@ describe("dispatcher persistence", () => {
     const execution = result.executions[0];
     if (!execution) throw new Error("Expected event to queue an execution");
     return execution.id;
+  }
+
+  async function startRunningExecution(
+    executionId: string,
+    leaseOwner: string,
+    checkpoint?: { workloadName: string; opencodeSessionId: string },
+  ) {
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner, leaseDurationMs: 60_000 });
+    if (!claimed || claimed.executionId !== executionId) throw new Error("Expected execution attempt");
+    await expect(store.transitionLeasedExecution({
+      executionId,
+      tenantId: "default",
+      attempt: claimed.lease.attempt,
+      fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner,
+      expectedExecutionState: "PROVISIONING",
+      expectedAttemptState: "LEASED",
+      targetExecutionState: "RUNNING",
+      targetAttemptState: "RUNNING",
+      actor: leaseOwner,
+      reason: "sandbox ready",
+      ...checkpoint,
+    })).resolves.toEqual({ applied: true, executionState: "RUNNING", attemptState: "RUNNING" });
+    return claimed;
   }
 
   async function executionSnapshot(executionId: string) {
