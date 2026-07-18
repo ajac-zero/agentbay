@@ -224,10 +224,12 @@ template, and injects only the non-secret canonical envelope, for example
 as `AGENTBAY_CONNECTIONS` on that sidecar. Sidecar images, commands, and
 credential volumes are operator-owned template configuration, not profile input.
 
-The following compatibility example references a placeholder Secret that the
-operator must create and manage separately. It intentionally creates no Secret,
-contains no credential value, and mounts the volume only in `github-api`, never
-in OpenCode or the workspace materializer:
+The following example runs the repository's GitHub MCP sidecar. Build
+`github-mcp-sidecar.Dockerfile`, publish it, and replace the illustrative digest
+with the registry digest. The Secret is created and managed separately; this
+values file creates no Secret, contains no credential value, and mounts the
+three projected files only in `github-mcp`, never in OpenCode or the workspace
+materializer:
 
 ```yaml
 sandboxTemplates:
@@ -240,23 +242,143 @@ sandboxTemplates:
       workspace:
         type: emptyDir
       sidecars:
-        - name: github-api
-          image: ghcr.io/your-org/github-api-sidecar:v1.2.3
+        - name: github-mcp
+          image: ghcr.io/your-org/github-mcp-sidecar@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          env:
+            - name: AGENTBAY_GITHUB_TENANT
+              value: default
+            - name: AGENTBAY_GITHUB_CONNECTION
+              value: github-production
+            - name: AGENTBAY_GITHUB_REPOSITORY_OWNER
+              value: example-org
+            - name: AGENTBAY_GITHUB_REPOSITORY_NAME
+              value: example-repository
+            - name: AGENTBAY_GITHUB_REPOSITORY_ID
+              value: "123456789"
+            - name: AGENTBAY_GITHUB_APP_ID_FILE
+              value: /var/run/agentbay/github-app/app-id
+            - name: AGENTBAY_GITHUB_INSTALLATION_ID_FILE
+              value: /var/run/agentbay/github-app/installation-id
+            - name: AGENTBAY_GITHUB_PRIVATE_KEY_FILE
+              value: /var/run/agentbay/github-app/private-key.pem
+          ports:
+            - name: github-mcp
+              containerPort: 8082
+          startupProbe:
+            exec:
+              command:
+                - /nodejs/bin/node
+                - -e
+                - fetch('http://127.0.0.1:8082/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command:
+                - /nodejs/bin/node
+                - -e
+                - fetch('http://127.0.0.1:8082/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - /nodejs/bin/node
+                - -e
+                - fetch('http://127.0.0.1:8082/livez',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
           volumeMounts:
-            - name: github-api-credentials
-              mountPath: /var/run/agentbay/credentials
+            - name: github-app-credentials
+              mountPath: /var/run/agentbay/github-app
               readOnly: true
       extraVolumes:
-        - name: github-api-credentials
+        - name: github-app-credentials
           secret:
-            secretName: placeholder-operator-managed-connection-secret
+            secretName: example-github-app-credentials
+            defaultMode: 0440
+            items:
+              - key: app-id
+                path: app-id
+              - key: installation-id
+                path: installation-id
+              - key: private-key.pem
+                path: private-key.pem
 ```
 
-Use a narrowly scoped identity and restrictive egress because the sidecar is
-trusted with every mounted credential and request sent to it. Rotate the Secret
-and replace cold sandboxes; revoke upstream access before deleting the
-connection and terminating affected sandboxes. A future credential broker can
-issue short-lived credentials in place of this static fallback.
+The corresponding OpenCode profile config uses the Pod loopback address. It
+must be a remote MCP server with OAuth disabled; no GitHub credential or header
+is present in OpenCode:
+
+```json
+{
+  "mcp": {
+    "github": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8082/mcp",
+      "oauth": false,
+      "enabled": true
+    }
+  }
+}
+```
+
+Create the Secret out of band with exactly the App ID, installation ID, and PEM
+private key files expected above. Do not put these values in Helm values:
+
+```bash
+kubectl -n agents create secret generic example-github-app-credentials \
+  --from-file=app-id=./app-id \
+  --from-file=installation-id=./installation-id \
+  --from-file=private-key.pem=./private-key.pem
+```
+
+Register a dedicated GitHub App with repository permission **Issues: Read and
+write**, no organization/account permissions, no Contents or Workflows
+permission, and install it on only `example-org/example-repository`. The sidecar
+accepts the exact `AGENTBAY_CONNECTIONS` grant injected for the profile,
+exchanges its private key for a short-lived installation token, and fixes its
+upstream to `https://api.github.com`. It rejects owner/repository arguments
+outside `AGENTBAY_GITHUB_REPOSITORY_OWNER`,
+`AGENTBAY_GITHUB_REPOSITORY_NAME`, and `AGENTBAY_GITHUB_REPOSITORY_ID`; there is
+no configurable GitHub host or workflow
+policy. The current one-tool slice exposes only the MCP `issue_comment` tool; an
+`issues.opened` binding is one intended use. The installation token and private
+key never enter OpenCode, its environment, prompts, workspace, or tool results.
+The sidecar implements MCP 2025-11-25 and is compatible with the OpenCode
+1.14.50 version pinned by `opencode-sandbox.Dockerfile`.
+
+Marker replay is best-effort at-least-once recovery, not a uniqueness guarantee.
+The caller must derive a stable `idempotency_key` for the logical operation, but
+overlapping sidecars or attempts can both miss the marker and create duplicate
+comments. Workflows must tolerate duplicate comments even when callers use
+stable keys. The sidecar scans only the newest 2,000 comments before posting, so
+a marker older than that best-effort window is treated as absent and may result
+in a duplicate rather than failing closed. The marker HMAC key is derived from
+the GitHub App private key, so private-key rotation makes old markers
+unauthenticatable and may also produce duplicates. Preserve the old private key
+and sidecars through the replay window, or explicitly tolerate duplicates
+during rotation.
+
+Use restrictive egress because the sidecar is trusted with every mounted
+credential and request sent to it. When rotating the Secret, account for the
+marker-key behavior above and replace cold sandboxes; revoke upstream access
+before deleting the connection and terminating affected sandboxes. A future
+credential broker can issue short-lived credentials in place of this static
+fallback.
 
 By default, the materializer uses the template's `image.repository`, `tag`, and
 `pullPolicy`. If it is published as a separate image, override any of those

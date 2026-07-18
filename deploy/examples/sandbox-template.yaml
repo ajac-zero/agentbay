@@ -75,27 +75,88 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
-        # This template-owned sidecar is the only consumer of the placeholder
-        # operator-managed credential Secret. Agent profiles select it by name.
-        - name: github-api
-          image: ghcr.io/example/github-api-sidecar:latest
+        # Build github-mcp-sidecar.Dockerfile, publish it, and replace this
+        # illustrative digest with the immutable digest from your registry.
+        - name: github-mcp
+          image: ghcr.io/example/github-mcp-sidecar@sha256:1111111111111111111111111111111111111111111111111111111111111111
           imagePullPolicy: IfNotPresent
+          env:
+            - name: AGENTBAY_GITHUB_TENANT
+              value: default
+            - name: AGENTBAY_GITHUB_CONNECTION
+              value: github-production
+            - name: AGENTBAY_GITHUB_REPOSITORY_OWNER
+              value: example-org
+            - name: AGENTBAY_GITHUB_REPOSITORY_NAME
+              value: example-repository
+            - name: AGENTBAY_GITHUB_REPOSITORY_ID
+              value: "123456789"
+            - name: AGENTBAY_GITHUB_APP_ID_FILE
+              value: /var/run/agentbay/github-app/app-id
+            - name: AGENTBAY_GITHUB_INSTALLATION_ID_FILE
+              value: /var/run/agentbay/github-app/installation-id
+            - name: AGENTBAY_GITHUB_PRIVATE_KEY_FILE
+              value: /var/run/agentbay/github-app/private-key.pem
+            # The sidecar rejects requests for every other repository and has
+            # no configurable GitHub API host or workflow policy.
+          ports:
+            - name: github-mcp
+              containerPort: 8082
+          startupProbe:
+            exec:
+              command:
+                - /nodejs/bin/node
+                - -e
+                - fetch('http://127.0.0.1:8082/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command:
+                - /nodejs/bin/node
+                - -e
+                - fetch('http://127.0.0.1:8082/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command:
+                - /nodejs/bin/node
+                - -e
+                - fetch('http://127.0.0.1:8082/livez',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop:
                 - ALL
+            readOnlyRootFilesystem: true
             runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
             seccompProfile:
               type: RuntimeDefault
           volumeMounts:
-            - name: github-api-credentials
-              mountPath: /var/run/agentbay/credentials
+            - name: github-app-credentials
+              mountPath: /var/run/agentbay/github-app
               readOnly: true
       volumes:
         - name: workspace
           emptyDir: {}
-        # Create this placeholder Secret out of band. Do not commit its values.
-        - name: github-api-credentials
+        # Create this Secret out of band with the three keys below. This volume
+        # is deliberately absent from opencode and workspace-materializer.
+        - name: github-app-credentials
           secret:
-            secretName: placeholder-operator-managed-connection-secret
+            secretName: example-github-app-credentials
+            defaultMode: 0440
+            items:
+              - key: app-id
+                path: app-id
+              - key: installation-id
+                path: installation-id
+              - key: private-key.pem
+                path: private-key.pem

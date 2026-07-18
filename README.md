@@ -153,7 +153,7 @@ A profile grants connections by mapping each connection ID to a
 sidecar that must already be owned by its immutable sandbox template:
 
 ```json
-"connections": [{ "id": "github-production", "sidecar": "github-api" }]
+"connections": [{ "id": "github-production", "sidecar": "github-mcp" }]
 ```
 
 At dispatch, Agentbay resolves the records and injects one canonical, non-secret
@@ -265,7 +265,10 @@ cloning or GitHub API access.
 An agent delegates by using ordinary tools or MCP servers to cause an external
 effect that a connector later normalizes into another event. Bindings consume
 that event exactly like any other; no special Agentbay delegation MCP is
-required. Future MCP sidecars provide standard policy-bounded tool access.
+required. Template-owned MCP sidecars provide standard policy-bounded tool
+access. The included GitHub MCP sidecar's current one-tool slice exposes only
+`issue_comment` through a GitHub App without exposing an installation token to
+OpenCode.
 Result destinations are separate: they deliver an existing execution's result
 and are not an execution-creation mechanism.
 
@@ -314,6 +317,53 @@ docker push ghcr.io/your-org/agentbay:latest
 docker build -f opencode-sandbox.Dockerfile -t ghcr.io/your-org/opencode-sandbox:latest .
 docker push ghcr.io/your-org/opencode-sandbox:latest
 ```
+
+Build the dependency-free GitHub MCP sidecar separately. Publish the image and
+deploy the immutable digest, not a mutable tag:
+
+```bash
+docker build -f github-mcp-sidecar.Dockerfile \
+  -t ghcr.io/your-org/github-mcp-sidecar:v1 .
+docker push ghcr.io/your-org/github-mcp-sidecar:v1
+docker inspect --format='{{index .RepoDigests 0}}' \
+  ghcr.io/your-org/github-mcp-sidecar:v1
+```
+
+The image copies only `github-mcp-sidecar/*.mjs`, runs `server.mjs` directly as
+fixed UID/GID 65532 on a distroless Node 24 image with CA certificates, and is
+compatible with a read-only root filesystem. The sidecar reads
+`AGENTBAY_GITHUB_APP_ID_FILE`, `AGENTBAY_GITHUB_INSTALLATION_ID_FILE`, and
+`AGENTBAY_GITHUB_PRIVATE_KEY_FILE`, restricts calls to the configured
+`AGENTBAY_GITHUB_REPOSITORY_OWNER`, `AGENTBAY_GITHUB_REPOSITORY_NAME`, and
+`AGENTBAY_GITHUB_REPOSITORY_ID`, binds localhost port 8082, serves MCP at
+`/mcp`, and reports readiness at `/readyz` and liveness at `/livez`. It accepts
+only the connection refs in injected
+`AGENTBAY_CONNECTIONS`. Its GitHub upstream is fixed to github.com; there is no
+GitHub host override.
+
+Configure the OpenCode profile with a remote MCP entry at
+`http://127.0.0.1:8082/mcp` and `oauth: false`. Configure a GitHub App with only
+**Issues: read/write**, install it on one selected repository, and mount its App
+ID, installation ID, and private key Secret files only into `github-mcp`. An
+`issues.opened` execution calling `issue_comment` is one intended use; the
+sidecar grants no workflow policy or Workflows permission. Installation tokens
+are minted and used inside the sidecar and never leave it. The sidecar's MCP
+2025-11-25 support is compatible with the OpenCode 1.14.50 version pinned by
+`opencode-sandbox.Dockerfile`.
+
+Marker replay is best-effort at-least-once recovery, not a uniqueness guarantee.
+Callers must derive a stable `idempotency_key` for each logical comment, and
+workflows must tolerate duplicates: overlapping sidecars or attempts can both
+miss the marker and create duplicate comments even with a stable key. The sidecar
+scans only the newest 2,000 comments before posting, so a marker older than that
+best-effort window is treated as absent and may result in a duplicate rather
+than failing closed. The marker HMAC key is derived from the GitHub App private
+key, so rotating that key makes old markers unauthenticatable and may also cause
+duplicates. Preserve the old key and sidecars through the replay window, or
+explicitly tolerate those duplicates. See the Helm
+[`README`](deploy/helm/agentbay/README.md) and
+[`sandbox-template.yaml`](deploy/examples/sandbox-template.yaml) for complete
+examples.
 
 PostgreSQL is required. The Helm chart can run migrations, deploy an in-cluster
 PostgreSQL instance for small installs, or use an external PostgreSQL URL or
