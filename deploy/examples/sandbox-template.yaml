@@ -75,6 +75,7 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+        # Four bounded tools support issue comments and serial one-file commits.
         # Build github-mcp-sidecar.Dockerfile, publish it, and replace this
         # illustrative digest with the immutable digest from your registry.
         - name: github-mcp
@@ -97,8 +98,9 @@ spec:
               value: /var/run/agentbay/github-app/installation-id
             - name: AGENTBAY_GITHUB_PRIVATE_KEY_FILE
               value: /var/run/agentbay/github-app/private-key.pem
-            # The sidecar rejects requests for every other repository and has
-            # no configurable GitHub API host or workflow policy.
+            # The sidecar rejects every other repository, .github/workflows,
+            # merges, and workflow operations. Grant the selected-repository App
+            # Issues, Contents, and Pull requests write, but no Workflows access.
           ports:
             - name: github-mcp
               containerPort: 8082
@@ -141,6 +143,8 @@ spec:
             seccompProfile:
               type: RuntimeDefault
           volumeMounts:
+            # Deliberately no workspace mount. OpenCode passes bounded complete
+            # file content through MCP (maximum 256 KiB per file).
             - name: github-app-credentials
               mountPath: /var/run/agentbay/github-app
               readOnly: true

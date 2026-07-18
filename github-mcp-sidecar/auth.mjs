@@ -88,7 +88,10 @@ export class GitHubTokenManager {
   }
 
   async #mintToken() {
-    const body = JSON.stringify({ repository_ids: [this.#repositoryId], permissions: { issues: "write" } });
+    const body = JSON.stringify({
+      repository_ids: [this.#repositoryId],
+      permissions: { contents: "write", pull_requests: "write", issues: "write" },
+    });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
     let response;
@@ -139,8 +142,10 @@ export class GitHubTokenManager {
     }
     const permissionKeys = Object.keys(permissions);
     if (
+      permissions.contents !== "write" ||
+      permissions.pull_requests !== "write" ||
       permissions.issues !== "write" ||
-      permissionKeys.some((key) => key !== "issues" && key !== "metadata") ||
+      permissionKeys.some((key) => !["contents", "pull_requests", "issues", "metadata"].includes(key)) ||
       (Object.hasOwn(permissions, "metadata") && permissions.metadata !== "read")
     ) {
       throw new Error("GitHub installation token permissions mismatch");

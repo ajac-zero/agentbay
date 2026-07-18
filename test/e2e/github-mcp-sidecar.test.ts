@@ -1,4 +1,4 @@
-import { generateKeyPairSync, verify, type KeyObject } from "node:crypto";
+import { createHash, generateKeyPairSync, verify, type KeyObject } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -20,6 +20,8 @@ const INSTALLATION_ID = 947;
 const REPOSITORY_ID = 1201;
 const INSTALLATION_TOKEN = "installation-token-that-must-not-leak";
 const PROTOCOL_VERSION = "2025-11-25";
+const BASE_SHA = "a".repeat(40);
+const COMMIT_SHA = "c".repeat(40);
 const running: RunningServer[] = [];
 const temporaryDirectories: string[] = [];
 
@@ -95,7 +97,7 @@ async function rpc(baseUrl: string, id: number, method: string, params: unknown)
 }
 
 describe("GitHub MCP sidecar", () => {
-  it("runs startup and idempotent issue comments end to end without leaking credentials", async () => {
+  it("runs repository writes and idempotent issue comments end to end without leaking credentials", async () => {
     const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
     const credentialDirectory = await mkdtemp(join(tmpdir(), "agentbay-github-mcp-"));
@@ -112,13 +114,17 @@ describe("GitHub MCP sidecar", () => {
     ]);
 
     const comments: Array<{ id: number; body: string; html_url: string }> = [];
-    const upstreamRequests: Array<{ method: string; path: string }> = [];
+    const refs = new Map<string, string>();
+    const contents = new Map<string, { content: string; sha: string }>();
+    const pulls: Array<Record<string, any>> = [];
+    const upstreamRequests: Array<{ method: string; path: string; body?: unknown }> = [];
     const fakeFailures: string[] = [];
     let posts = 0;
     const githubApi = http.createServer(async (request, response) => {
       try {
         const url = new URL(request.url!, "http://github.test");
-        upstreamRequests.push({ method: request.method!, path: `${url.pathname}${url.search}` });
+        const body = request.method === "POST" || request.method === "PUT" ? await readJson(request) : undefined;
+        upstreamRequests.push({ method: request.method!, path: `${url.pathname}${url.search}`, ...(body === undefined ? {} : { body }) });
 
         if (request.method === "GET" && url.pathname === `/app/installations/${INSTALLATION_ID}`) {
           verifyAppJwt(request.headers.authorization, publicKey);
@@ -126,12 +132,15 @@ describe("GitHub MCP sidecar", () => {
         }
         if (request.method === "POST" && url.pathname === `/app/installations/${INSTALLATION_ID}/access_tokens`) {
           verifyAppJwt(request.headers.authorization, publicKey);
-          expect(await readJson(request)).toEqual({ repository_ids: [REPOSITORY_ID], permissions: { issues: "write" } });
+          expect(body).toEqual({
+            repository_ids: [REPOSITORY_ID],
+            permissions: { contents: "write", pull_requests: "write", issues: "write" },
+          });
           return sendJson(response, 201, {
             token: INSTALLATION_TOKEN,
             expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
             repository_selection: "selected",
-            permissions: { issues: "write", metadata: "read" },
+            permissions: { contents: "write", pull_requests: "write", issues: "write", metadata: "read" },
             repositories: [{ id: REPOSITORY_ID }],
           });
         }
@@ -148,12 +157,67 @@ describe("GitHub MCP sidecar", () => {
           return sendJson(response, 200, comments);
         }
         if (request.method === "POST" && url.pathname === "/repos/Acme/widgets/issues/42/comments") {
-          const input = await readJson(request);
+          const input = body as { body: string };
           expect(Object.keys(input)).toEqual(["body"]);
           const comment = { id: 500 + posts, body: input.body, html_url: `http://github.test/comments/${500 + posts}` };
           posts += 1;
           comments.push(comment);
           return sendJson(response, 201, comment);
+        }
+        const refPrefix = "/repos/Acme/widgets/git/ref/heads/";
+        if (request.method === "GET" && url.pathname.startsWith(refPrefix)) {
+          const branch = decodeURIComponent(url.pathname.slice(refPrefix.length));
+          const sha = refs.get(branch);
+          return sha === undefined
+            ? sendJson(response, 404, { message: "not found" })
+            : sendJson(response, 200, { ref: `refs/heads/${branch}`, object: { type: "commit", sha } });
+        }
+        if (request.method === "POST" && url.pathname === "/repos/Acme/widgets/git/refs") {
+          const input = body as { ref: string; sha: string };
+          const branch = input.ref.slice("refs/heads/".length);
+          refs.set(branch, input.sha);
+          return sendJson(response, 201, { ref: input.ref, object: { type: "commit", sha: input.sha } });
+        }
+        const contentsPrefix = "/repos/Acme/widgets/contents/";
+        if (url.pathname.startsWith(contentsPrefix)) {
+          const path = decodeURIComponent(url.pathname.slice(contentsPrefix.length));
+          const key = `${url.searchParams.get("ref") ?? (body as { branch?: string } | undefined)?.branch}:${path}`;
+          if (request.method === "GET") {
+            const file = contents.get(key);
+            return file === undefined
+              ? sendJson(response, 404, { message: "not found" })
+              : sendJson(response, 200, { type: "file", path, sha: file.sha });
+          }
+          if (request.method === "PUT") {
+            const input = body as { branch: string; content: string; sha?: string };
+            const sha = createHash("sha1")
+              .update(`blob ${Buffer.from(input.content, "base64").length}\0`)
+              .update(Buffer.from(input.content, "base64"))
+              .digest("hex");
+            contents.set(`${input.branch}:${path}`, { content: input.content, sha });
+            return sendJson(response, input.sha === undefined ? 201 : 200, { content: { sha }, commit: { sha: COMMIT_SHA } });
+          }
+        }
+        if (url.pathname === "/repos/Acme/widgets/pulls") {
+          if (request.method === "GET") {
+            const matching = pulls.filter((pull) =>
+              pull.head.ref === url.searchParams.get("head")?.slice("Acme:".length) &&
+              pull.base.ref === url.searchParams.get("base"));
+            return sendJson(response, 200, matching);
+          }
+          if (request.method === "POST") {
+            const input = body as { head: string; base: string; body: string };
+            const pull = {
+              number: 17,
+              html_url: "http://github.test/Acme/widgets/pull/17",
+              state: "open",
+              body: input.body,
+              head: { ref: input.head, repo: { id: REPOSITORY_ID } },
+              base: { ref: input.base, repo: { id: REPOSITORY_ID } },
+            };
+            pulls.push(pull);
+            return sendJson(response, 201, pull);
+          }
         }
         return sendJson(response, 404, { message: "not found" });
       } catch (error) {
@@ -191,6 +255,15 @@ describe("GitHub MCP sidecar", () => {
         createIssueComment(input: unknown) {
           return core.createIssueComment(input);
         },
+        branchCreate(input: unknown) {
+          return core.branchCreate(input);
+        },
+        contentsPut(input: unknown) {
+          return core.contentsPut(input);
+        },
+        pullRequestCreate(input: unknown) {
+          return core.pullRequestCreate(input);
+        },
       };
       const started = await startServer(service, { host: "127.0.0.1", port: 0 }) as RunningServer;
       running.push(started);
@@ -212,11 +285,86 @@ describe("GitHub MCP sidecar", () => {
 
       const listed = await rpc(mcpBaseUrl, 2, "tools/list", {});
       serializedOutputs.push(listed.text);
-      expect(listed.payload.result.tools).toHaveLength(1);
-      expect(listed.payload.result.tools[0]).toMatchObject({
-        name: "issue_comment",
-        inputSchema: { additionalProperties: false },
+      expect(listed.payload.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+        "issue_comment", "branch_create", "contents_put", "pull_request_create",
+      ]);
+      expect(listed.payload.result.tools).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          name: "issue_comment",
+          inputSchema: expect.objectContaining({ additionalProperties: false }),
+        }),
+      ]));
+
+      const branchArguments = {
+        branch: "agent/change",
+        base_sha: BASE_SHA,
+        idempotency_key: "execution:abc:branch",
+      };
+      const branch = await rpc(mcpBaseUrl, 3, "tools/call", { name: "branch_create", arguments: branchArguments });
+      serializedOutputs.push(branch.text);
+      expect(branch.payload.result.structuredContent).toEqual({ branch: "agent/change", sha: BASE_SHA, replayed: false });
+      expect(refs.get("agent/change")).toBe(BASE_SHA);
+
+      const fileContent = "export const answer = 42;\n";
+      const encodedContent = Buffer.from(fileContent).toString("base64");
+      const fileSha = createHash("sha1").update(`blob ${Buffer.byteLength(fileContent)}\0${fileContent}`).digest("hex");
+      const contentsArguments = {
+        path: "src/answer.ts",
+        branch: "agent/change",
+        content: fileContent,
+        encoding: "utf8",
+        expected_sha: null,
+        message: "Add answer",
+        idempotency_key: "execution:abc:contents",
+      };
+      const file = await rpc(mcpBaseUrl, 4, "tools/call", { name: "contents_put", arguments: contentsArguments });
+      serializedOutputs.push(file.text);
+      expect(file.payload.result.structuredContent).toEqual({
+        path: "src/answer.ts", branch: "agent/change", sha: fileSha, commitSha: COMMIT_SHA, replayed: false,
       });
+      expect(contents.get("agent/change:src/answer.ts")).toEqual({ content: encodedContent, sha: fileSha });
+
+      const pullArguments = {
+        head: "agent/change",
+        base: "main",
+        title: "Add answer",
+        body: "Adds the answer module.",
+        draft: false,
+        idempotency_key: "execution:abc:pr",
+      };
+      const pull = await rpc(mcpBaseUrl, 5, "tools/call", { name: "pull_request_create", arguments: pullArguments });
+      serializedOutputs.push(pull.text);
+      expect(pull.payload.result.structuredContent).toEqual({
+        number: 17, url: "http://github.test/Acme/widgets/pull/17", state: "open", replayed: false,
+      });
+      expect(pulls).toHaveLength(1);
+
+      expect(upstreamRequests).toEqual(expect.arrayContaining([
+        { method: "GET", path: "/repos/Acme/widgets/git/ref/heads/agent/change" },
+        { method: "POST", path: "/repos/Acme/widgets/git/refs", body: { ref: "refs/heads/agent/change", sha: BASE_SHA } },
+        { method: "GET", path: "/repos/Acme/widgets/contents/src/answer.ts?ref=agent%2Fchange" },
+        {
+          method: "PUT",
+          path: "/repos/Acme/widgets/contents/src/answer.ts",
+          body: { message: "Add answer", content: encodedContent, branch: "agent/change" },
+        },
+        {
+          method: "GET",
+          path: "/repos/Acme/widgets/pulls?state=all&head=Acme%3Aagent%2Fchange&base=main&sort=created&direction=desc&per_page=100&page=1",
+        },
+      ]));
+      const pullPost = upstreamRequests.find((request) => request.method === "POST" && request.path === "/repos/Acme/widgets/pulls");
+      expect(pullPost?.body).toMatchObject({ title: "Add answer", head: "agent/change", base: "main", draft: false });
+      expect((pullPost?.body as { body: string }).body).toMatch(/^Adds the answer module\.\n\n<!-- agentbay-pr:[a-f0-9:]+ -->$/);
+
+      const beforeWorkflow = upstreamRequests.length;
+      const deniedWorkflow = await rpc(mcpBaseUrl, 6, "tools/call", {
+        name: "contents_put",
+        arguments: { ...contentsArguments, path: ".github/workflows/deploy.yml", idempotency_key: "workflow" },
+      });
+      serializedOutputs.push(deniedWorkflow.text);
+      expect(deniedWorkflow.payload.error).toEqual({ code: -32602, message: "Invalid params" });
+      expect(upstreamRequests).toHaveLength(beforeWorkflow);
 
       const arguments_ = {
         owner: "Acme",
@@ -225,7 +373,7 @@ describe("GitHub MCP sidecar", () => {
         body: "Deployed successfully",
         idempotency_key: "execution:abc:comment",
       };
-      const created = await rpc(mcpBaseUrl, 3, "tools/call", { name: "issue_comment", arguments: arguments_ });
+      const created = await rpc(mcpBaseUrl, 7, "tools/call", { name: "issue_comment", arguments: arguments_ });
       serializedOutputs.push(created.text);
       expect(fakeFailures).toEqual([]);
       expect(created.payload.result.structuredContent).toMatchObject({ replayed: false, comment: { id: 500 } });
@@ -234,25 +382,36 @@ describe("GitHub MCP sidecar", () => {
 
       await running.pop()!.close();
       mcpBaseUrl = await start();
-      const replayed = await rpc(mcpBaseUrl, 4, "tools/call", { name: "issue_comment", arguments: arguments_ });
+      const writesBeforeReplay = upstreamRequests.filter((request) => ["POST", "PUT"].includes(request.method) &&
+        !request.path.includes("access_tokens")).length;
+      const replayedBranch = await rpc(mcpBaseUrl, 8, "tools/call", { name: "branch_create", arguments: branchArguments });
+      const replayedFile = await rpc(mcpBaseUrl, 9, "tools/call", { name: "contents_put", arguments: contentsArguments });
+      const replayedPull = await rpc(mcpBaseUrl, 10, "tools/call", { name: "pull_request_create", arguments: pullArguments });
+      expect(replayedBranch.payload.result.structuredContent).toMatchObject({ replayed: true, sha: BASE_SHA });
+      expect(replayedFile.payload.result.structuredContent).toMatchObject({ replayed: true, sha: fileSha });
+      expect(replayedPull.payload.result.structuredContent).toMatchObject({ replayed: true, number: 17 });
+      expect(upstreamRequests.filter((request) => ["POST", "PUT"].includes(request.method) &&
+        !request.path.includes("access_tokens"))).toHaveLength(writesBeforeReplay);
+
+      const replayed = await rpc(mcpBaseUrl, 11, "tools/call", { name: "issue_comment", arguments: arguments_ });
       serializedOutputs.push(replayed.text);
       expect(replayed.payload.result.structuredContent).toMatchObject({ replayed: true, comment: { id: 500 } });
       expect(posts).toBe(1);
 
-      const conflicted = await rpc(mcpBaseUrl, 5, "tools/call", {
+      const conflicted = await rpc(mcpBaseUrl, 12, "tools/call", {
         name: "issue_comment",
         arguments: { ...arguments_, body: "Changed payload" },
       });
       serializedOutputs.push(conflicted.text);
       expect(conflicted.payload.result).toEqual({
-        content: [{ type: "text", text: '{"error":"Issue comment failed","code":"IDEMPOTENCY_CONFLICT"}' }],
-        structuredContent: { error: "Issue comment failed", code: "IDEMPOTENCY_CONFLICT" },
+        content: [{ type: "text", text: '{"error":"issue_comment failed","code":"IDEMPOTENCY_CONFLICT"}' }],
+        structuredContent: { error: "issue_comment failed", code: "IDEMPOTENCY_CONFLICT" },
         isError: true,
       });
       expect(posts).toBe(1);
 
       const beforeUnauthorized = upstreamRequests.length;
-      const unauthorized = await rpc(mcpBaseUrl, 6, "tools/call", {
+      const unauthorized = await rpc(mcpBaseUrl, 13, "tools/call", {
         name: "issue_comment",
         arguments: { ...arguments_, repo: "other", idempotency_key: "unauthorized" },
       });

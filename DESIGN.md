@@ -682,25 +682,60 @@ for one selected github.com repository. OpenCode connects to
 App ID, installation ID, and private key from three mounted Secret files, checks
 the complete `AGENTBAY_CONNECTIONS` grant, and exchanges App credentials for a
 short-lived installation token internally. The token and private key never
-cross the MCP boundary or enter OpenCode. Its current one-tool slice exposes
-only `issue_comment`; the App requires only repository **Issues: read/write** and
-is installed on the selected repository. The sidecar fixes its upstream to
-github.com, validates every owner/repository argument against its configured
-repository, and has no workflow mutation policy or Workflows permission.
+cross the MCP boundary or enter OpenCode. Its bounded tool slice exposes
+`issue_comment`, `branch_create`, `contents_put`, and `pull_request_create`. The
+App is installed on one selected repository with repository **Issues: write**,
+**Contents: write**, and **Pull requests: write**, and without **Workflows**
+permission. The sidecar fixes its upstream to github.com, validates every
+owner/repository argument against its configured repository, and has no
+workflow mutation policy. It has no `/workspace` mount: OpenCode passes bounded
+complete file content through MCP rather than giving the sidecar checkout access.
 It implements MCP 2025-11-25 for compatibility with the OpenCode 1.14.50
 runtime pinned by `opencode-sandbox.Dockerfile`.
 
-Issue-comment marker replay is best-effort at-least-once recovery, not a
-uniqueness guarantee. Callers derive stable idempotency keys for logical
-comments, and workflows tolerate duplicates. Overlapping sidecars or attempts
-can both fail to observe a marker before posting and therefore create duplicate
-comments even when they use the same stable key. The sidecar scans the newest
-2,000 comments; a marker outside that best-effort window is treated as absent
-and may result in a duplicate rather than failing closed. The marker HMAC key is
-derived from the GitHub App private key. Rotating the private key therefore
-makes markers written with the old key unauthenticatable and may produce
-duplicates. Operators preserve the old key and sidecars through the replay
-window or accept duplicate comments during rotation.
+Pull-request creation is an explicit, non-transactional sequence:
+
+1. `branch_create` creates a branch at an exact base commit SHA.
+2. Serial `contents_put` calls provide the full file content and the optimistic
+   expected blob SHA, or `null` when creating a file.
+3. `pull_request_create` opens the pull request after all writes succeed.
+
+Each `contents_put` creates one commit for one file and accepts at most 256 KiB.
+The sidecar blocks `.github/workflows`, cross-repository access, workflow
+mutation, pull-request merge, batch commits, and generic GitHub API access. A
+failure can leave the branch with only some commits.
+
+All four write tools require a caller-derived stable idempotency key for each
+logical write. Reusing a key concurrently for different input within one
+sidecar process returns `IDEMPOTENCY_CONFLICT`. Branch and content operations use
+natural durable desired state in GitHub: a branch name at the requested commit
+and a path containing the requested blob, with the expected blob SHA retained
+as an optimistic precondition. Comments and pull requests carry authenticated
+markers in GitHub. These mechanisms support reconciliation after a process
+restart, but cross-process exclusion remains best effort rather than exactly
+once.
+
+No write tool blindly retries a mutation whose outcome is ambiguous. After a
+timeout, transport failure, 401, 5xx response, or another response that may
+follow an applied mutation, it reads GitHub and reports success only if the
+desired state is present. Otherwise it preserves the ambiguous failure for a
+later reconciliation attempt. Reads may refresh the installation token and
+retry once on 401. A mutation 401 instead triggers that one token refresh and
+read-only reconciliation; the mutation is not resubmitted. Existing state that
+is incompatible with the requested branch, content precondition, pull request,
+or marker returns `STATE_CONFLICT` and is never overwritten implicitly.
+
+Marker replay is best-effort at-least-once recovery, not a uniqueness guarantee.
+For pull requests, the sidecar searches up to the newest 1,000 pull requests for
+an authenticated matching marker. A marker beyond that window is treated as
+absent and may result in a duplicate. It scans the newest 2,000 issue comments,
+with the same behavior outside that window. Overlapping sidecars or attempts can
+both fail to observe a marker before writing and therefore create duplicates
+even when they use the same stable key. The marker HMAC key is derived from the
+GitHub App private key. Rotating the private key therefore makes markers written
+with the old key unauthenticatable and may produce duplicates. Operators
+preserve the old key and sidecars through the replay window or accept duplicates
+during rotation.
 
 These sidecars provide ordinary tool access to external systems; they are not a privileged execution-creation channel. If an agent uses a standard tool to create an issue, publish a message, enqueue work, or perform another external effect, the corresponding source connector may later normalize that effect into an event. An enabled binding can then create a delegated execution. No Agentbay-specific delegation MCP is required.
 

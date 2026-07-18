@@ -229,7 +229,7 @@ The following example runs the repository's GitHub MCP sidecar. Build
 with the registry digest. The Secret is created and managed separately; this
 values file creates no Secret, contains no credential value, and mounts the
 three projected files only in `github-mcp`, never in OpenCode or the workspace
-materializer:
+materializer. The sidecar deliberately has no `/workspace` volume mount:
 
 ```yaml
 sandboxTemplates:
@@ -346,29 +346,59 @@ kubectl -n agents create secret generic example-github-app-credentials \
   --from-file=private-key.pem=./private-key.pem
 ```
 
-Register a dedicated GitHub App with repository permission **Issues: Read and
-write**, no organization/account permissions, no Contents or Workflows
-permission, and install it on only `example-org/example-repository`. The sidecar
+Register a dedicated GitHub App with selected-repository permissions **Issues:
+write**, **Contents: write**, and **Pull requests: write**, no **Workflows** or
+organization/account permissions, and install it on only
+`example-org/example-repository`. The sidecar
 accepts the exact `AGENTBAY_CONNECTIONS` grant injected for the profile,
 exchanges its private key for a short-lived installation token, and fixes its
 upstream to `https://api.github.com`. It rejects owner/repository arguments
 outside `AGENTBAY_GITHUB_REPOSITORY_OWNER`,
 `AGENTBAY_GITHUB_REPOSITORY_NAME`, and `AGENTBAY_GITHUB_REPOSITORY_ID`; there is
-no configurable GitHub host or workflow
-policy. The current one-tool slice exposes only the MCP `issue_comment` tool; an
-`issues.opened` binding is one intended use. The installation token and private
-key never enter OpenCode, its environment, prompts, workspace, or tool results.
+no configurable GitHub host or workflow policy. The bounded MCP surface exposes
+`issue_comment`, `branch_create`, `contents_put`, and `pull_request_create`. An
+`issues.opened` binding using `issue_comment`, or a review agent preparing a
+pull request, are intended profiles. The installation token and private key
+never enter OpenCode, its environment, prompts, workspace, or tool results.
 The sidecar implements MCP 2025-11-25 and is compatible with the OpenCode
 1.14.50 version pinned by `opencode-sandbox.Dockerfile`.
 
+For a pull request, OpenCode passes bounded complete file content through MCP;
+the sidecar never reads `/workspace`. Call `branch_create` with the exact base
+commit SHA, issue serial `contents_put` calls with the optimistic expected blob
+SHA for an update or `null` for a create, and finish with
+`pull_request_create`. Each put creates one commit for one file and files are
+limited to 256 KiB. The sequence is not atomic and can leave a partially updated
+branch.
+
+Every write tool requires a stable `idempotency_key`; callers must reuse it for
+the same logical write. Concurrent reuse for different input within one sidecar
+process returns `IDEMPOTENCY_CONFLICT`. Branch and content writes reconcile against
+their natural durable desired state in GitHub: the branch at the requested
+commit and the file with the requested blob, subject to the expected SHA
+precondition. Pull requests and comments persist authenticated markers in
+GitHub. Reconciliation survives process restarts, but cross-process coordination
+is best effort rather than exactly once.
+
+The sidecar never blindly retries a mutation after an ambiguous timeout,
+transport failure, 401, 5xx response, or similar outcome. It reads GitHub to
+determine whether the desired state exists and returns the ambiguous failure if
+it cannot confirm success. Reads may refresh the installation token and retry
+once after a 401. A mutation 401 uses that one refresh for read-only
+reconciliation and does not resubmit the mutation. Incompatible existing state
+returns `STATE_CONFLICT` rather than being overwritten.
+
+The sidecar cannot merge, mutate workflows, access another repository, write
+`.github/workflows`, create multi-file commits, or make arbitrary GitHub API
+calls. Do not grant the App Workflows permission.
+
 Marker replay is best-effort at-least-once recovery, not a uniqueness guarantee.
-The caller must derive a stable `idempotency_key` for the logical operation, but
-overlapping sidecars or attempts can both miss the marker and create duplicate
-comments. Workflows must tolerate duplicate comments even when callers use
-stable keys. The sidecar scans only the newest 2,000 comments before posting, so
-a marker older than that best-effort window is treated as absent and may result
-in a duplicate rather than failing closed. The marker HMAC key is derived from
-the GitHub App private key, so private-key rotation makes old markers
+The sidecar scans up to the newest 1,000 pull requests for a matching PR marker;
+a marker beyond that window is treated as absent and may produce a duplicate.
+It scans only the newest 2,000 issue comments, with the same behavior beyond the
+window. Overlapping sidecars or attempts can both miss a marker and create
+duplicates even when callers use stable keys. The marker HMAC key is derived
+from the GitHub App private key, so private-key rotation makes old markers
 unauthenticatable and may also produce duplicates. Preserve the old private key
 and sidecars through the replay window, or explicitly tolerate duplicates
 during rotation.
