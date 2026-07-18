@@ -1,324 +1,170 @@
 import { describe, expect, it } from "vitest";
 import type { Config } from "../../src/config.js";
-import { mountExecutionApi } from "../../src/execution/api.js";
-import type {
-  CreateExecutionCommand,
-  CreateExecutionResult,
-  ExecutionStore,
-  PublishProfileVersionCommand,
-} from "../../src/execution/store.js";
-import {
-  IdempotencyConflictError,
-  ProfileVersionAlreadyExistsError,
-  ProfileVersionNotFoundError,
-  type AgentProfileVersion,
-  type Execution,
-} from "../../src/execution/types.js";
+import { mountControlApi, type ControlApiStore } from "../../src/control/api.js";
+import { planAdmission, type AdmissionCommand, type AdmissionResult } from "../../src/control/admission.js";
+import { BindingVersionAlreadyExistsError, type PublishedBindingVersion } from "../../src/control/binding.js";
+import { TriggerAlreadyExistsError, TriggerNotFoundError, type Trigger } from "../../src/control/trigger.js";
+import type { PublishProfileVersionCommand } from "../../src/execution/store.js";
+import { IdempotencyConflictError, ProfileVersionAlreadyExistsError, type AgentProfileVersion, type Execution } from "../../src/execution/types.js";
 import { createOpenApiApp } from "../../src/openapi.js";
 
-describe("execution API", () => {
-  it("requires the configured bearer token", async () => {
+describe("public API", () => {
+  it("requires bearer auth and removes direct execution submission", async () => {
     const app = testApp();
-
-    expect((await app.request("/v1/executions")).status).toBe(401);
-    expect((await app.request("/v1/executions", { headers: { authorization: "Bearer wrong" } })).status).toBe(401);
+    expect((await app.request("/v1/triggers/t/events")).status).toBe(401);
+    expect((await app.request("/v1/triggers/t/events", { headers: { authorization: "Bearer wrong" } })).status).toBe(401);
+    expect((await request(app, "POST", "/v1/executions", {})).status).toBe(404);
   });
 
-  it("publishes and reads an immutable profile version", async () => {
+  it("retains profile publish/get with strict validation", async () => {
     const app = testApp();
-    const published = await request(app, "POST", "/v1/agent-profiles/coder/versions", {
-      version: 1,
-      definition: profileDefinition("coder"),
-    });
-
+    const published = await request(app, "POST", "/v1/agent-profiles/coder/versions", { version: 1, definition: profileDefinition("coder") });
     expect(published.status).toBe(201);
-    expect(published.body).toMatchObject({
-      tenantId: "default",
-      profile: { id: "coder", version: 1 },
-      definition: profileDefinition("coder"),
-    });
-
-    const fetched = await request(app, "GET", "/v1/agent-profiles/coder/versions/1");
-    expect(fetched.status).toBe(200);
-    expect(fetched.body).toEqual(published.body);
-
-    const duplicate = await request(app, "POST", "/v1/agent-profiles/coder/versions", {
-      version: 1,
-      definition: profileDefinition("other"),
-    });
-    expect(duplicate.status).toBe(409);
+    expect((await request(app, "GET", "/v1/agent-profiles/coder/versions/1")).body).toEqual(published.body);
+    expect((await request(app, "POST", "/v1/agent-profiles/coder/versions", { version: 1, definition: profileDefinition("coder") })).status).toBe(409);
+    expect((await request(app, "POST", "/v1/agent-profiles/coder/versions", { version: 2, definition: profileDefinition("coder"), extra: true })).status).toBe(400);
   });
 
-  it("submits and reads an execution with a stable idempotent response", async () => {
+  it("creates, reads, and disables triggers", async () => {
     const app = testApp();
-    await publishCoder(app);
-
-    const body = {
-      profile: { id: "coder", version: 1 },
-      input: { text: "Implement this", context: { issue: 42 } },
-      workspace: { type: "empty" },
-    };
-    const submitted = await request(app, "POST", "/v1/executions", body, { "Idempotency-Key": "request-1" });
-
-    expect(submitted.status).toBe(202);
-    expect(submitted.headers.get("location")).toBe(`/v1/executions/${String((submitted.body as Execution).id)}`);
-    expect(submitted.body).toMatchObject({
-      tenantId: "default",
-      state: "QUEUED",
-      profile: { id: "coder", version: 1 },
-      input: body.input,
-      workspace: { type: "empty" },
-      eventId: expect.any(String),
-      result: null,
-    });
-
-    const replay = await request(app, "POST", "/v1/executions", body, { "Idempotency-Key": "request-1" });
-    expect(replay.status).toBe(202);
-    expect(replay.body).toEqual(submitted.body);
-
-    const fetched = await request(app, "GET", `/v1/executions/${String((submitted.body as Execution).id)}`);
-    expect(fetched.status).toBe(200);
-    expect(fetched.body).toEqual(submitted.body);
+    const created = await request(app, "POST", "/v1/triggers", { id: "github", type: "cloudevents.http", config: { schemaVersion: 1 } });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ id: "github", tenantId: "default", enabled: true, disabledAt: null });
+    expect((await request(app, "GET", "/v1/triggers/github")).body).toEqual(created.body);
+    expect((await request(app, "POST", "/v1/triggers/github/disable")).body).toMatchObject({ enabled: false, disabledAt: expect.any(String) });
+    expect((await request(app, "POST", "/v1/triggers/github/disable")).body).toMatchObject({ enabled: false });
+    expect((await request(app, "GET", "/v1/triggers/missing")).status).toBe(404);
   });
 
-  it("rejects invalid and non-strict requests", async () => {
+  it("publishes, reads, and disables exact binding versions", async () => {
     const app = testApp();
-
-    const badProfile = await request(app, "POST", "/v1/agent-profiles/not%20simple/versions", {
-      version: 0,
-      definition: [],
-      extra: true,
-    });
-    expect(badProfile.status).toBe(400);
-
-    const badExecution = await request(
-      app,
-      "POST",
-      "/v1/executions",
-      {
-        profile: { id: "coder", version: 1 },
-        input: { text: "", extra: true },
-        workspace: { type: "empty", path: "/tmp" },
-      },
-      { "Idempotency-Key": "request-2" },
-    );
-    expect(badExecution.status).toBe(400);
-
-    const missingKey = await request(app, "POST", "/v1/executions", {
-      profile: { id: "coder", version: 1 },
-      input: { text: "hello" },
-      workspace: { type: "empty" },
-    });
-    expect(missingKey.status).toBe(400);
-
-    const controlKey = await request(
-      app,
-      "POST",
-      "/v1/executions",
-      { profile: { id: "coder", version: 1 }, input: { text: "hello" }, workspace: { type: "empty" } },
-      { "Idempotency-Key": "bad\u007fkey" },
-    );
-    expect(controlKey.status).toBe(400);
-
-    const invalidProfile = await request(app, "POST", "/v1/agent-profiles/coder/versions", {
-      version: 1,
-      definition: { runtime: { type: "opencode" }, timeoutSeconds: 0 },
-    });
-    expect(invalidProfile.status).toBe(400);
-
-    const missingAgent = await request(app, "POST", "/v1/agent-profiles/coder/versions", {
-      version: 1,
-      definition: {
-        schemaVersion: 1,
-        runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: {} } },
-        sandbox: { templateName: "opencode" },
-        permissions: { onRequest: "fail" },
-        timeoutSeconds: 3_600,
-      },
-    });
-    expect(missingAgent.status).toBe(400);
-
-    const oversizedProfile = await request(app, "POST", "/v1/agent-profiles/large/versions", {
-      version: 1,
-      definition: {
-        ...profileDefinition("large"),
-        runtime: { ...profileDefinition("large").runtime, opencodeConfig: { padding: "x".repeat(140_000) } },
-      },
-    });
-    expect(oversizedProfile.status).toBe(413);
+    await publishDependencies(app);
+    const body = bindingBody();
+    const published = await request(app, "POST", "/v1/bindings/issues/versions", body);
+    expect(published.status).toBe(201);
+    expect(published.body).toMatchObject({ bindingId: "issues", version: 1, triggerId: "github", enabled: true, definition: body.definition });
+    expect((await request(app, "GET", "/v1/bindings/issues/versions/1")).body).toEqual(published.body);
+    expect((await request(app, "POST", "/v1/bindings/issues/versions", body)).status).toBe(409);
+    expect((await request(app, "POST", "/v1/bindings/issues/versions/1/disable")).body).toMatchObject({ enabled: false });
+    expect((await request(app, "GET", "/v1/bindings/issues/versions/2")).status).toBe(404);
+    expect((await request(app, "POST", "/v1/bindings/missing/versions", { ...body, triggerId: "missing" })).status).toBe(404);
   });
 
-  it("returns 404 for missing profile versions and executions", async () => {
-    const app = testApp();
-    const missingProfile = await request(
-      app,
-      "POST",
-      "/v1/executions",
-      { profile: { id: "missing", version: 1 }, input: { text: "hello" }, workspace: { type: "empty" } },
-      { "Idempotency-Key": "request-3" },
-    );
-    expect(missingProfile.status).toBe(404);
-
-    const missingExecution = await request(app, "GET", "/v1/executions/missing");
-    expect(missingExecution.status).toBe(404);
-  });
-
-  it("returns 409 when an idempotency key is reused for another request", async () => {
-    const app = testApp();
-    await publishCoder(app);
-    const base = { profile: { id: "coder", version: 1 }, workspace: { type: "empty" } };
-
-    expect((await request(app, "POST", "/v1/executions", { ...base, input: { text: "first" } }, { "Idempotency-Key": "same" })).status).toBe(202);
-    const conflict = await request(app, "POST", "/v1/executions", { ...base, input: { text: "second" } }, { "Idempotency-Key": "same" });
-
-    expect(conflict.status).toBe(409);
-    expect(conflict.body).toEqual({ error: "Idempotency-Key was already used for a different request" });
-  });
-
-  it("maps unexpected store failures to a non-leaking 500", async () => {
-    const store = new FakeExecutionStore();
-    store.failure = new Error("database password leaked");
+  it("admits normalized events, returns zero matches, and replays idempotently", async () => {
+    const store = new FakeControlStore();
     const app = testApp(store);
+    await publishDependencies(app);
+    await request(app, "POST", "/v1/bindings/issues/versions", bindingBody());
+    const event = { ...cloudEvent("issue.opened", { action: "opened" }), traceparent: "00-a1b2c3-01" };
 
-    const response = await request(app, "GET", "/v1/executions/failed");
+    const admitted = await request(app, "POST", "/v1/triggers/github/events", event, { "Idempotency-Key": "delivery-1" });
+    expect(admitted.status).toBe(202);
+    expect(admitted.body).toMatchObject({ replayed: false, event: { triggerId: "github", eventId: "evt-1" }, executions: [{ binding: { id: "issues", version: 1 } }] });
+    expect(store.lastAdmission?.event).toMatchObject({ datacontenttype: "application/json", traceparent: "00-a1b2c3-01" });
 
-    expect(response.status).toBe(500);
-    expect(response.body).toEqual({ error: "Internal server error" });
-    expect(JSON.stringify(response.body)).not.toContain("password");
+    const execution = (admitted.body as AdmissionResult).executions[0]!;
+    const fetched = await request(app, "GET", `/v1/executions/${execution.id}`);
+    expect(fetched.body).toMatchObject({ id: execution.id, binding: { id: "issues", version: 1 } });
+
+    const replay = await request(app, "POST", "/v1/triggers/github/events", event, { "Idempotency-Key": "delivery-1" });
+    expect(replay.status).toBe(202);
+    expect(replay.body).toMatchObject({ replayed: true, executions: [{ id: execution.id }] });
+
+    await request(app, "POST", "/v1/triggers/github/disable");
+    const disabledReplay = await request(app, "POST", "/v1/triggers/github/events", event, { "Idempotency-Key": "delivery-1" });
+    expect(disabledReplay.status).toBe(202);
+    expect(disabledReplay.body).toMatchObject({ replayed: true, executions: [{ id: execution.id }] });
+    expect((await request(app, "POST", "/v1/triggers/github/events", cloudEvent("push", {}), { "Idempotency-Key": "new-disabled" })).status).toBe(404);
+
+    const otherApp = testApp();
+    await request(otherApp, "POST", "/v1/triggers", { id: "github", type: "cloudevents.http", config: { schemaVersion: 1 } });
+    const unmatched = await request(otherApp, "POST", "/v1/triggers/github/events", cloudEvent("push", {}), { "Idempotency-Key": "delivery-2" });
+    expect(unmatched.status).toBe(202);
+    expect(unmatched.body).toMatchObject({ replayed: false, executions: [] });
+  });
+
+  it("requires structured CloudEvents and Idempotency-Key and maps conflicts", async () => {
+    const app = testApp();
+    await request(app, "POST", "/v1/triggers", { id: "github", type: "cloudevents.http", config: { schemaVersion: 1 } });
+    const event = cloudEvent("issue.opened", {});
+    expect((await request(app, "POST", "/v1/triggers/github/events", event)).status).toBe(400);
+    expect((await request(app, "POST", "/v1/triggers/github/events", { ...event, specversion: "0.3" }, { "Idempotency-Key": "x" })).status).toBe(400);
+    expect((await request(app, "POST", "/v1/triggers/missing/events", event, { "Idempotency-Key": "x" })).status).toBe(404);
+    expect((await request(app, "POST", "/v1/triggers/github/events", event, { "Idempotency-Key": "same" })).status).toBe(202);
+    expect((await request(app, "POST", "/v1/triggers/github/events", { ...event, data: { changed: true } }, { "Idempotency-Key": "same" })).status).toBe(409);
+  });
+
+  it.each(["tenantid", "agentbay"])("returns 400 for caller-supplied reserved %s extensions", async (name) => {
+    const app = testApp();
+    await request(app, "POST", "/v1/triggers", { id: "github", type: "cloudevents.http", config: { schemaVersion: 1 } });
+    const event = { ...cloudEvent("issue.opened", {}), [name]: "caller-supplied" };
+    expect((await request(app, "POST", "/v1/triggers/github/events", event, { "Idempotency-Key": `reserved-${name}` })).status).toBe(400);
+  });
+
+  it("returns 400 for a non-JSON CloudEvent data content type", async () => {
+    const app = testApp();
+    await request(app, "POST", "/v1/triggers", { id: "github", type: "cloudevents.http", config: { schemaVersion: 1 } });
+    const event = { ...cloudEvent("issue.opened", {}), datacontenttype: "text/plain" };
+    expect((await request(app, "POST", "/v1/triggers/github/events", event, { "Idempotency-Key": "non-json" })).status).toBe(400);
+  });
+
+  it("enforces the body limit and does not leak unexpected failures", async () => {
+    const app = testApp();
+    expect((await request(app, "POST", "/v1/triggers", { id: "github", type: "cloudevents.http", config: { schemaVersion: 1 }, padding: "x".repeat(140_000) })).status).toBe(413);
+    const store = new FakeControlStore();
+    store.failure = new Error("database password leaked");
+    const response = await request(testApp(store), "GET", "/v1/executions/failed");
+    expect(response).toMatchObject({ status: 500, body: { error: "Internal server error" } });
   });
 });
 
-class FakeExecutionStore implements ExecutionStore {
+class FakeControlStore implements ControlApiStore {
   readonly profiles = new Map<string, AgentProfileVersion>();
+  readonly triggers = new Map<string, Trigger>();
+  readonly bindings = new Map<string, PublishedBindingVersion>();
   readonly executions = new Map<string, Execution>();
-  readonly idempotency = new Map<string, { hash: string; execution: Execution }>();
+  readonly admissions = new Map<string, { hash: string; result: AdmissionResult }>();
+  lastAdmission?: AdmissionCommand;
   failure?: Error;
 
   async publishProfileVersion(command: PublishProfileVersionCommand): Promise<AgentProfileVersion> {
     this.maybeFail();
-    const key = profileKey(command.tenantId, command.profileId, command.version);
+    const key = `${command.tenantId}:${command.profileId}:${command.version}`;
     if (this.profiles.has(key)) throw new ProfileVersionAlreadyExistsError(command.profileId, command.version);
-    const profile = {
-      id: command.id,
-      tenantId: command.tenantId,
-      profile: { id: command.profileId, version: command.version },
-      definition: command.definition,
-      createdAt: command.createdAt,
-    };
-    this.profiles.set(key, profile);
-    return profile;
+    const value = { id: command.id, tenantId: command.tenantId, profile: { id: command.profileId, version: command.version }, definition: command.definition, createdAt: command.createdAt };
+    this.profiles.set(key, value);
+    return value;
   }
-
-  async getProfileVersion(tenantId: string, profileId: string, version: number): Promise<AgentProfileVersion | undefined> {
-    this.maybeFail();
-    return this.profiles.get(profileKey(tenantId, profileId, version));
+  async getProfileVersion(tenantId: string, profileId: string, version: number) { this.maybeFail(); return this.profiles.get(`${tenantId}:${profileId}:${version}`); }
+  async getExecution(tenantId: string, executionId: string) { this.maybeFail(); return this.executions.get(`${tenantId}:${executionId}`); }
+  async createTrigger(trigger: Trigger) { this.maybeFail(); const key = `${trigger.tenantId}:${trigger.id}`; if (this.triggers.has(key)) throw new TriggerAlreadyExistsError(trigger.id); this.triggers.set(key, trigger); return trigger; }
+  async getTrigger(tenantId: string, triggerId: string) { this.maybeFail(); return this.triggers.get(`${tenantId}:${triggerId}`); }
+  async disableTrigger(tenantId: string, triggerId: string, disabledAt: string) { this.maybeFail(); const key = `${tenantId}:${triggerId}`; const value = this.triggers.get(key); if (!value) return undefined; if (!value.enabled) return value; const disabled = { ...value, enabled: false, disabledAt }; this.triggers.set(key, disabled); return disabled; }
+  async publishBindingVersion(binding: PublishedBindingVersion) { this.maybeFail(); const key = `${binding.tenantId}:${binding.bindingId}:${binding.version}`; if (this.bindings.has(key)) throw new BindingVersionAlreadyExistsError(binding.bindingId, binding.version); this.bindings.set(key, binding); return binding; }
+  async getBindingVersion(tenantId: string, bindingId: string, version: number) { this.maybeFail(); return this.bindings.get(`${tenantId}:${bindingId}:${version}`); }
+  async disableBindingVersion(tenantId: string, bindingId: string, version: number, disabledAt: string) { this.maybeFail(); const key = `${tenantId}:${bindingId}:${version}`; const value = this.bindings.get(key); if (!value) return undefined; if (!value.enabled) return value; const disabled = { ...value, enabled: false, disabledAt }; this.bindings.set(key, disabled); return disabled; }
+  async listBindingCandidates(tenantId: string, triggerId: string, eventType: string) { this.maybeFail(); return [...this.bindings.values()].filter((value) => value.tenantId === tenantId && value.triggerId === triggerId && value.enabled && value.definition.eventTypes.includes(eventType)); }
+  async admitEvent(command: AdmissionCommand): Promise<AdmissionResult> {
+    this.maybeFail(); this.lastAdmission = command;
+    const key = `${command.tenantId}:${command.sourceDeduplicationKey}`;
+    const previous = this.admissions.get(key);
+    if (previous) { if (previous.hash !== command.admissionHash) throw new IdempotencyConflictError(); return { ...previous.result, replayed: true }; }
+    if (!this.triggers.get(`${command.tenantId}:${command.triggerId}`)?.enabled) throw new TriggerNotFoundError(command.triggerId);
+    const result = planAdmission(command, await this.listBindingCandidates(command.tenantId, command.triggerId, command.event.type));
+    for (const execution of result.executions) this.executions.set(`${execution.tenantId}:${execution.id}`, execution);
+    this.admissions.set(key, { hash: command.admissionHash, result });
+    return result;
   }
-
-  async createExecution(command: CreateExecutionCommand): Promise<CreateExecutionResult> {
-    this.maybeFail();
-    const idempotencyKey = `${command.tenantId}:${command.idempotencyKey}`;
-    const prior = this.idempotency.get(idempotencyKey);
-    if (prior) {
-      if (prior.hash !== command.requestHash) throw new IdempotencyConflictError();
-      return { execution: prior.execution, replayed: true };
-    }
-
-    const profileVersion = await this.getProfileVersion(command.tenantId, command.profile.id, command.profile.version);
-    if (!profileVersion) throw new ProfileVersionNotFoundError(command.profile.id, command.profile.version);
-
-    const execution: Execution = {
-      id: command.id,
-      tenantId: command.tenantId,
-      state: "QUEUED",
-      profile: profileVersion.profile,
-      input: command.input,
-      workspace: command.workspace,
-      eventId: command.event.id,
-      createdAt: command.createdAt,
-      updatedAt: command.createdAt,
-      result: null,
-    };
-    this.executions.set(`${command.tenantId}:${command.id}`, execution);
-    this.idempotency.set(idempotencyKey, { hash: command.requestHash, execution });
-    return { execution, replayed: false };
-  }
-
-  async getExecution(tenantId: string, executionId: string): Promise<Execution | undefined> {
-    this.maybeFail();
-    return this.executions.get(`${tenantId}:${executionId}`);
-  }
-
-  private maybeFail(): void {
-    if (this.failure) throw this.failure;
-  }
+  private maybeFail() { if (this.failure) throw this.failure; }
 }
 
-async function publishCoder(app: ReturnType<typeof createOpenApiApp>): Promise<void> {
-  const response = await request(app, "POST", "/v1/agent-profiles/coder/versions", { version: 1, definition: profileDefinition("coder") });
-  expect(response.status).toBe(201);
+async function publishDependencies(app: ReturnType<typeof createOpenApiApp>) {
+  expect((await request(app, "POST", "/v1/agent-profiles/coder/versions", { version: 1, definition: profileDefinition("coder") })).status).toBe(201);
+  expect((await request(app, "POST", "/v1/triggers", { id: "github", type: "cloudevents.http", config: { schemaVersion: 1 } })).status).toBe(201);
 }
-
-function profileDefinition(agent: string) {
-  return {
-    schemaVersion: 1 as const,
-    runtime: {
-      agent,
-      opencodeConfig: { agent: { [agent]: { prompt: "Test agent" } } },
-      type: "opencode",
-    },
-    sandbox: { templateName: "opencode" },
-    permissions: { onRequest: "fail" },
-    timeoutSeconds: 3_600,
-  };
-}
-
-function profileKey(tenantId: string, profileId: string, version: number): string {
-  return `${tenantId}:${profileId}:${version}`;
-}
-
-function testApp(store: ExecutionStore = new FakeExecutionStore()) {
-  const app = createOpenApiApp();
-  mountExecutionApi(app, testConfig(), store);
-  return app;
-}
-
-async function request(
-  app: ReturnType<typeof createOpenApiApp>,
-  method: string,
-  path: string,
-  body?: unknown,
-  headers: Record<string, string> = {},
-): Promise<{ body: unknown; headers: Headers; status: number }> {
-  const response = await app.request(path, {
-    method,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    headers: {
-      authorization: "Bearer test-token",
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-      ...headers,
-    },
-  });
-  return { body: await response.json(), headers: response.headers, status: response.status };
-}
-
-function testConfig(): Config {
-  return {
-    adminToken: "test-token",
-    dispatcherEnabled: false,
-    dispatcherIdlePollMs: 500,
-    dispatcherLeaseDurationMs: 60_000,
-    dispatcherRenewIntervalMs: 20_000,
-    dispatcherWorkerId: "test-worker",
-    executionMaintenanceBatchSize: 100,
-    executionMaintenanceEnabled: true,
-    executionMaintenanceIntervalMs: 5_000,
-    executionMaxAttempts: 3,
-    executionRetryDelayMs: 30_000,
-    claimReadyTimeoutMs: 5_000,
-    kubeNamespace: "unused",
-    opencodeDirectory: "/workspace",
-    opencodePort: 4096,
-    port: 3000,
-    sandboxClaimApiVersion: "v1alpha1",
-  };
-}
+function bindingBody() { return { version: 1, triggerId: "github", profile: { id: "coder", version: 1 }, definition: { schemaVersion: 1, eventTypes: ["issue.opened"], filter: { all: [{ path: "/action", op: "eq", value: "opened" }] }, prompt: { literal: "Handle issue", includeEvent: "data" }, workspace: { type: "empty" } } }; }
+function cloudEvent(type: string, data: object) { return { specversion: "1.0", id: type === "push" ? "evt-2" : "evt-1", source: "https://github.example/hooks", type, data }; }
+function profileDefinition(agent: string) { return { schemaVersion: 1 as const, runtime: { agent, opencodeConfig: { agent: { [agent]: { prompt: "Test" } } }, type: "opencode" as const }, sandbox: { templateName: "opencode" }, permissions: { onRequest: "fail" as const }, timeoutSeconds: 3600 }; }
+function testApp(store: ControlApiStore = new FakeControlStore()) { const app = createOpenApiApp(); mountControlApi(app, testConfig(), store); return app; }
+async function request(app: ReturnType<typeof createOpenApiApp>, method: string, path: string, body?: unknown, headers: Record<string, string> = {}) { const response = await app.request(path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: { authorization: "Bearer test-token", ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers } }); const text = await response.text(); const contentType = response.headers.get("content-type"); return { body: text && contentType?.includes("json") ? JSON.parse(text) as unknown : text || undefined, headers: response.headers, status: response.status }; }
+function testConfig(): Config { return { adminToken: "test-token", dispatcherEnabled: false, dispatcherIdlePollMs: 500, dispatcherLeaseDurationMs: 60_000, dispatcherRenewIntervalMs: 20_000, dispatcherWorkerId: "test-worker", executionMaintenanceBatchSize: 100, executionMaintenanceEnabled: true, executionMaintenanceIntervalMs: 5_000, executionMaxAttempts: 3, executionRetryDelayMs: 30_000, claimReadyTimeoutMs: 5_000, kubeNamespace: "unused", opencodeDirectory: "/workspace", opencodePort: 4096, port: 3000, sandboxClaimApiVersion: "v1alpha1" }; }

@@ -7,7 +7,7 @@
 
 **agentbay is a platform for event-driven asynchronous agents.**
 
-An immutable agent definition is invoked by an event, runs asynchronously in an isolated workspace, and publishes durable results.
+An immutable agent definition is invoked by an event through an enabled immutable binding version, runs asynchronously in an isolated workspace, and publishes durable results.
 
 Agent authors configure agents deeply through native OpenCode configuration: models, providers, prompts, tools, MCP servers, permissions, and runtime behavior. Operators bind those agents to external events such as pull requests, issues, Grafana alerts, schedules, chat messages, queues, and generic webhooks. Agentbay admits and persists those events, plans durable executions, and runs them in isolated Kubernetes workloads at large scale.
 
@@ -48,6 +48,8 @@ Agentbay is not:
 10. **Workspace preparation is deterministic platform work.** Repository checkout, artifact materialization, and credentials are not delegated to prompts.
 11. **Observability is part of the product.** Queue time, provisioning, model use, tool calls, outputs, and delivery are visible per execution.
 12. **Scale is controlled, not accidental.** Queue depth does not translate directly into unbounded Pod creation.
+13. **Execution creation is binding-only.** Connectors and callers admit normalized events; enabled immutable binding versions are the sole mechanism that creates executions. There is no direct execution-submission path.
+14. **Delegation is event-driven.** An agent delegates by using ordinary tools or MCP servers to cause an externally observable effect that a connector normalizes as a new event. Another binding may consume that event; Agentbay does not require a special delegation MCP server or tool.
 
 ## 3. Domain Model
 
@@ -73,23 +75,23 @@ A configured instance of an event connector. It defines the connector type, sour
 
 ### 3.4 Binding
 
-Connects a trigger to an agent profile and defines:
+An immutable versioned connection from a trigger to an exact agent profile version. In V1 it defines:
 
-- Event type and filtering
-- Input transformation or prompt template
-- Workspace materialization
-- Exact profile or version-selection policy
-- Concurrency, deduplication, priority, timeout, and retry policy
-- Capability reductions
-- Result destinations
+- One to 32 exact event-type strings
+- Zero to 16 conjunctive filters over event `data`
+- A literal prompt with `includeEvent` set to `none`, `data`, or `envelope`
+- An exact profile version
+- An empty workspace
 
-Bindings are configuration, not execution history.
+Bindings are configuration, not execution history. A published binding version is immutable and can be disabled. Only enabled versions participate in matching, and each event can create at most one execution for each matching binding version.
 
 ### 3.5 Event
 
 An immutable, normalized input represented with a CloudEvents envelope. Agentbay retains source identity, normalized data, deduplication information, and a reference to the raw source payload when required.
 
 One source delivery may normalize into zero, one, or multiple events. One event may match multiple bindings and therefore produce multiple executions.
+
+Connectors and API callers both enter the execution system at this normalized-event boundary. Neither can create an execution directly.
 
 ### 3.6 Execution
 
@@ -115,89 +117,62 @@ Deliveries are durable records with retry and dead-letter behavior separate from
 
 The ownership and policy boundary for profiles, connections, triggers, bindings, executions, quotas, and costs. Even if the first release is single-tenant, all durable records should carry `tenant_id` so multi-tenancy does not require redesigning identity and scheduling.
 
-## 4. Example Configuration
+## 4. V1 Configuration Example
 
-The eventual API may use JSON, YAML, or a UI. This example illustrates semantics rather than committing to a wire schema.
+The implemented V1 API publishes each resource separately. The following documents show the request bodies; route parameters supply profile and binding IDs.
 
 ```yaml
-kind: AgentProfile
-metadata:
-  name: security-reviewer
-spec:
+# POST /v1/agent-profiles/security-reviewer/versions
+version: 1
+definition:
+  schemaVersion: 1
   runtime:
     type: opencode
-    image: ghcr.io/acme/agent-runtime:v4
     agent: review
     opencodeConfig:
       model: anthropic/claude-sonnet
       agent:
         review:
-          prompt: |
-            Review the supplied change for security and correctness.
-            Report concrete findings with file and line references.
-          tools:
-            write: false
-          permission:
-            bash: ask
-  resources:
-    requests: { cpu: "1", memory: 2Gi }
-    limits: { cpu: "4", memory: 8Gi }
-  timeout: 30m
-  capabilities:
-    connections:
-      - github-production-readonly
-    networkClasses:
-      - source-control
-    workspace:
-      write: true
+          prompt: Review the supplied event for security and correctness.
+  sandbox:
+    templateName: opencode
+    warmPool: none
   permissions:
-    default: deny
-    rules:
-      - operation: read
-        decision: allow
-      - operation: shell
-        decision: approve
+    onRequest: fail
+  timeoutSeconds: 1800
   retention:
-    logs: 30d
-    workspace: 24h
+    sandboxSecondsAfterFinished: 0
 ---
-kind: Binding
-metadata:
-  name: review-new-pull-requests
-spec:
-  trigger:
-    ref: engineering-github
-    eventTypes:
-      - com.github.pull_request.opened
-      - com.github.pull_request.synchronize
-    filter:
-      repositories:
-        - acme/*
-  agent:
-    profile: security-reviewer
-    version: latest
-  input:
-    template: |
-      Review pull request {{ event.data.repository.fullName }}#{{ event.data.number }}.
-      Head revision: {{ event.data.headSha }}.
+# POST /v1/triggers
+id: engineering-github
+type: cloudevents.http
+config:
+  schemaVersion: 1
+---
+# POST /v1/bindings/review-new-pull-requests/versions
+version: 1
+triggerId: engineering-github
+profile:
+  id: security-reviewer
+  version: 1
+definition:
+  schemaVersion: 1
+  eventTypes:
+    - com.github.pull_request.opened
+    - com.github.pull_request.synchronize
+  filter:
+    all:
+      - path: /repository/fullName
+        op: eq
+        value: acme/platform
+  prompt:
+    literal: Review the pull-request event below.
+    includeEvent: data
   workspace:
-    provider: git
-    connection: github-production-readonly
-    repository: "{{ event.data.repository.cloneUrl }}"
-    revision: "{{ event.data.headSha }}"
-  execution:
-    timeout: 30m
-    priority: normal
-    concurrencyKey: "{{ event.data.repository.fullName }}:{{ event.data.number }}"
-    supersede: older
-    retries: 2
-  destinations:
-    - type: github.check
-      connection: github-production
-    - type: github.comment
-      connection: github-production
-      when: failed
+    type: empty
 ```
+
+The profile and binding references are exact versions; V1 has no `latest` selector. Binding prompts are literal, not templates. When `includeEvent` is `data` or `envelope`, Agentbay appends canonical JSON between untrusted-event delimiters. V1 supports only the empty workspace.
 
 ## 5. High-Level Architecture
 
@@ -286,9 +261,11 @@ Admission performs the following transaction boundary:
 
 Connectors must not launch workloads directly.
 
+The execution-creation invariant is strict: a connector or caller submits a normalized event to an enabled trigger, and admission evaluates enabled immutable binding versions. The transaction may persist zero or more executions, one for each matching binding version. No other API, connector, agent tool, or internal caller creates executions.
+
 ### 6.2 Binding matching
 
-The matcher selects enabled bindings by tenant, trigger, event type, and declarative filter. Filters should be deterministic, bounded, and safe to evaluate. A CEL-like expression language is preferable to arbitrary JavaScript.
+The matcher selects enabled binding versions by tenant, trigger, and exact event-type equality, then evaluates every V1 filter clause against event `data`. A filter contains at most 16 conjunctive clauses. Each clause uses an RFC 6901 JSON Pointer and one of `eq` with a JSON primitive, `in` with one to 32 JSON primitives, or `exists` with a boolean. Missing paths and object or array values cannot satisfy `eq` or `in`. This deliberately bounded language is deterministic and does not execute code.
 
 The match result records the binding version used. Later edits do not change already planned work.
 
@@ -308,33 +285,24 @@ An outbox publisher moves committed messages to the durable bus. This prevents a
 
 ### 6.4 Management API
 
-The management API is separate from trigger ingress. Its conceptual resources are:
+The implemented V1 management and ingress surface is:
 
 ```text
-/v1/agent-profiles
-/v1/agent-profiles/:id/versions
-/v1/connections
-/v1/triggers
-/v1/bindings
-/v1/executions
-/v1/executions/:id/events
-/v1/executions/:id/logs
-/v1/executions/:id/artifacts
-/v1/executions/:id/cancel
-/v1/executions/:id/retry
-/v1/destinations
+POST /v1/agent-profiles/:profileID/versions
+GET  /v1/agent-profiles/:profileID/versions/:version
+POST /v1/triggers
+GET  /v1/triggers/:triggerID
+POST /v1/triggers/:triggerID/disable
+POST /v1/bindings/:bindingID/versions
+GET  /v1/bindings/:bindingID/versions/:version
+POST /v1/bindings/:bindingID/versions/:version/disable
+POST /v1/triggers/:triggerID/events
+GET  /v1/executions/:id
 ```
 
-An explicit `POST /v1/executions` invocation API is required. It supports CLIs, CI systems, tests, and services that do not need a dedicated trigger connector.
+`POST /v1/triggers/:triggerID/events` is generic normalized CloudEvent trigger ingress, not a vendor webhook. It requires `Idempotency-Key`, accepts a structured CloudEvents 1.0 JSON envelope as `application/cloudevents+json` or `application/json`, and returns `202 Accepted` with the admitted event, all executions created by matching bindings, and a replay indicator. Zero matches is still an accepted event. Reusing a key for the same normalized request returns the original result as a replay; reusing it for different content returns `409 Conflict`.
 
-Trigger ingress is connector-specific:
-
-```text
-/hooks/github/:triggerID
-/hooks/grafana/:triggerID
-/hooks/chat/:triggerID
-/hooks/generic/:triggerID
-```
+CLIs, CI systems, tests, and services use this same ingress with a configured `cloudevents.http` trigger and enabled binding. `POST /v1/executions` does not exist. Future vendor-specific connectors authenticate and normalize source deliveries, then call the same admission boundary rather than creating executions themselves.
 
 ## 7. Canonical Event Model
 
@@ -372,6 +340,7 @@ Rules for event data:
 - Include source timestamps and ingestion timestamps separately.
 - Never treat an event payload as trusted prompt text. Templates must delimit source data and defend against oversized input.
 - Version connector normalization schemas so bindings can migrate deliberately.
+- V1 binding `eventTypes` are exact strings, not glob or regular-expression patterns. A value containing `*` matches only an event type that literally contains `*`.
 
 ## 8. Connector Framework
 
@@ -408,6 +377,8 @@ Trigger modes are:
 - **Schedule:** Emit events from cron, interval, or calendar definitions.
 
 Connectors share lifecycle, telemetry, retry, rate-limit, and secret-resolution libraries. They may run in the control-plane process initially. They can become independently deployed workers when isolation or scale requires it; microservices are not the starting assumption.
+
+Connector output and caller input converge on the same normalized event admission contract. Connector code never bypasses binding matching.
 
 ### 8.2 Destination contract
 
@@ -598,6 +569,10 @@ OpenCode runs headlessly inside the workload. The execution worker:
 7. Produces a structured result when the session becomes idle.
 
 The platform must tolerate SSE disconnects and worker restarts. Durable execution state, OpenCode session status, and artifact checkpoints determine whether to reconnect, resume, retry, or fail.
+
+Future sandbox templates may include authenticated MCP proxy sidecars that expose standard, policy-bounded tools to OpenCode over localhost. These sidecars provide ordinary tool access to external systems; they are not a privileged execution-creation channel. If an agent uses a standard MCP tool to create an issue, publish a message, enqueue work, or perform another external effect, the corresponding source connector may later normalize that effect into an event. An enabled binding can then create a delegated execution. No Agentbay-specific delegation MCP is required.
+
+This event-producing delegation path is distinct from a **destination**. A delegation effect becomes a new admitted source event and may cause new executions through bindings. A destination consumes an existing execution result for delivery and does not create another execution by itself.
 
 ### 11.4 Warm execution
 
@@ -882,7 +857,8 @@ Later, one global control plane may route to multiple execution clusters. Each c
 ### Phase 1: Generic asynchronous execution
 
 - Immutable, versioned OpenCode agent profiles
-- `POST /v1/executions`
+- Generic normalized CloudEvent trigger ingress with idempotency
+- Immutable binding versions as the sole execution-creation mechanism
 - Generic webhook trigger and destination
 - Postgres execution state machine and append-only transitions
 - Transactional outbox
@@ -894,7 +870,7 @@ Later, one global control plane may route to multiple execution clusters. Each c
 - Cancellation, timeout, retry, leases, and idempotency
 - Basic execution API and observability
 
-**Exit criterion:** An API or generic webhook can reliably invoke a versioned agent asynchronously, survive component restarts, and deliver a durable result.
+**Exit criterion:** An API caller or generic webhook can admit a normalized event that an enabled binding reliably turns into versioned agent work, survive component restarts, and deliver a durable result.
 
 ### Phase 2: GitHub product path
 
@@ -937,7 +913,7 @@ Later, one global control plane may route to multiple execution clusters. Each c
 These decisions should be resolved by implementation evidence rather than hidden assumptions:
 
 1. **Initial durable bus:** NATS JetStream versus the deployment environment's managed queue.
-2. **Filter language:** CEL, JSONPath plus operators, or another bounded declarative language.
+2. **Future filter language:** Whether needs beyond V1's bounded RFC 6901 primitive clauses justify a larger declarative language.
 3. **Profile document format:** API-native JSON only or a first-class YAML authoring and GitOps workflow.
 4. **Execution result schema:** Minimum common structure that remains useful across code, operations, and general agents.
 5. **OpenCode recovery:** Which failures can reconnect to a session versus requiring a new attempt.

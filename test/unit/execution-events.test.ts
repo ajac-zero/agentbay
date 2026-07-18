@@ -1,77 +1,74 @@
 import { describe, expect, it } from "vitest";
-import { isCloudEvent, validateCloudEvent } from "../../src/execution/events.js";
+import { isCloudEvent, normalizeCloudEvent, normalizedCloudEventSchema, validateCloudEvent } from "../../src/execution/events.js";
 
 const validEvent = {
   specversion: "1.0",
-  id: "github-delivery-8d91f1",
-  source: "github://acme/platform",
-  type: "com.github.pull_request.opened",
-  subject: "pull/482",
+  id: "delivery-8d91f1",
+  source: "https://events.example.test/acme",
+  type: "com.example.change.created",
+  subject: "change/482",
   time: "2026-07-17T10:14:00Z",
   datacontenttype: "application/json",
-  dataschema: "https://schemas.example.test/github/pull-request/v1",
-  tenantid: "acme",
-  data: { number: 482 },
+  dataschema: "https://schemas.example.test/change/v1",
+  traceparent: "00-a1b2c3-01",
+  data: { number: 482, labels: ["ready"] },
 } as const;
 
-describe("validateCloudEvent", () => {
-  it("accepts a normalized CloudEvents 1.0 envelope", () => {
-    const result = validateCloudEvent<{ number: number }>(validEvent);
+describe("normalizedCloudEventSchema", () => {
+  it("accepts a strict structured CloudEvents 1.0 JSON envelope", () => {
+    expect(normalizedCloudEventSchema.parse(validEvent)).toEqual({ ...validEvent, time: "2026-07-17T10:14:00.000Z" });
+    const result = validateCloudEvent(validEvent);
     expect(result.valid).toBe(true);
-    if (result.valid) expect(result.event.data?.number).toBe(482);
     expect(isCloudEvent(validEvent)).toBe(true);
   });
 
-  it("accepts URI-reference sources and binary event data", () => {
-    expect(
-      validateCloudEvent({
-        specversion: "1.0",
-        id: "1",
-        source: "/hooks/test",
-        type: "dev.agentbay.test",
-        data_base64: "aGVsbG8=",
-      }).valid,
-    ).toBe(true);
+  it("defaults JSON content type and canonicalizes timestamps", () => {
+    const normalized = normalizeCloudEvent({ ...validEvent, datacontenttype: undefined, time: "2026-07-17T12:14:00+02:00" });
+    expect(normalized.datacontenttype).toBe("application/json");
+    expect(normalized.time).toBe("2026-07-17T10:14:00.000Z");
   });
 
-  it("reports all missing or invalid required attributes", () => {
-    const result = validateCloudEvent({ specversion: "0.3", id: "", source: 42 });
+  it("rejects non-JSON content types for V1", () => {
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, datacontenttype: "text/plain" }).success).toBe(false);
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, datacontenttype: "application/json; charset=utf-8" }).success).toBe(false);
+  });
+
+  it("requires JSON data and rejects data_base64", () => {
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, data: undefined }).success).toBe(false);
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, data_base64: "aGVsbG8=" }).success).toBe(false);
+  });
+
+  it("rejects non-JSON data and malformed attributes", () => {
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, data: { bad: undefined } }).success).toBe(false);
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, specversion: "0.3" }).success).toBe(false);
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, source: "has whitespace" }).success).toBe(false);
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, time: "2026-07-17 10:14:00" }).success).toBe(false);
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, dataschema: "/relative" }).success).toBe(false);
+  });
+
+  it("bounds main attributes and JSON data by UTF-8 bytes", () => {
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, type: "x".repeat(256) }).success).toBe(false);
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, data: "x".repeat(128 * 1024) }).success).toBe(false);
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, data: "x".repeat(41 * 1024) }).success).toBe(false);
+  });
+
+  it("bounds and validates extension names, count, and scalar values", () => {
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, TenantID: "acme" }).success).toBe(false);
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, metadata: { unsafe: true } }).success).toBe(false);
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, extra: "x".repeat(1_025) }).success).toBe(false);
+    const extensions = Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`x${index}`, index]));
+    expect(normalizedCloudEventSchema.safeParse({ ...validEvent, ...extensions }).success).toBe(false);
+  });
+
+  it.each(["tenantid", "agentbay"])("explicitly rejects the reserved %s extension", (name) => {
+    const result = validateCloudEvent({ ...validEvent, [name]: "caller-supplied" });
     expect(result.valid).toBe(false);
-    if (!result.valid) expect(result.issues.map((issue) => issue.attribute)).toEqual(["specversion", "id", "source", "type"]);
+    if (!result.valid) expect(result.issues).toContainEqual({ attribute: name, message: `${name} is a reserved extension` });
   });
 
-  it("rejects malformed optional context attributes", () => {
-    const result = validateCloudEvent({
-      ...validEvent,
-      time: "2026-07-17 10:14:00",
-      dataschema: "/relative/schema",
-      datacontenttype: "",
-    });
+  it("returns stable validation issue paths", () => {
+    const result = validateCloudEvent(null);
     expect(result.valid).toBe(false);
-    if (!result.valid) {
-      expect(result.issues.map((issue) => issue.attribute)).toEqual(["time", "datacontenttype", "dataschema"]);
-    }
-  });
-
-  it("rejects simultaneous data encodings and malformed base64", () => {
-    const both = validateCloudEvent({ ...validEvent, data_base64: "aGVsbG8=" });
-    expect(both.valid).toBe(false);
-    const malformed = validateCloudEvent({ ...validEvent, data: undefined, data_base64: "not base64" });
-    expect(malformed.valid).toBe(false);
-  });
-
-  it("enforces CloudEvents extension name and scalar value rules", () => {
-    const result = validateCloudEvent({
-      ...validEvent,
-      TenantID: "acme",
-      metadata: { unsafe: true },
-    });
-    expect(result.valid).toBe(false);
-    if (!result.valid) expect(result.issues.map((issue) => issue.attribute)).toEqual(["TenantID", "metadata"]);
-  });
-
-  it("rejects non-object inputs", () => {
-    expect(validateCloudEvent(null)).toEqual({ valid: false, issues: [{ attribute: "$", message: "must be an object" }] });
-    expect(isCloudEvent([])).toBe(false);
+    if (!result.valid) expect(result.issues[0]?.attribute).toBe("$");
   });
 });

@@ -18,8 +18,7 @@ import type {
   TransitionLeasedExecutionResult,
 } from "../dispatch/types.js";
 import type {
-  CreateExecutionCommand,
-  CreateExecutionResult,
+  EventAdmissionStore,
   ExecutionStore,
   PublishProfileVersionCommand,
 } from "../execution/store.js";
@@ -34,14 +33,20 @@ import {
   type AgentProfileVersion,
   type Execution,
 } from "../execution/types.js";
+import { planExecution, type AdmissionCommand, type AdmissionResult } from "../control/admission.js";
+import { bindingDefinitionSchema, publishedBindingVersionSchema, BindingVersionAlreadyExistsError, type BindingStore, type PublishedBindingVersion } from "../control/binding.js";
+import { triggerSchema, TriggerAlreadyExistsError, TriggerNotFoundError, type Trigger, type TriggerStore } from "../control/trigger.js";
 import { agentProfileDefinitionSchema } from "../execution/api-schema.js";
+import { hashCanonicalJson, type JsonValue } from "../json.js";
 import * as schema from "./schema.js";
 import {
   agentProfileVersions,
+  bindingVersions,
   events,
   executions,
   executionTransitions,
   outboxEntries,
+  triggers,
 } from "./schema.js";
 
 const { Pool } = pg;
@@ -88,7 +93,7 @@ export async function migratePostgresRuntimeStore(options: PostgresRuntimeStoreO
   }
 }
 
-export class PostgresRuntimeStore implements ExecutionStore, OutboxStore, DispatcherExecutionStore {
+export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, BindingStore, EventAdmissionStore, OutboxStore, DispatcherExecutionStore {
   constructor(
     private readonly pool: pg.Pool,
     private readonly db: RuntimeDatabase,
@@ -198,104 +203,198 @@ export class PostgresRuntimeStore implements ExecutionStore, OutboxStore, Dispat
     return rows[0] ? profileVersionFromRow(rows[0]) : undefined;
   }
 
-  async createExecution(command: CreateExecutionCommand): Promise<CreateExecutionResult> {
-    return this.db.transaction(async (tx) => {
-      const existingRows = await tx
-        .select()
-        .from(executions)
-        .where(and(eq(executions.tenantID, command.tenantId), eq(executions.idempotencyKey, command.idempotencyKey)))
-        .limit(1);
-      const existing = existingRows[0];
-      if (existing) {
-        if (existing.requestHash !== command.requestHash) throw new IdempotencyConflictError();
-        return { execution: await executionFromRow(tx, existing), replayed: true };
-      }
+  async createTrigger(value: Trigger): Promise<Trigger> {
+    const trigger = triggerSchema.parse(value);
+    const result = await this.pool.query<TriggerSqlRow>(`INSERT INTO agentbay_triggers
+      (id, tenant_id, type, config, enabled, created_at, disabled_at)
+      VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7) ON CONFLICT (id) DO NOTHING RETURNING *`,
+    [trigger.id, trigger.tenantId, trigger.type, JSON.stringify(trigger.config), trigger.enabled, new Date(trigger.createdAt),
+      trigger.disabledAt ? new Date(trigger.disabledAt) : null]);
+    if (!result.rows[0]) throw new TriggerAlreadyExistsError(trigger.id);
+    return triggerFromRow(result.rows[0]);
+  }
 
-      const profileRows = await tx
-        .select()
-        .from(agentProfileVersions)
-        .where(and(
-          eq(agentProfileVersions.tenantID, command.tenantId),
-          eq(agentProfileVersions.profileID, command.profile.id),
-          eq(agentProfileVersions.version, command.profile.version),
-        ))
-        .limit(1);
-      const profile = profileRows[0];
-      if (!profile) throw new ProfileVersionNotFoundError(command.profile.id, command.profile.version);
-      const timeoutSeconds = profileTimeoutSeconds(profile.definition);
+  async getTrigger(tenantId: string, triggerId: string): Promise<Trigger | undefined> {
+    const result = await this.pool.query<TriggerSqlRow>("SELECT * FROM agentbay_triggers WHERE tenant_id = $1 AND id = $2", [tenantId, triggerId]);
+    return result.rows[0] ? triggerFromRow(result.rows[0]) : undefined;
+  }
 
-      const createdAt = new Date(command.createdAt);
-      await tx.insert(events).values({
-        data: command.event.data,
-        eventID: command.event.id,
-        eventTime: new Date(command.event.time),
-        id: command.event.id,
-        source: command.event.source,
-        tenantID: command.tenantId,
-        type: command.event.type,
+  async disableTrigger(tenantId: string, triggerId: string, disabledAt: string): Promise<Trigger | undefined> {
+    const result = await this.pool.query<TriggerSqlRow>(`UPDATE agentbay_triggers
+      SET enabled = false, disabled_at = COALESCE(disabled_at, $3)
+      WHERE tenant_id = $1 AND id = $2 RETURNING *`, [tenantId, triggerId, new Date(disabledAt)]);
+    return result.rows[0] ? triggerFromRow(result.rows[0]) : undefined;
+  }
+
+  async publishBindingVersion(value: PublishedBindingVersion): Promise<PublishedBindingVersion> {
+    const binding = publishedBindingVersionSchema.parse(value);
+    const definition = binding.definition;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [triggerControlLock(binding.tenantId, binding.triggerId)]);
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`binding:${binding.tenantId}:${binding.bindingId}`]);
+      const trigger = await client.query("SELECT id FROM agentbay_triggers WHERE tenant_id = $1 AND id = $2", [binding.tenantId, binding.triggerId]);
+      if (trigger.rowCount !== 1) throw new TriggerNotFoundError(binding.triggerId);
+      const profile = await client.query<{ id: string }>(
+        "SELECT id FROM agentbay_agent_profile_versions WHERE tenant_id = $1 AND profile_id = $2 AND version = $3",
+        [binding.tenantId, binding.profile.id, binding.profile.version],
+      );
+      if (!profile.rows[0]) throw new ProfileVersionNotFoundError(binding.profile.id, binding.profile.version);
+      const publishedAt = new Date(binding.createdAt);
+      await client.query(
+        "UPDATE agentbay_binding_versions SET enabled = false, disabled_at = $3 WHERE tenant_id = $1 AND binding_id = $2 AND enabled",
+        [binding.tenantId, binding.bindingId, publishedAt],
+      );
+      const inserted = await client.query<{ id: string }>({
+        text: `INSERT INTO agentbay_binding_versions
+          (id, tenant_id, binding_id, version, trigger_id, profile_version_id, definition, event_types, enabled, disabled_at, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, true, NULL, $9)
+          ON CONFLICT (tenant_id, binding_id, version) DO NOTHING RETURNING id`,
+        values: [binding.id, binding.tenantId, binding.bindingId, binding.version, binding.triggerId, profile.rows[0].id,
+          JSON.stringify({
+            filter: definition.filter,
+            prompt: definition.prompt,
+            schemaVersion: definition.schemaVersion,
+            workspace: definition.workspace,
+          }), definition.eventTypes, publishedAt],
       });
+      if (inserted.rowCount !== 1) throw new BindingVersionAlreadyExistsError(binding.bindingId, binding.version);
+      const persisted = await client.query<BindingRow>(BINDING_SELECT + `
+        WHERE binding.tenant_id = $1 AND binding.id = $2`, [binding.tenantId, inserted.rows[0]!.id]);
+      await client.query("COMMIT");
+      return bindingFromRow(persisted.rows[0]!);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 
-      const inserted = await tx
-        .insert(executions)
-        .values({
-          createdAt,
-          eventID: command.event.id,
-          id: command.id,
-          idempotencyKey: command.idempotencyKey,
-          input: command.input,
-          profileVersionID: profile.id,
-          requestHash: command.requestHash,
-          resolvedPolicy: profile.definition,
-          state: "QUEUED",
-          tenantID: command.tenantId,
-          timeoutAt: new Date(createdAt.getTime() + timeoutSeconds * 1_000),
-          updatedAt: createdAt,
-          workspace: command.workspace,
-        })
-        .onConflictDoNothing({ target: [executions.tenantID, executions.idempotencyKey] })
-        .returning();
+  async getBindingVersion(tenantId: string, bindingId: string, version: number): Promise<PublishedBindingVersion | undefined> {
+    const result = await this.pool.query<BindingRow>(BINDING_SELECT + `
+      WHERE binding.tenant_id = $1 AND binding.binding_id = $2 AND binding.version = $3`, [tenantId, bindingId, version]);
+    return result.rows[0] ? bindingFromRow(result.rows[0]) : undefined;
+  }
 
-      const execution = inserted[0];
-      if (!execution) {
-        await tx.delete(events).where(eq(events.id, command.event.id));
-        const winnerRows = await tx
-          .select()
-          .from(executions)
-          .where(and(eq(executions.tenantID, command.tenantId), eq(executions.idempotencyKey, command.idempotencyKey)))
-          .limit(1);
-        const winner = winnerRows[0];
-        if (!winner) throw new Error("Idempotent execution winner was not found");
-        if (winner.requestHash !== command.requestHash) throw new IdempotencyConflictError();
-        return { execution: await executionFromRow(tx, winner), replayed: true };
+  async disableBindingVersion(tenantId: string, bindingId: string, version: number, disabledAt: string): Promise<PublishedBindingVersion | undefined> {
+    const result = await this.pool.query<{ id: string }>(`UPDATE agentbay_binding_versions
+      SET enabled = false, disabled_at = COALESCE(disabled_at, $4)
+      WHERE tenant_id = $1 AND binding_id = $2 AND version = $3 RETURNING id`, [tenantId, bindingId, version, new Date(disabledAt)]);
+    return result.rows[0] ? this.getBindingVersion(tenantId, bindingId, version) : undefined;
+  }
+
+  async listBindingCandidates(tenantId: string, triggerId: string, eventType: string): Promise<readonly PublishedBindingVersion[]> {
+    const result = await this.pool.query<BindingRow>(BINDING_SELECT + `
+      WHERE binding.tenant_id = $1 AND binding.trigger_id = $2 AND binding.enabled AND $3 = ANY(binding.event_types)
+      ORDER BY binding.binding_id, binding.version, binding.id`, [tenantId, triggerId, eventType]);
+    return result.rows.map(bindingFromRow);
+  }
+
+  async admitEvent(command: AdmissionCommand): Promise<AdmissionResult> {
+    const admissionHash = hashCanonicalJson({ schemaVersion: 1, triggerId: command.triggerId, event: command.event } as JsonValue);
+    if (command.admissionHash !== admissionHash) throw new IdempotencyConflictError();
+
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [triggerControlLock(command.tenantId, command.triggerId)]);
+      const lockKeys = [
+        `event:${command.tenantId}:${command.triggerId}:${command.event.source}:${command.event.id}`,
+        `dedup:${command.tenantId}:${command.triggerId}:${command.sourceDeduplicationKey}`,
+      ].sort();
+      for (const key of lockKeys) await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [key]);
+
+      const existing = await client.query<EventRow>(`SELECT * FROM agentbay_events WHERE tenant_id = $1 AND trigger_id = $2
+        AND ((source = $3 AND event_id = $4) OR source_deduplication_key = $5) FOR UPDATE`,
+      [command.tenantId, command.triggerId, command.event.source, command.event.id, command.sourceDeduplicationKey]);
+      if (existing.rows.length > 0) {
+        if (existing.rows.length !== 1 || existing.rows[0]!.admission_hash !== command.admissionHash) throw new IdempotencyConflictError();
+        const persisted = await loadEventExecutions(client, command.tenantId, existing.rows[0]!.id);
+        await client.query("COMMIT");
+        return { event: eventSummary(existing.rows[0]!), executions: persisted, replayed: true };
       }
 
-      await tx.insert(executionTransitions).values([
-        transition(command, 1, null, "RECEIVED", "execution request received"),
-        transition(command, 2, "RECEIVED", "PLANNED", "profile version resolved"),
-        transition(command, 3, "PLANNED", "QUEUED", "execution queued"),
+      const trigger = await client.query("SELECT id FROM agentbay_triggers WHERE tenant_id = $1 AND id = $2 AND enabled FOR SHARE",
+        [command.tenantId, command.triggerId]);
+       if (trigger.rowCount !== 1) throw new TriggerNotFoundError(command.triggerId);
+      const candidates = await client.query<BindingProfileRow>(`SELECT binding.*, profile.definition AS profile_definition,
+          profile.profile_id, profile.version AS profile_version
+        FROM agentbay_binding_versions AS binding
+        JOIN agentbay_agent_profile_versions AS profile ON profile.id = binding.profile_version_id AND profile.tenant_id = binding.tenant_id
+        WHERE binding.tenant_id = $1 AND binding.trigger_id = $2 AND binding.enabled AND $3 = ANY(binding.event_types)
+        ORDER BY binding.binding_id, binding.version, binding.id FOR SHARE OF binding, profile`,
+      [command.tenantId, command.triggerId, command.event.type]);
+      const extensions = eventExtensions(command.event);
+      await client.query(`INSERT INTO agentbay_events
+        (id, tenant_id, trigger_id, event_id, source, source_deduplication_key, admission_hash, type, subject, event_time,
+         data_content_type, data_schema, data, extensions, raw_payload_ref, ingested_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15,$16)`, [
+        command.internalEventId, command.tenantId, command.triggerId, command.event.id, command.event.source,
+        command.sourceDeduplicationKey, command.admissionHash, command.event.type, command.event.subject ?? null,
+        command.event.time ? new Date(command.event.time) : null, command.event.datacontenttype ?? "application/json",
+        command.event.dataschema ?? null, JSON.stringify(command.event.data), JSON.stringify(extensions), null, new Date(command.admittedAt),
       ]);
-      await tx.insert(outboxEntries).values({
-        aggregateID: command.id,
-        aggregateType: "execution",
-        availableAt: createdAt,
-        createdAt,
-        id: randomUUID(),
-        payload: { schemaVersion: 1, tenantId: command.tenantId, executionId: command.id },
-        tenantID: command.tenantId,
-        topic: "execution.requested",
-      });
 
-      return { execution: executionRecord(execution, profile), replayed: false };
-    });
+      const created: Execution[] = [];
+      for (const row of candidates.rows) {
+        const binding = bindingFromRow(row);
+        const planned = planExecution(binding, command);
+        if (!planned) continue;
+        const now = new Date(command.admittedAt);
+        const executionId = randomUUID();
+        const execution = await client.query<ExecutionJoinedRow>({
+          text: `INSERT INTO agentbay_executions
+            (id, tenant_id, event_id, binding_version_id, profile_version_id, idempotency_key, request_hash, input,
+             workspace, resolved_policy, state, timeout_at, created_at, updated_at, available_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,'QUEUED',$11,$12,$12,$12)
+            RETURNING *, $13::text AS binding_id, $14::integer AS binding_version,
+              $15::text AS profile_id, $16::integer AS profile_version`,
+          values: [executionId, command.tenantId, command.internalEventId, row.id, row.profile_version_id,
+            planned.id, command.admissionHash, JSON.stringify(planned.input), JSON.stringify(planned.workspace),
+            JSON.stringify(row.profile_definition), new Date(now.getTime() + profileTimeoutSeconds(row.profile_definition) * 1_000), now,
+            row.binding_id, row.version, planned.profile.id, planned.profile.version],
+        });
+        await client.query(`INSERT INTO agentbay_execution_transitions
+          (id, tenant_id, execution_id, sequence, from_state, to_state, actor, reason, created_at) VALUES
+          ($1,$2,$3,1,NULL,'RECEIVED','event-admission','event admitted',$6),
+          ($4,$2,$3,2,'RECEIVED','PLANNED','event-admission','binding and profile resolved',$6),
+          ($5,$2,$3,3,'PLANNED','QUEUED','event-admission','execution queued',$6)`,
+        [randomUUID(), command.tenantId, executionId, randomUUID(), randomUUID(), now]);
+        await client.query(`INSERT INTO agentbay_outbox
+          (id, tenant_id, topic, aggregate_type, aggregate_id, payload, available_at, created_at)
+          VALUES ($1,$2,'execution.requested','execution',$3,$4::jsonb,$5,$5)`,
+        [randomUUID(), command.tenantId, executionId, JSON.stringify({ schemaVersion: 1, tenantId: command.tenantId, executionId }), now]);
+        created.push(executionRecordFromJoined(execution.rows[0]!));
+      }
+      await client.query("COMMIT");
+      return {
+        event: {
+          admissionHash: command.admissionHash,
+          admittedAt: command.admittedAt,
+          eventId: command.event.id,
+          id: command.internalEventId,
+          source: command.event.source,
+          sourceDeduplicationKey: command.sourceDeduplicationKey,
+          tenantId: command.tenantId,
+          triggerId: command.triggerId,
+          type: command.event.type,
+        },
+        executions: created,
+        replayed: false,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async getExecution(tenantId: string, executionId: string): Promise<Execution | undefined> {
-    const rows = await this.db
-      .select()
-      .from(executions)
-      .where(and(eq(executions.tenantID, tenantId), eq(executions.id, executionId)))
-      .limit(1);
-    return rows[0] ? executionFromRow(this.db, rows[0]) : undefined;
+    const result = await this.pool.query<ExecutionJoinedRow>(EXECUTION_SELECT + " WHERE execution.tenant_id = $1 AND execution.id = $2", [tenantId, executionId]);
+    return result.rows[0] ? executionRecordFromJoined(result.rows[0]) : undefined;
   }
 
   async claimNextQueuedExecution(command: { leaseOwner: string; leaseDurationMs: number }): Promise<ClaimedExecution | undefined> {
@@ -735,6 +834,60 @@ export class PostgresRuntimeStore implements ExecutionStore, OutboxStore, Dispat
 
 type AgentProfileVersionRow = InferSelectModel<typeof agentProfileVersions>;
 type ExecutionRow = InferSelectModel<typeof executions>;
+type BindingRow = {
+  binding_id: string;
+  created_at: Date;
+  definition: unknown;
+  disabled_at: Date | null;
+  enabled: boolean;
+  event_types: string[];
+  id: string;
+  profile_version_id: string;
+  profile_id?: string;
+  profile_version?: number;
+  tenant_id: string;
+  trigger_id: string;
+  version: number;
+};
+
+type BindingProfileRow = BindingRow & { profile_definition: Record<string, unknown> };
+type EventRow = {
+  admission_hash: string;
+  event_id: string;
+  id: string;
+  ingested_at: Date;
+  source: string;
+  source_deduplication_key: string;
+  tenant_id: string;
+  trigger_id: string;
+  type: string;
+};
+
+type TriggerSqlRow = {
+  config: unknown;
+  created_at: Date;
+  disabled_at: Date | null;
+  enabled: boolean;
+  id: string;
+  tenant_id: string;
+  type: string;
+};
+
+type ExecutionJoinedRow = {
+  binding_id: string;
+  binding_version: number;
+  created_at: Date;
+  event_id: string;
+  id: string;
+  input: unknown;
+  profile_id: string;
+  profile_version: number;
+  result: unknown;
+  state: string;
+  tenant_id: string;
+  updated_at: Date;
+  workspace: unknown;
+};
 
 type ClaimedExecutionRow = {
   attempt: number;
@@ -856,56 +1009,98 @@ function profileVersionFromRow(row: AgentProfileVersionRow): AgentProfileVersion
   };
 }
 
-async function executionFromRow(
-  db: Pick<RuntimeDatabase, "select">,
-  row: ExecutionRow,
-): Promise<Execution> {
-  const profileRows = await db
-    .select()
-    .from(agentProfileVersions)
-    .where(and(
-      eq(agentProfileVersions.id, row.profileVersionID),
-      eq(agentProfileVersions.tenantID, row.tenantID),
-    ))
-    .limit(1);
-  const profile = profileRows[0];
-  if (!profile) throw new Error(`Execution ${row.id} references missing profile version ${row.profileVersionID}`);
-  return executionRecord(row, profile);
+function triggerFromRow(row: TriggerSqlRow): Trigger {
+  return triggerSchema.parse({
+    config: row.config,
+    createdAt: row.created_at.toISOString(),
+    disabledAt: row.disabled_at?.toISOString() ?? null,
+    enabled: row.enabled,
+    id: row.id,
+    tenantId: row.tenant_id,
+    type: row.type,
+  });
 }
 
-function executionRecord(row: ExecutionRow, profile: AgentProfileVersionRow): Execution {
+function bindingFromRow(row: BindingRow): PublishedBindingVersion {
+  const persisted = row.definition as Record<string, unknown>;
+  const definition = bindingDefinitionSchema.parse({
+    filter: persisted.filter,
+    prompt: persisted.prompt,
+    schemaVersion: persisted.schemaVersion,
+    workspace: persisted.workspace,
+    eventTypes: row.event_types,
+  });
   return {
-    createdAt: row.createdAt.toISOString(),
-    eventId: row.eventID,
+    bindingId: row.binding_id,
+    createdAt: row.created_at.toISOString(),
+    definition,
+    disabledAt: row.disabled_at?.toISOString() ?? null,
+    enabled: row.enabled,
+    id: row.id,
+    profile: {
+      id: row.profile_id!,
+      version: row.profile_version!,
+    },
+    tenantId: row.tenant_id,
+    triggerId: row.trigger_id,
+    version: row.version,
+  };
+}
+
+const BINDING_SELECT = `SELECT binding.*, profile.profile_id, profile.version AS profile_version
+  FROM agentbay_binding_versions AS binding
+  JOIN agentbay_agent_profile_versions AS profile
+    ON profile.id = binding.profile_version_id AND profile.tenant_id = binding.tenant_id`;
+
+function eventSummary(row: EventRow): AdmissionResult["event"] {
+  return {
+    admissionHash: row.admission_hash,
+    admittedAt: row.ingested_at.toISOString(),
+    eventId: row.event_id,
+    id: row.id,
+    source: row.source,
+    sourceDeduplicationKey: row.source_deduplication_key,
+    tenantId: row.tenant_id,
+    triggerId: row.trigger_id,
+    type: row.type,
+  };
+}
+
+const EXECUTION_SELECT = `SELECT execution.*, binding.binding_id, binding.version AS binding_version,
+  profile.profile_id, profile.version AS profile_version
+  FROM agentbay_executions AS execution
+  JOIN agentbay_binding_versions AS binding ON binding.id = execution.binding_version_id AND binding.tenant_id = execution.tenant_id
+  JOIN agentbay_agent_profile_versions AS profile ON profile.id = execution.profile_version_id AND profile.tenant_id = execution.tenant_id`;
+
+async function loadEventExecutions(client: pg.PoolClient, tenantId: string, eventId: string): Promise<Execution[]> {
+  const result = await client.query<ExecutionJoinedRow>(EXECUTION_SELECT + ` WHERE execution.tenant_id = $1 AND execution.event_id = $2
+    ORDER BY binding.binding_id, binding.version, execution.id`, [tenantId, eventId]);
+  return result.rows.map(executionRecordFromJoined);
+}
+
+function executionRecordFromJoined(row: ExecutionJoinedRow): Execution {
+  return {
+    binding: { id: row.binding_id, version: row.binding_version },
+    createdAt: row.created_at.toISOString(),
+    eventId: row.event_id,
     id: row.id,
     input: row.input as Execution["input"],
-    profile: { id: profile.profileID, version: profile.version },
+    profile: { id: row.profile_id, version: row.profile_version },
     result: (row.result as Execution["result"]) ?? null,
     state: row.state as Execution["state"],
-    tenantId: row.tenantID,
-    updatedAt: row.updatedAt.toISOString(),
+    tenantId: row.tenant_id,
+    updatedAt: row.updated_at.toISOString(),
     workspace: row.workspace as Execution["workspace"],
   };
 }
 
-function transition(
-  command: CreateExecutionCommand,
-  sequence: number,
-  fromState: Execution["state"] | null,
-  toState: Execution["state"],
-  reason: string,
-) {
-  return {
-    actor: "api",
-    createdAt: new Date(command.createdAt),
-    executionID: command.id,
-    fromState,
-    id: randomUUID(),
-    reason,
-    sequence,
-    tenantID: command.tenantId,
-    toState,
-  };
+function eventExtensions(event: AdmissionCommand["event"]): Record<string, unknown> {
+  const core = new Set(["specversion", "id", "source", "type", "subject", "time", "datacontenttype", "dataschema", "data"]);
+  return Object.fromEntries(Object.entries(event).filter(([key]) => !core.has(key)));
+}
+
+function triggerControlLock(tenantId: string, triggerId: string): string {
+  return `control-trigger:${tenantId}:${triggerId}`;
 }
 
 function profileTimeoutSeconds(definition: Record<string, unknown>): number {

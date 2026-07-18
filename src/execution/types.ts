@@ -29,6 +29,11 @@ export type AgentProfileRef = {
   version: number;
 };
 
+export type BindingRef = {
+  id: string;
+  version: number;
+};
+
 export type AgentProfileVersion = {
   id: string;
   tenantId: string;
@@ -47,6 +52,7 @@ export type EmptyWorkspace = {
 };
 
 export type Execution = {
+  binding: BindingRef;
   id: string;
   tenantId: string;
   state: ExecutionState;

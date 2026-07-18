@@ -1,5 +1,7 @@
 import { sql } from "drizzle-orm";
+import type { BindingDefinition, TriggerConfig, TriggerDefinition } from "../control/types.js";
 import {
+  boolean,
   check,
   foreignKey,
   index,
@@ -12,6 +14,7 @@ import {
   unique,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+
 export const agentProfileVersions = pgTable("agentbay_agent_profile_versions", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   definition: jsonb("definition").$type<import("../execution/types.js").AgentProfileDefinition>().notNull(),
@@ -26,9 +29,62 @@ export const agentProfileVersions = pgTable("agentbay_agent_profile_versions", {
   index("agentbay_agent_profile_versions_tenant_profile_idx").on(table.tenantID, table.profileID),
 ]);
 
+export const triggers = pgTable("agentbay_triggers", {
+  config: jsonb("config").$type<TriggerConfig>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  disabledAt: timestamp("disabled_at", { withTimezone: true }),
+  enabled: boolean("enabled").notNull().default(true),
+  id: text("id").primaryKey(),
+  tenantID: text("tenant_id").notNull(),
+  type: text("type").$type<TriggerDefinition["type"]>().notNull(),
+}, (table) => [
+  check("agentbay_triggers_enabled_lifecycle_consistent", sql`${table.enabled} = (${table.disabledAt} IS NULL)`),
+  unique("agentbay_triggers_id_tenant_unique").on(table.id, table.tenantID),
+  index("agentbay_triggers_tenant_type_enabled_idx").on(table.tenantID, table.type, table.enabled),
+]);
+
+export const bindingVersions = pgTable("agentbay_binding_versions", {
+  bindingID: text("binding_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  definition: jsonb("definition").$type<Pick<BindingDefinition, "schemaVersion" | "filter" | "prompt" | "workspace">>().notNull(),
+  disabledAt: timestamp("disabled_at", { withTimezone: true }),
+  enabled: boolean("enabled").notNull().default(true),
+  eventTypes: text("event_types").array().notNull(),
+  id: text("id").primaryKey(),
+  profileVersionID: text("profile_version_id").notNull(),
+  tenantID: text("tenant_id").notNull(),
+  triggerID: text("trigger_id").notNull(),
+  version: integer("version").notNull(),
+}, (table) => [
+  check("agentbay_binding_versions_version_positive", sql`${table.version} > 0`),
+  check("agentbay_binding_versions_event_types_nonempty", sql`cardinality(${table.eventTypes}) > 0`),
+  check(
+    "agentbay_binding_versions_enabled_lifecycle_consistent",
+    sql`${table.enabled} = (${table.disabledAt} IS NULL)`,
+  ),
+  foreignKey({
+    columns: [table.triggerID, table.tenantID],
+    foreignColumns: [triggers.id, triggers.tenantID],
+    name: "agentbay_binding_versions_trigger_tenant_fk",
+  }),
+  foreignKey({
+    columns: [table.profileVersionID, table.tenantID],
+    foreignColumns: [agentProfileVersions.id, agentProfileVersions.tenantID],
+    name: "agentbay_binding_versions_profile_version_tenant_fk",
+  }),
+  uniqueIndex("agentbay_binding_versions_binding_version_unique").on(table.tenantID, table.bindingID, table.version),
+  uniqueIndex("agentbay_binding_versions_one_enabled_unique")
+    .on(table.tenantID, table.bindingID)
+    .where(sql`${table.enabled}`),
+  unique("agentbay_binding_versions_id_tenant_unique").on(table.id, table.tenantID),
+  index("agentbay_binding_versions_match_idx").on(table.tenantID, table.triggerID, table.enabled),
+]);
+
 export const events = pgTable("agentbay_events", {
+  admissionHash: text("admission_hash").notNull(),
   data: jsonb("data").$type<unknown>().notNull(),
   dataContentType: text("data_content_type").notNull().default("application/json"),
+  dataSchema: text("data_schema"),
   eventID: text("event_id").notNull(),
   eventTime: timestamp("event_time", { withTimezone: true }),
   extensions: jsonb("extensions").$type<Record<string, unknown>>().notNull().default({}),
@@ -37,22 +93,30 @@ export const events = pgTable("agentbay_events", {
   normalizationVersion: integer("normalization_version").notNull().default(1),
   rawPayloadRef: text("raw_payload_ref"),
   source: text("source").notNull(),
-  sourceDeduplicationKey: text("source_deduplication_key"),
+  sourceDeduplicationKey: text("source_deduplication_key").notNull(),
   specVersion: text("spec_version").notNull().default("1.0"),
   subject: text("subject"),
   tenantID: text("tenant_id").notNull(),
+  triggerID: text("trigger_id").notNull(),
   type: text("type").notNull(),
 }, (table) => [
   check("agentbay_events_normalization_version_positive", sql`${table.normalizationVersion} > 0`),
   check("agentbay_events_spec_version_1", sql`${table.specVersion} = '1.0'`),
-  uniqueIndex("agentbay_events_source_event_unique").on(table.tenantID, table.source, table.eventID),
-  uniqueIndex("agentbay_events_source_dedup_unique").on(table.tenantID, table.source, table.sourceDeduplicationKey),
+  foreignKey({
+    columns: [table.triggerID, table.tenantID],
+    foreignColumns: [triggers.id, triggers.tenantID],
+    name: "agentbay_events_trigger_tenant_fk",
+  }),
+  uniqueIndex("agentbay_events_trigger_source_event_unique").on(table.tenantID, table.triggerID, table.source, table.eventID),
+  uniqueIndex("agentbay_events_trigger_source_dedup_unique").on(table.tenantID, table.triggerID, table.sourceDeduplicationKey),
   unique("agentbay_events_id_tenant_unique").on(table.id, table.tenantID),
+  index("agentbay_events_tenant_trigger_ingested_idx").on(table.tenantID, table.triggerID, table.ingestedAt),
   index("agentbay_events_tenant_type_ingested_idx").on(table.tenantID, table.type, table.ingestedAt),
 ]);
 
 export const executions = pgTable("agentbay_executions", {
   availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+  bindingVersionID: text("binding_version_id").notNull(),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   eventID: text("event_id").notNull(),
@@ -71,6 +135,11 @@ export const executions = pgTable("agentbay_executions", {
 }, (table) => [
   check("agentbay_executions_state_valid", sql`${table.state} IN ('RECEIVED', 'PLANNED', 'QUEUED', 'PROVISIONING', 'RUNNING', 'SUCCEEDED', 'DELIVERING', 'COMPLETED', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'CANCEL_REQUESTED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')`),
   foreignKey({
+    columns: [table.bindingVersionID, table.tenantID],
+    foreignColumns: [bindingVersions.id, bindingVersions.tenantID],
+    name: "agentbay_executions_binding_version_tenant_fk",
+  }),
+  foreignKey({
     columns: [table.eventID, table.tenantID],
     foreignColumns: [events.id, events.tenantID],
     name: "agentbay_executions_event_tenant_fk",
@@ -81,7 +150,10 @@ export const executions = pgTable("agentbay_executions", {
     name: "agentbay_executions_profile_version_tenant_fk",
   }),
   uniqueIndex("agentbay_executions_tenant_idempotency_unique").on(table.tenantID, table.idempotencyKey),
+  uniqueIndex("agentbay_executions_tenant_event_binding_unique").on(table.tenantID, table.eventID, table.bindingVersionID),
   unique("agentbay_executions_id_tenant_unique").on(table.id, table.tenantID),
+  index("agentbay_executions_tenant_binding_created_idx").on(table.tenantID, table.bindingVersionID, table.createdAt),
+  index("agentbay_executions_tenant_event_idx").on(table.tenantID, table.eventID),
   index("agentbay_executions_tenant_state_created_idx").on(table.tenantID, table.state, table.createdAt),
   index("agentbay_executions_state_timeout_idx").on(table.state, table.timeoutAt),
   index("agentbay_executions_dispatch_idx")

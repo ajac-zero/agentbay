@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Config } from "../../src/config.js";
 import { createOpenApiApp, mountHealthRoute, mountOpenApiDocs } from "../../src/openapi.js";
-import { mountExecutionApi } from "../../src/execution/api.js";
-import type { ExecutionStore } from "../../src/execution/store.js";
+import { mountControlApi, type ControlApiStore } from "../../src/control/api.js";
 
 describe("OpenAPI docs", () => {
   it("serves the OpenAPI document", async () => {
@@ -18,8 +17,14 @@ describe("OpenAPI docs", () => {
       "/healthz",
       "/v1/agent-profiles/{profileID}/versions",
       "/v1/agent-profiles/{profileID}/versions/{version}",
-      "/v1/executions",
       "/v1/executions/{id}",
+      "/v1/triggers",
+      "/v1/triggers/{triggerID}",
+      "/v1/triggers/{triggerID}/disable",
+      "/v1/bindings/{bindingID}/versions",
+      "/v1/bindings/{bindingID}/versions/{version}",
+      "/v1/bindings/{bindingID}/versions/{version}/disable",
+      "/v1/triggers/{triggerID}/events",
     ]);
   });
 
@@ -46,20 +51,25 @@ describe("OpenAPI docs", () => {
 function createTestApp() {
   const app = createOpenApiApp();
   mountHealthRoute(app);
-  mountExecutionApi(app, testConfig(), emptyExecutionStore());
+  mountControlApi(app, testConfig(), emptyControlStore());
   return app;
 }
 
-function emptyExecutionStore(): ExecutionStore {
+function emptyControlStore(): ControlApiStore {
   return {
     publishProfileVersion: async () => {
       throw new Error("not used");
     },
     getProfileVersion: async () => undefined,
-    createExecution: async () => {
-      throw new Error("not used");
-    },
     getExecution: async () => undefined,
+    createTrigger: async () => { throw new Error("not used"); },
+    getTrigger: async () => undefined,
+    disableTrigger: async () => undefined,
+    publishBindingVersion: async () => { throw new Error("not used"); },
+    getBindingVersion: async () => undefined,
+    disableBindingVersion: async () => undefined,
+    listBindingCandidates: async () => [],
+    admitEvent: async () => { throw new Error("not used"); },
   };
 }
 

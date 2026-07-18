@@ -1,49 +1,16 @@
+import { z } from "zod";
+import { canonicalJson, jsonValueSchema, type JsonValue } from "../json.js";
+
 export type CloudEventAttributeValue = boolean | number | string;
+export const TENANT_ID_EXTENSION = "tenantid";
+export const AGENTBAY_EXTENSION = "agentbay";
 
-export type CloudEvent<TData = unknown> = {
-  specversion: "1.0";
-  id: string;
-  source: string;
-  type: string;
-  subject?: string;
-  time?: string;
-  datacontenttype?: string;
-  dataschema?: string;
-  data?: TData;
-  data_base64?: string;
-  [attribute: string]: unknown;
-};
-
-export type CloudEventValidationIssue = {
-  attribute: string;
-  message: string;
-};
-
-export type CloudEventValidationResult<TData = unknown> =
-  | { valid: true; event: CloudEvent<TData> }
-  | { valid: false; issues: CloudEventValidationIssue[] };
-
-const coreAttributes = new Set([
-  "specversion",
-  "id",
-  "source",
-  "type",
-  "subject",
-  "time",
-  "datacontenttype",
-  "dataschema",
-  "data",
-  "data_base64",
-]);
-const extensionNamePattern = /^[a-z0-9]{1,20}$/;
-const timestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
-const base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isUriReference(value: string): boolean {
+const MAX_DATA_BYTES = 128 * 1024;
+const MAX_CANONICAL_EVENT_BYTES = 40 * 1024;
+const MAX_EXTENSIONS = 32;
+const byteLengthAtMost = (limit: number) => (value: string) => Buffer.byteLength(value, "utf8") <= limit;
+const boundedString = (limit: number) => z.string().min(1).refine(byteLengthAtMost(limit), `must be at most ${limit} bytes`);
+const uriReferenceSchema = boundedString(2_048).refine((value) => {
   if (/\s|[\u0000-\u001f\u007f]/.test(value)) return false;
   try {
     new URL(value, "https://agentbay.invalid");
@@ -51,83 +18,87 @@ function isUriReference(value: string): boolean {
   } catch {
     return false;
   }
-}
+}, "must be a URI-reference");
+const absoluteUriSchema = boundedString(2_048).url();
+const extensionValueSchema = z.union([boundedString(1_024), z.boolean(), z.number().int().safe()]);
+const coreAttributes = new Set(["specversion", "id", "source", "type", "subject", "time", "datacontenttype", "dataschema", "data"]);
+const reservedExtensions = new Set([TENANT_ID_EXTENSION, AGENTBAY_EXTENSION]);
+const extensionNamePattern = /^[a-z0-9]{1,20}$/;
 
-function isAbsoluteUri(value: string): boolean {
-  if (/\s|[\u0000-\u001f\u007f]/.test(value)) return false;
-  try {
-    return new URL(value).protocol.length > 1;
-  } catch {
-    return false;
-  }
-}
-
-export function validateCloudEvent<TData = unknown>(value: unknown): CloudEventValidationResult<TData> {
-  if (!isRecord(value)) {
-    return { valid: false, issues: [{ attribute: "$", message: "must be an object" }] };
-  }
-
-  const issues: CloudEventValidationIssue[] = [];
-  const requireString = (attribute: "id" | "source" | "type") => {
-    if (typeof value[attribute] !== "string" || value[attribute].length === 0) {
-      issues.push({ attribute, message: "must be a non-empty string" });
+export const normalizedCloudEventSchema = z
+  .object({
+    specversion: z.literal("1.0"),
+    id: boundedString(1_024),
+    source: uriReferenceSchema,
+    type: boundedString(255),
+    subject: z.string().refine(byteLengthAtMost(1_024), "must be at most 1024 bytes").optional(),
+    time: z.iso.datetime({ offset: true }).overwrite((value) => new Date(value).toISOString()).optional(),
+    datacontenttype: z.literal("application/json").default("application/json"),
+    dataschema: absoluteUriSchema.optional(),
+    data: jsonValueSchema.refine(
+      (value) => Buffer.byteLength(JSON.stringify(value), "utf8") <= MAX_DATA_BYTES,
+      `must be at most ${MAX_DATA_BYTES} bytes`,
+    ),
+  })
+  .catchall(z.unknown())
+  .superRefine((event, context) => {
+    if (Object.hasOwn(event, "data_base64")) {
+      context.addIssue({ code: "custom", path: ["data_base64"], message: "data_base64 is not supported" });
     }
+    const extensions = Object.entries(event).filter(([name]) => !coreAttributes.has(name));
+    if (extensions.length > MAX_EXTENSIONS) {
+      context.addIssue({ code: "custom", message: `must have at most ${MAX_EXTENSIONS} extensions` });
+    }
+    for (const [name, value] of extensions) {
+      if (reservedExtensions.has(name)) {
+        context.addIssue({ code: "custom", path: [name], message: `${name} is a reserved extension` });
+      } else if (!extensionNamePattern.test(name)) {
+        context.addIssue({ code: "custom", path: [name], message: "extension names must be 1-20 lowercase alphanumeric characters" });
+      } else if (!extensionValueSchema.safeParse(value).success) {
+        context.addIssue({ code: "custom", path: [name], message: "extension values must be bounded strings, booleans, or safe integers" });
+      }
+    }
+    if (Buffer.byteLength(canonicalJson(event as JsonValue), "utf8") > MAX_CANONICAL_EVENT_BYTES) {
+      context.addIssue({ code: "custom", message: `canonical event must be at most ${MAX_CANONICAL_EVENT_BYTES} bytes` });
+    }
+  }) as z.ZodType<NormalizedCloudEvent>;
+
+export type NormalizedCloudEvent = {
+  specversion: "1.0";
+  id: string;
+  source: string;
+  type: string;
+  subject?: string;
+  time?: string;
+  datacontenttype: string;
+  dataschema?: string;
+  data: JsonValue;
+  [attribute: string]: JsonValue | undefined;
+};
+
+export type CloudEvent<TData extends JsonValue = JsonValue> = Omit<NormalizedCloudEvent, "data"> & { data: TData };
+
+export type CloudEventValidationIssue = {
+  attribute: string;
+  message: string;
+};
+
+export type CloudEventValidationResult<TData extends JsonValue = JsonValue> =
+  | { valid: true; event: CloudEvent<TData> }
+  | { valid: false; issues: CloudEventValidationIssue[] };
+export function validateCloudEvent<TData extends JsonValue = JsonValue>(value: unknown): CloudEventValidationResult<TData> {
+  const result = normalizedCloudEventSchema.safeParse(value);
+  if (result.success) return { valid: true, event: result.data as unknown as CloudEvent<TData> };
+  return {
+    valid: false,
+    issues: result.error.issues.map((issue) => ({ attribute: issue.path.join(".") || "$", message: issue.message })),
   };
-
-  if (value.specversion !== "1.0") {
-    issues.push({ attribute: "specversion", message: 'must equal "1.0"' });
-  }
-  requireString("id");
-  requireString("source");
-  requireString("type");
-
-  if (typeof value.source === "string" && value.source.length > 0 && !isUriReference(value.source)) {
-    issues.push({ attribute: "source", message: "must be a URI-reference" });
-  }
-  if (value.subject !== undefined && typeof value.subject !== "string") {
-    issues.push({ attribute: "subject", message: "must be a string" });
-  }
-  if (value.time !== undefined) {
-    if (
-      typeof value.time !== "string" ||
-      !timestampPattern.test(value.time) ||
-      !Number.isFinite(Date.parse(value.time))
-    ) {
-      issues.push({ attribute: "time", message: "must be an RFC 3339 timestamp" });
-    }
-  }
-  if (value.datacontenttype !== undefined && (typeof value.datacontenttype !== "string" || value.datacontenttype.length === 0)) {
-    issues.push({ attribute: "datacontenttype", message: "must be a non-empty string" });
-  }
-  if (value.dataschema !== undefined && (typeof value.dataschema !== "string" || !isAbsoluteUri(value.dataschema))) {
-    issues.push({ attribute: "dataschema", message: "must be an absolute URI" });
-  }
-  if (value.data !== undefined && value.data_base64 !== undefined) {
-    issues.push({ attribute: "data", message: "cannot be used with data_base64" });
-  }
-  if (value.data_base64 !== undefined && (typeof value.data_base64 !== "string" || !base64Pattern.test(value.data_base64))) {
-    issues.push({ attribute: "data_base64", message: "must be a base64 string" });
-  }
-
-  for (const [attribute, attributeValue] of Object.entries(value)) {
-    if (coreAttributes.has(attribute)) continue;
-    if (!extensionNamePattern.test(attribute)) {
-      issues.push({ attribute, message: "extension names must be 1-20 lowercase alphanumeric characters" });
-      continue;
-    }
-    if (
-      typeof attributeValue !== "string" &&
-      typeof attributeValue !== "boolean" &&
-      !(typeof attributeValue === "number" && Number.isSafeInteger(attributeValue))
-    ) {
-      issues.push({ attribute, message: "extension values must be strings, booleans, or safe integers" });
-    }
-  }
-
-  if (issues.length > 0) return { valid: false, issues };
-  return { valid: true, event: value as CloudEvent<TData> };
 }
 
-export function isCloudEvent(value: unknown): value is CloudEvent {
+export function normalizeCloudEvent<TData extends JsonValue = JsonValue>(value: unknown): CloudEvent<TData> {
+  return normalizedCloudEventSchema.parse(value) as unknown as CloudEvent<TData>;
+}
+
+export function isCloudEvent(value: unknown): value is NormalizedCloudEvent {
   return validateCloudEvent(value).valid;
 }

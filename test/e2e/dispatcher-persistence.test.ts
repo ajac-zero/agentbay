@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { hashCanonicalJson } from "../../src/json.js";
 import { createPostgresRuntimeStore, type PostgresRuntimeStore } from "../../src/runtime/postgres.js";
 
 const { Pool } = pg;
@@ -11,6 +12,7 @@ describe("dispatcher persistence", () => {
   let store: PostgresRuntimeStore;
   let pool: pg.Pool;
   let profileId: string;
+  let eventSequence = 0;
 
   beforeAll(async () => {
     postgres = await startPostgres();
@@ -36,6 +38,20 @@ describe("dispatcher persistence", () => {
       profileId,
       tenantId: "default",
       version: 1,
+    });
+    const createdAt = new Date().toISOString();
+    await store.createTrigger({
+      config: { schemaVersion: 1 }, createdAt, disabledAt: null, enabled: true,
+      id: "dispatcher-test", tenantId: "default", type: "cloudevents.http",
+    });
+    await store.publishBindingVersion({
+      bindingId: "dispatcher", createdAt,
+      definition: {
+        eventTypes: ["dev.agentbay.execution.submitted"], filter: { all: [] },
+        prompt: { includeEvent: "none", literal: "Run" }, schemaVersion: 1, workspace: { type: "empty" },
+      },
+      disabledAt: null, enabled: true, id: "dispatcher-v1", profile: { id: profileId, version: 1 },
+      tenantId: "default", triggerId: "dispatcher-test", version: 1,
     });
   });
 
@@ -369,25 +385,28 @@ describe("dispatcher persistence", () => {
 
   async function queueExecution(): Promise<string> {
     const createdAt = new Date().toISOString();
-    const id = randomUUID();
-    await store.createExecution({
-      createdAt,
-      event: {
-        data: { profile: { id: profileId, version: 1 }, input: { text: "Run" }, workspace: { type: "empty" } },
-        id: randomUUID(),
-        source: "/test/dispatcher",
-        time: createdAt,
-        type: "dev.agentbay.execution.submitted",
-      },
-      id,
-      idempotencyKey: randomUUID(),
-      input: { text: "Run" },
-      profile: { id: profileId, version: 1 },
-      requestHash: randomUUID(),
+    const sequence = ++eventSequence;
+    const event = {
+      data: { sequence },
+      datacontenttype: "application/json",
+      id: `event-${sequence}`,
+      source: "/test/dispatcher",
+      specversion: "1.0" as const,
+      time: createdAt,
+      type: "dev.agentbay.execution.submitted",
+    };
+    const result = await store.admitEvent({
+      admittedAt: createdAt,
+      admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId: "dispatcher-test", event }),
+      event,
+      internalEventId: randomUUID(),
+      sourceDeduplicationKey: `delivery-${sequence}`,
       tenantId: "default",
-      workspace: { type: "empty" },
+      triggerId: "dispatcher-test",
     });
-    return id;
+    const execution = result.executions[0];
+    if (!execution) throw new Error("Expected event to queue an execution");
+    return execution.id;
   }
 
   async function executionSnapshot(executionId: string) {

@@ -1,33 +1,39 @@
 # agentbay
 
 agentbay is a platform for durable, asynchronous agent execution. Clients
-publish immutable OpenCode agent profile versions and submit idempotent
-executions. PostgreSQL records execution state and transactional outbox work;
-isolated Kubernetes sandboxes provide the execution substrate.
+publish immutable OpenCode agent profile and binding versions, then admit
+idempotent normalized events. Enabled immutable binding versions are the sole
+execution-creation mechanism. PostgreSQL records event and execution state and
+transactional outbox work; isolated Kubernetes sandboxes provide the execution
+substrate.
 
 The product architecture and roadmap are defined in [`DESIGN.md`](DESIGN.md).
 
 ## Current product surface
 
-The current server provides the execution API foundation:
+The current server provides the binding-driven execution foundation:
 
 - Publish and retrieve immutable agent profile versions.
-- Submit idempotent asynchronous executions and retrieve their state.
+- Create, retrieve, and disable normalized CloudEvents HTTP triggers.
+- Publish, retrieve, and disable immutable binding versions.
+- Admit idempotent normalized CloudEvents and retrieve resulting execution state.
 - Atomically persist normalized events, executions, lifecycle transitions, and
   transactional outbox messages.
 - Promote due retries and recover expired execution leases through an embedded
   maintenance loop.
 - Expose generated OpenAPI 3.1 documentation.
 
-Execution submission returns `202 Accepted`; it does not wait for or directly
-create a Kubernetes workload. The dispatcher and result collector described in
-Each orchestrator replica runs an embedded fenced dispatcher by default. It
-claims queued executions and provisions one SandboxClaim per attempt. A durable
-external event bus and destination delivery remain separate future components.
+Event ingress returns `202 Accepted`; it does not wait for or directly create a
+Kubernetes workload. Each orchestrator replica runs an embedded fenced
+dispatcher by default. It claims queued executions and provisions one
+SandboxClaim per attempt. A durable external event bus and destination delivery
+remain separate future components.
 
-The current migration history is an execution-only baseline. Existing databases
-created with the pre-execution prototype must be recreated before upgrading;
-there is intentionally no compatibility migration because no user data exists.
+The current migration history is a pre-production baseline covering profiles,
+triggers, binding versions, admitted events, executions, and dispatch state.
+Databases created with the pre-execution prototype must be recreated before
+upgrading; there is intentionally no compatibility migration because no user
+data exists.
 
 ## Local development
 
@@ -63,9 +69,9 @@ cannot mount the Docker socket, run with `TESTCONTAINERS_RYUK_DISABLED=true`.
 
 | Variable | Default | Purpose |
 |---|---:|---|
-| `PORT` | `3000` | HTTP port for health, documentation, and the execution API. |
+| `PORT` | `3000` | HTTP port for health, documentation, management, event ingress, and execution reads. |
 | `AGENTBAY_ADMIN_TOKEN` | unset | Bearer token required by `/v1/*`. The historical variable name is retained temporarily; there is no runtime-admin API. |
-| `AGENTBAY_DATABASE_URL` / `DATABASE_URL` | required unless host vars are set | PostgreSQL URL for profile, execution, transition, lease, and outbox state. |
+| `AGENTBAY_DATABASE_URL` / `DATABASE_URL` | required unless host vars are set | PostgreSQL URL for profile, trigger, binding, event, execution, transition, lease, and outbox state. |
 | `AGENTBAY_DATABASE_HOST` | unset | Alternative to URL configuration; pair with database user, password, and name. |
 | `AGENTBAY_DATABASE_PORT` | `5432` | PostgreSQL port with host-based configuration. |
 | `AGENTBAY_DATABASE_USER` | unset | PostgreSQL user with host-based configuration. |
@@ -98,7 +104,7 @@ pnpm build
 pnpm db:migrate
 ```
 
-## Execution API
+## HTTP API
 
 Health and generated documentation are public:
 
@@ -108,20 +114,66 @@ GET /docs
 GET /openapi.json
 ```
 
-The execution routes require `Authorization: Bearer <AGENTBAY_ADMIN_TOKEN>`:
+All `/v1/*` routes require `Authorization: Bearer <AGENTBAY_ADMIN_TOKEN>`:
 
 ```text
 POST /v1/agent-profiles/:profileID/versions
 GET  /v1/agent-profiles/:profileID/versions/:version
-POST /v1/executions
+POST /v1/triggers
+GET  /v1/triggers/:triggerID
+POST /v1/triggers/:triggerID/disable
+POST /v1/bindings/:bindingID/versions
+GET  /v1/bindings/:bindingID/versions/:version
+POST /v1/bindings/:bindingID/versions/:version/disable
+POST /v1/triggers/:triggerID/events
 GET  /v1/executions/:id
 ```
 
-Publish an exact, immutable profile version before submitting an execution.
-`POST /v1/executions` requires an `Idempotency-Key` header and a profile ID and
-version. Reusing the key with the same request returns the existing execution;
-reusing it with different input is a conflict. The generated OpenAPI document
-contains the authoritative request and response schemas.
+Publish an exact profile version, create a `cloudevents.http` trigger, and
+publish an enabled binding version before admitting an event. The binding names
+one to 32 exact event types, applies up to 16 conjunctive filters to event
+`data`, selects an exact profile version, supplies a literal prompt, and uses an
+empty workspace. Filters use RFC 6901 JSON Pointers with `eq`, `in`, or `exists`;
+comparison values are JSON primitives. The prompt's `includeEvent` is `none`,
+`data`, or `envelope`. It does not perform template expansion.
+
+For example, a V1 binding-version request body is:
+
+```json
+{
+  "version": 1,
+  "triggerId": "github",
+  "profile": { "id": "coder", "version": 1 },
+  "definition": {
+    "schemaVersion": 1,
+    "eventTypes": ["issue.opened"],
+    "filter": {
+      "all": [{ "path": "/action", "op": "eq", "value": "opened" }]
+    },
+    "prompt": { "literal": "Handle this issue.", "includeEvent": "data" },
+    "workspace": { "type": "empty" }
+  }
+}
+```
+
+Callers, connectors, the CLI, and tests all invoke agents through generic
+normalized CloudEvent trigger ingress. `POST /v1/triggers/:triggerID/events`
+requires `Idempotency-Key` and a structured CloudEvents 1.0 JSON envelope and
+returns `202 Accepted`. Its response contains the admitted event, zero or more
+executions created by matching enabled binding versions, and `replayed`. Reusing
+the key with the same normalized request returns the original result; reusing it
+with different content returns `409 Conflict`. There is no
+`POST /v1/executions` route.
+
+An agent delegates by using ordinary tools or MCP servers to cause an external
+effect that a connector later normalizes into another event. Bindings consume
+that event exactly like any other; no special Agentbay delegation MCP is
+required. Future MCP sidecars provide standard policy-bounded tool access.
+Result destinations are separate: they deliver an existing execution's result
+and are not an execution-creation mechanism.
+
+The generated OpenAPI document contains the authoritative request and response
+schemas.
 
 The API currently assigns records to the `default` tenant. Tenant-aware
 authentication and authorization remain roadmap work.

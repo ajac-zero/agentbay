@@ -34,6 +34,10 @@ export function executionIdempotencyKey(bindingId: string, source: string, event
   return createIdempotencyKey("execution", bindingId, source, eventId);
 }
 
+export function bindingExecutionIdempotencyKey(bindingVersionId: string, internalEventId: string): string {
+  return createIdempotencyKey("binding-execution", bindingVersionId, internalEventId);
+}
+
 export function transitionIdempotencyKey(executionId: string, transitionId: string): string {
   return createIdempotencyKey("transition", executionId, transitionId);
 }
