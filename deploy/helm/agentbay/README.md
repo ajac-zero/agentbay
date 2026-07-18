@@ -41,6 +41,8 @@ GET  /docs
 GET  /openapi.json
 POST /v1/agent-profiles/:profileID/versions
 GET  /v1/agent-profiles/:profileID/versions/:version
+POST /v1/connections
+GET  /v1/connections/:connectionID
 POST /v1/triggers/:triggerID/events
 GET  /v1/executions/:id
 POST /hooks/github/:triggerID
@@ -151,6 +153,11 @@ is enabled, the chart installs a namespaced Role and RoleBinding for
 SandboxClaim access. `claims.apiVersion` defaults to `v1alpha1`; use `v1beta1`
 only when the installed CRDs serve it.
 
+Neither the orchestrator nor reconciler Role grants access to Kubernetes
+Secrets. Agentbay resolves non-secret connection metadata and writes
+authorization/runtime configuration to claims; it does not read sidecar Secret
+volumes or Secret API objects.
+
 The separate reconciler CronJob lists agentbay-managed SandboxClaims and deletes
 claims beyond their shutdown time plus `reconciler.graceMinutes`. Its service
 account and RBAC are independently configurable under `reconciler.*`.
@@ -208,6 +215,48 @@ materialization inputs to the init container. Git-backed workspaces require a
 cold sandbox: do not configure a `SandboxWarmPool` for templates used by Git
 executions. A warm Pod has already run its init containers before claim-specific
 environment variables are injected.
+
+Generic connections use the same cold-sandbox rule. Profiles map records to
+template-owned sidecars with `connections: [{id, sidecar}]`. Agentbay fails the
+attempt if a record cannot be resolved or the named sidecar is not in the exact
+template, and injects only the non-secret canonical envelope, for example
+`{"refs":["github-production"],"schemaVersion":1,"tenantId":"default"}`,
+as `AGENTBAY_CONNECTIONS` on that sidecar. Sidecar images, commands, and
+credential volumes are operator-owned template configuration, not profile input.
+
+The following compatibility example references a placeholder Secret that the
+operator must create and manage separately. It intentionally creates no Secret,
+contains no credential value, and mounts the volume only in `github-api`, never
+in OpenCode or the workspace materializer:
+
+```yaml
+sandboxTemplates:
+  enabled: true
+  templates:
+    - name: opencode-with-github
+      image:
+        repository: ghcr.io/your-org/opencode-sandbox
+        tag: v1.2.3
+      workspace:
+        type: emptyDir
+      sidecars:
+        - name: github-api
+          image: ghcr.io/your-org/github-api-sidecar:v1.2.3
+          volumeMounts:
+            - name: github-api-credentials
+              mountPath: /var/run/agentbay/credentials
+              readOnly: true
+      extraVolumes:
+        - name: github-api-credentials
+          secret:
+            secretName: placeholder-operator-managed-connection-secret
+```
+
+Use a narrowly scoped identity and restrictive egress because the sidecar is
+trusted with every mounted credential and request sent to it. Rotate the Secret
+and replace cold sandboxes; revoke upstream access before deleting the
+connection and terminating affected sandboxes. A future credential broker can
+issue short-lived credentials in place of this static fallback.
 
 By default, the materializer uses the template's `image.repository`, `tag`, and
 `pullPolicy`. If it is published as a separate image, override any of those

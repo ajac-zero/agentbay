@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ConnectionNotFoundError } from "../connection/index.js";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import {
@@ -56,7 +57,7 @@ async function handle(context: Context, run: () => Promise<Response>): Promise<R
   try {
     return await run();
   } catch (error) {
-    if (error instanceof ProfileVersionNotFoundError || error instanceof ExecutionNotFoundError) {
+    if (error instanceof ProfileVersionNotFoundError || error instanceof ExecutionNotFoundError || error instanceof ConnectionNotFoundError) {
       return context.json({ error: error.message }, 404);
     }
     if (error instanceof ProfileVersionAlreadyExistsError) {

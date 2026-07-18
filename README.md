@@ -120,6 +120,8 @@ Management routes and normalized event ingress require `Authorization: Bearer
 ```text
 POST /v1/agent-profiles/:profileID/versions
 GET  /v1/agent-profiles/:profileID/versions/:version
+POST /v1/connections
+GET  /v1/connections/:connectionID
 POST /v1/triggers
 GET  /v1/triggers/:triggerID
 POST /v1/triggers/:triggerID/disable
@@ -142,6 +144,31 @@ one to 32 exact event types, applies up to 16 conjunctive filters to event
 an empty or Git workspace. Filters use RFC 6901 JSON Pointers with `eq`, `in`, or `exists`;
 comparison values are JSON primitives. The prompt's `includeEvent` is `none`,
 `data`, or `envelope`. It does not perform template expansion.
+
+Connections are generic, tenant-owned metadata records created with `POST
+/v1/connections` and read with `GET /v1/connections/:connectionID`; the generated
+OpenAPI document defines their request and response schemas. They contain no raw
+credential; the create body is `{"id":"github-production","type":"github"}`.
+A profile grants connections by mapping each connection ID to a
+sidecar that must already be owned by its immutable sandbox template:
+
+```json
+"connections": [{ "id": "github-production", "sidecar": "github-api" }]
+```
+
+At dispatch, Agentbay resolves the records and injects one canonical, non-secret
+`AGENTBAY_CONNECTIONS` JSON envelope into each selected sidecar. The envelope
+contains only that sidecar's sorted connection IDs:
+
+```json
+{"refs":["github-production"],"schemaVersion":1,"tenantId":"default"}
+```
+
+Resolution is fail closed: a missing connection or invalid mapping prevents
+profile publication, and a sidecar name absent from the selected template makes
+the controller reject the attempt rather than redirecting access. Connection-enabled profiles
+use cold sandboxes (`warmPool: none`) so the template-owned sidecars, mounts, and
+claim-specific authorization/runtime configuration are applied together.
 
 For example, a V1 binding-version request body is:
 
@@ -263,6 +290,19 @@ Git clone credentials separate.
 
 The optional Helm AI gateway authorization path lets sandbox workloads use
 short-lived Kubernetes identity instead of receiving model-provider keys.
+
+For static connection credentials, operators may put a Secret volume on the
+template-owned connection sidecar only. Do not mount that volume into OpenCode,
+the workspace materializer, or Agentbay. Agentbay reads connection metadata, not
+Secret values, and its chart RBAC intentionally grants no `secrets` access.
+Rotate by updating the operator-managed Secret and starting new cold sandboxes;
+revoke by disabling/deleting the external credential before terminating affected
+sandboxes. Connection records are create/read-only in V1 and do not provide online
+revocation. A sidecar is inside the sandbox trust boundary:
+it can observe requests sent to it and misuse every credential it mounts, so use
+one narrowly scoped identity per purpose and account for the resulting blast
+radius. A future broker can replace static mounts with short-lived,
+audience-bound credentials without changing the profile-to-sidecar contract.
 
 ## Deployment
 

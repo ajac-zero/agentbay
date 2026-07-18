@@ -3,6 +3,7 @@ import { OpenAPIHono, type Hook } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { Config } from "../config.js";
+import { ConnectionAlreadyExistsError, ConnectionNotFoundError, type Connection, type ConnectionStore } from "../connection/index.js";
 import { registerExecutionApi } from "../execution/api.js";
 import { normalizedCloudEventSchema } from "../execution/events.js";
 import { sourceDeliveryIdempotencyKey } from "../execution/idempotency.js";
@@ -14,10 +15,12 @@ import { BindingVersionAlreadyExistsError, BindingVersionNotFoundError, type Bin
 import { TriggerAlreadyExistsError, TriggerNotFoundError, type TriggerStore } from "./trigger.js";
 import {
   admitEventRoute,
+  createConnectionRoute,
   createTriggerRoute,
   disableBindingVersionRoute,
   disableTriggerRoute,
   getBindingVersionRoute,
+  getConnectionRoute,
   getTriggerRoute,
   publishBindingVersionRoute,
 } from "./api-schema.js";
@@ -26,7 +29,7 @@ const TENANT_ID = "default";
 const MAX_BODY_BYTES = 128 * 1024;
 const WORKSPACE_RESOLUTION_MESSAGE = "Workspace could not be resolved from event data";
 const GITHUB_WEBHOOK_SECRET_UNAVAILABLE_MESSAGE = "GitHub webhook secret unavailable";
-export type ControlApiStore = ExecutionStore & TriggerStore & BindingStore & EventAdmissionStore;
+export type ControlApiStore = ExecutionStore & TriggerStore & BindingStore & EventAdmissionStore & ConnectionStore;
 
 export function mountControlApi(
   app: OpenAPIHono<any>,
@@ -45,6 +48,24 @@ export function mountControlApi(
   });
 
   registerExecutionApi(api, store);
+
+  api.openapi(createConnectionRoute, async (context) => handle(context, async () => {
+    const body = context.req.valid("json");
+    const connection = await store.createConnection({
+      id: randomUUID(),
+      tenantId: TENANT_ID,
+      connection: body,
+      createdAt: new Date().toISOString(),
+    });
+    return context.json(publicConnection(connection), 201);
+  }) as never);
+
+  api.openapi(getConnectionRoute, async (context) => handle(context, async () => {
+    const { connectionID } = context.req.valid("param");
+    const connection = await store.getConnection(TENANT_ID, connectionID);
+    if (!connection) throw new ConnectionNotFoundError(connectionID);
+    return context.json(publicConnection(connection), 200);
+  }) as never);
 
   api.openapi(createTriggerRoute, async (context) => handle(context, async () => {
     const body = context.req.valid("json");
@@ -123,11 +144,15 @@ async function handle(context: Context, run: () => Promise<Response>): Promise<R
   try {
     return await run();
   } catch (error) {
-    if (error instanceof TriggerNotFoundError || error instanceof BindingVersionNotFoundError || error instanceof ProfileVersionNotFoundError) return context.json({ error: error.message }, 404);
-    if (error instanceof TriggerAlreadyExistsError || error instanceof BindingVersionAlreadyExistsError || error instanceof IdempotencyConflictError) return context.json({ error: error.message }, 409);
+    if (error instanceof TriggerNotFoundError || error instanceof BindingVersionNotFoundError || error instanceof ProfileVersionNotFoundError || error instanceof ConnectionNotFoundError) return context.json({ error: error.message }, 404);
+    if (error instanceof TriggerAlreadyExistsError || error instanceof BindingVersionAlreadyExistsError || error instanceof IdempotencyConflictError || error instanceof ConnectionAlreadyExistsError) return context.json({ error: error.message }, 409);
     if (error instanceof WorkspaceResolutionError) return context.json({ error: WORKSPACE_RESOLUTION_MESSAGE }, 422);
     return context.json({ error: "Internal server error" }, 500);
   }
+}
+
+function publicConnection(value: Connection) {
+  return { id: value.connection.id, tenantId: value.tenantId, type: value.connection.type, createdAt: value.createdAt };
 }
 
 const validationHook: Hook<unknown, any, any, any> = (result, context) => {

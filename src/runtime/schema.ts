@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import type { Connection } from "../connection/index.js";
 import type { BindingDefinition, TriggerConfig, TriggerDefinition } from "../control/types.js";
 import {
   boolean,
@@ -27,6 +28,42 @@ export const agentProfileVersions = pgTable("agentbay_agent_profile_versions", {
   uniqueIndex("agentbay_agent_profile_versions_profile_version_unique").on(table.tenantID, table.profileID, table.version),
   unique("agentbay_agent_profile_versions_id_tenant_unique").on(table.id, table.tenantID),
   index("agentbay_agent_profile_versions_tenant_profile_idx").on(table.tenantID, table.profileID),
+]);
+
+export const connections = pgTable("agentbay_connections", {
+  connectionID: text("connection_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  id: text("id").primaryKey(),
+  tenantID: text("tenant_id").notNull(),
+  type: text("type").$type<Connection["connection"]["type"]>().notNull(),
+}, (table) => [
+  unique("agentbay_connections_id_tenant_unique").on(table.id, table.tenantID),
+  uniqueIndex("agentbay_connections_tenant_connection_unique").on(table.tenantID, table.connectionID),
+  index("agentbay_connections_tenant_type_idx").on(table.tenantID, table.type),
+]);
+
+export const agentProfileVersionConnections = pgTable("agentbay_agent_profile_version_connections", {
+  connectionID: text("connection_id").notNull(),
+  ordinal: integer("ordinal").notNull(),
+  profileVersionID: text("profile_version_id").notNull(),
+  sidecar: text("sidecar").notNull(),
+  tenantID: text("tenant_id").notNull(),
+}, (table) => [
+  check("agentbay_agent_profile_version_connections_ordinal_nonnegative", sql`${table.ordinal} >= 0`),
+  foreignKey({
+    columns: [table.profileVersionID, table.tenantID],
+    foreignColumns: [agentProfileVersions.id, agentProfileVersions.tenantID],
+    name: "agentbay_agent_profile_version_connections_profile_tenant_fk",
+  }),
+  foreignKey({
+    columns: [table.connectionID, table.tenantID],
+    foreignColumns: [connections.id, connections.tenantID],
+    name: "agentbay_agent_profile_version_connections_connection_tenant_fk",
+  }),
+  uniqueIndex("agentbay_agent_profile_version_connections_ordinal_unique")
+    .on(table.tenantID, table.profileVersionID, table.ordinal),
+  uniqueIndex("agentbay_agent_profile_version_connections_connection_unique")
+    .on(table.tenantID, table.profileVersionID, table.connectionID),
 ]);
 
 export const triggers = pgTable("agentbay_triggers", {

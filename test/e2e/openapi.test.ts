@@ -19,6 +19,8 @@ describe("OpenAPI docs", () => {
       "/v1/agent-profiles/{profileID}/versions",
       "/v1/agent-profiles/{profileID}/versions/{version}",
       "/v1/executions/{id}",
+      "/v1/connections",
+      "/v1/connections/{connectionID}",
       "/v1/triggers",
       "/v1/triggers/{triggerID}",
       "/v1/triggers/{triggerID}/disable",
@@ -97,6 +99,8 @@ function createTestApp() {
 
 function emptyControlStore(): ControlApiStore {
   return {
+    createConnection: async () => { throw new Error("not used"); },
+    getConnection: async () => undefined,
     publishProfileVersion: async () => {
       throw new Error("not used");
     },

@@ -16,6 +16,10 @@ export type AgentProfileDefinition = {
     readonly templateName: string;
     readonly warmPool: string;
   };
+  readonly connections: readonly {
+    readonly id: string;
+    readonly sidecar: string;
+  }[];
   readonly permissions: {
     readonly onRequest: "fail";
   };

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DispatcherExecutionStore } from "../../src/dispatch/store.js";
 import type { ClaimedExecution, TransitionLeasedExecutionCommand } from "../../src/dispatch/types.js";
 import { DispatcherWorker, type ExecutionAttemptRunner } from "../../src/dispatch/worker.js";
+import { SandboxClaimRejectedError } from "../../src/sandbox/provisioner.js";
 import type { ExecutionAttemptEndpoint, ExecutionAttemptProvisioner } from "../../src/sandbox/types.js";
 
 afterEach(() => vi.useRealTimers());
@@ -39,7 +40,7 @@ describe("DispatcherWorker", () => {
     );
   });
 
-  it("fails the leased pair and attempts cleanup when provisioning fails", async () => {
+  it("retries an ordinary provisioning failure", async () => {
     const fixture = workerFixture();
     fixture.provisioner.provision = vi.fn().mockRejectedValue(new Error("bad\u0000 secret-ish failure"));
 
@@ -50,13 +51,37 @@ describe("DispatcherWorker", () => {
       expectedAttemptState: "LEASED",
       expectedExecutionState: "PROVISIONING",
       result: { error: "Error: bad  secret-ish failure" },
+      retryDelayMs: 10,
       targetAttemptState: "FAILED",
       targetExecutionState: "RETRY_WAIT",
     });
     expect(fixture.provisioner.release).not.toHaveBeenCalled();
   });
 
-  it("passes the persisted workspace through unchanged on a retry", async () => {
+  it("fails directly when the provisioner rejects the SandboxClaim", async () => {
+    const fixture = workerFixture();
+    fixture.provisioner.provision = vi.fn().mockRejectedValue(
+      new SandboxClaimRejectedError("execution-1-1", "ReconcilerError: required sidecar is missing"),
+    );
+
+    await fixture.worker.runOne();
+
+    expect(fixture.store.transitions).toHaveLength(1);
+    expect(fixture.store.transitions[0]).toMatchObject({
+      expectedAttemptState: "LEASED",
+      expectedExecutionState: "PROVISIONING",
+      result: {
+        error: "SandboxClaimRejectedError: SandboxClaim execution-1-1 was rejected: ReconcilerError: required sidecar is missing",
+      },
+      targetAttemptState: "FAILED",
+      targetExecutionState: "FAILED",
+    });
+    expect(fixture.store.transitions[0]?.retryDelayMs).toBeUndefined();
+    expect(fixture.store.transitions[0]?.targetExecutionState).not.toBe("RETRY_WAIT");
+    expect(fixture.provisioner.release).not.toHaveBeenCalled();
+  });
+
+  it("passes persisted workspace and exact connection grants through on a retry", async () => {
     const fixture = workerFixture();
     fixture.execution.lease.attempt = 2;
     fixture.execution.workspace = {
@@ -64,12 +89,23 @@ describe("DispatcherWorker", () => {
       revision: { commit: "0123456789abcdef", type: "commit" },
       type: "git",
     };
+    const sandbox = fixture.execution.resolvedPolicy.sandbox as { templateName: string; warmPool: string };
+    sandbox.warmPool = "none";
+    fixture.execution.resolvedPolicy.connections = [
+      { id: "github", sidecar: "mcp-proxy" },
+      { id: "linear", sidecar: "mcp-proxy" },
+    ];
 
     await fixture.worker.runOne();
 
     const provisioned = vi.mocked(fixture.provisioner.provision).mock.calls[0]![0];
     expect(provisioned.workspace).toBe(fixture.execution.workspace);
     expect(provisioned.attempt).toBe(2);
+    expect(provisioned.connections).toEqual([
+      { id: "github", sidecar: "mcp-proxy" },
+      { id: "linear", sidecar: "mcp-proxy" },
+    ]);
+    expect(JSON.stringify(provisioned.connections)).not.toMatch(/credential|secret|token/);
   });
 
   it("fails the running pair when the runner fails", async () => {
@@ -171,6 +207,7 @@ function workerFixture(overrides: { renew?: boolean } = {}) {
 function provisioningInput() {
   return {
     attempt: 1,
+    connections: [],
     executionId: "execution-1",
     opencodeConfig: { agent: { coder: {} } },
     profileVersion: { id: "profile-version-1", profileId: "coder", version: 1 },
@@ -212,6 +249,7 @@ function claimedExecution(): ClaimedExecution {
       version: 1,
     },
     resolvedPolicy: {
+      connections: [],
       schemaVersion: 1,
       runtime: { agent: "coder", opencodeConfig: { agent: { coder: { prompt: "Test" } } }, type: "opencode" },
       sandbox: { templateName: "opencode", warmPool: "opencode" },

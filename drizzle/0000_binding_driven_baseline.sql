@@ -1,3 +1,12 @@
+CREATE TABLE "agentbay_agent_profile_version_connections" (
+	"connection_id" text NOT NULL,
+	"ordinal" integer NOT NULL,
+	"profile_version_id" text NOT NULL,
+	"sidecar" text NOT NULL,
+	"tenant_id" text NOT NULL,
+	CONSTRAINT "agentbay_agent_profile_version_connections_ordinal_nonnegative" CHECK ("agentbay_agent_profile_version_connections"."ordinal" >= 0)
+);
+--> statement-breakpoint
 CREATE TABLE "agentbay_agent_profile_versions" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"definition" jsonb NOT NULL,
@@ -25,6 +34,15 @@ CREATE TABLE "agentbay_binding_versions" (
 	CONSTRAINT "agentbay_binding_versions_version_positive" CHECK ("agentbay_binding_versions"."version" > 0),
 	CONSTRAINT "agentbay_binding_versions_event_types_nonempty" CHECK (cardinality("agentbay_binding_versions"."event_types") > 0),
 	CONSTRAINT "agentbay_binding_versions_enabled_lifecycle_consistent" CHECK ("agentbay_binding_versions"."enabled" = ("agentbay_binding_versions"."disabled_at" IS NULL))
+);
+--> statement-breakpoint
+CREATE TABLE "agentbay_connections" (
+	"connection_id" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"id" text PRIMARY KEY NOT NULL,
+	"tenant_id" text NOT NULL,
+	"type" text NOT NULL,
+	CONSTRAINT "agentbay_connections_id_tenant_unique" UNIQUE("id","tenant_id")
 );
 --> statement-breakpoint
 CREATE TABLE "agentbay_events" (
@@ -142,6 +160,8 @@ CREATE TABLE "agentbay_triggers" (
 	CONSTRAINT "agentbay_triggers_enabled_lifecycle_consistent" CHECK ("agentbay_triggers"."enabled" = ("agentbay_triggers"."disabled_at" IS NULL))
 );
 --> statement-breakpoint
+ALTER TABLE "agentbay_agent_profile_version_connections" ADD CONSTRAINT "agentbay_agent_profile_version_connections_profile_tenant_fk" FOREIGN KEY ("profile_version_id","tenant_id") REFERENCES "public"."agentbay_agent_profile_versions"("id","tenant_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "agentbay_agent_profile_version_connections" ADD CONSTRAINT "agentbay_agent_profile_version_connections_connection_tenant_fk" FOREIGN KEY ("connection_id","tenant_id") REFERENCES "public"."agentbay_connections"("id","tenant_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "agentbay_binding_versions" ADD CONSTRAINT "agentbay_binding_versions_trigger_tenant_fk" FOREIGN KEY ("trigger_id","tenant_id") REFERENCES "public"."agentbay_triggers"("id","tenant_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "agentbay_binding_versions" ADD CONSTRAINT "agentbay_binding_versions_profile_version_tenant_fk" FOREIGN KEY ("profile_version_id","tenant_id") REFERENCES "public"."agentbay_agent_profile_versions"("id","tenant_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "agentbay_events" ADD CONSTRAINT "agentbay_events_trigger_tenant_fk" FOREIGN KEY ("trigger_id","tenant_id") REFERENCES "public"."agentbay_triggers"("id","tenant_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -151,11 +171,15 @@ ALTER TABLE "agentbay_execution_transitions" ADD CONSTRAINT "agentbay_execution_
 ALTER TABLE "agentbay_executions" ADD CONSTRAINT "agentbay_executions_binding_version_tenant_fk" FOREIGN KEY ("binding_version_id","tenant_id") REFERENCES "public"."agentbay_binding_versions"("id","tenant_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "agentbay_executions" ADD CONSTRAINT "agentbay_executions_event_tenant_fk" FOREIGN KEY ("event_id","tenant_id") REFERENCES "public"."agentbay_events"("id","tenant_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "agentbay_executions" ADD CONSTRAINT "agentbay_executions_profile_version_tenant_fk" FOREIGN KEY ("profile_version_id","tenant_id") REFERENCES "public"."agentbay_agent_profile_versions"("id","tenant_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "agentbay_agent_profile_version_connections_ordinal_unique" ON "agentbay_agent_profile_version_connections" USING btree ("tenant_id","profile_version_id","ordinal");--> statement-breakpoint
+CREATE UNIQUE INDEX "agentbay_agent_profile_version_connections_connection_unique" ON "agentbay_agent_profile_version_connections" USING btree ("tenant_id","profile_version_id","connection_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "agentbay_agent_profile_versions_profile_version_unique" ON "agentbay_agent_profile_versions" USING btree ("tenant_id","profile_id","version");--> statement-breakpoint
 CREATE INDEX "agentbay_agent_profile_versions_tenant_profile_idx" ON "agentbay_agent_profile_versions" USING btree ("tenant_id","profile_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "agentbay_binding_versions_binding_version_unique" ON "agentbay_binding_versions" USING btree ("tenant_id","binding_id","version");--> statement-breakpoint
 CREATE UNIQUE INDEX "agentbay_binding_versions_one_enabled_unique" ON "agentbay_binding_versions" USING btree ("tenant_id","binding_id") WHERE "agentbay_binding_versions"."enabled";--> statement-breakpoint
 CREATE INDEX "agentbay_binding_versions_match_idx" ON "agentbay_binding_versions" USING btree ("tenant_id","trigger_id","enabled");--> statement-breakpoint
+CREATE UNIQUE INDEX "agentbay_connections_tenant_connection_unique" ON "agentbay_connections" USING btree ("tenant_id","connection_id");--> statement-breakpoint
+CREATE INDEX "agentbay_connections_tenant_type_idx" ON "agentbay_connections" USING btree ("tenant_id","type");--> statement-breakpoint
 CREATE UNIQUE INDEX "agentbay_events_trigger_source_event_unique" ON "agentbay_events" USING btree ("tenant_id","trigger_id","source","event_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "agentbay_events_trigger_source_dedup_unique" ON "agentbay_events" USING btree ("tenant_id","trigger_id","source_deduplication_key");--> statement-breakpoint
 CREATE INDEX "agentbay_events_tenant_trigger_ingested_idx" ON "agentbay_events" USING btree ("tenant_id","trigger_id","ingested_at");--> statement-breakpoint

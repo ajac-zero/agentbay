@@ -34,6 +34,14 @@ import {
   type Execution,
 } from "../execution/types.js";
 import { planExecution, type AdmissionCommand, type AdmissionResult } from "../control/admission.js";
+import {
+  ConnectionAlreadyExistsError,
+  ConnectionNotFoundError,
+  type Connection,
+  type ConnectionStore,
+  parseConnection,
+  type CreateConnectionCommand,
+} from "../connection/index.js";
 import { bindingDefinitionSchema, publishedBindingVersionSchema, BindingVersionAlreadyExistsError, type BindingStore, type PublishedBindingVersion } from "../control/binding.js";
 import { triggerSchema, TriggerAlreadyExistsError, TriggerNotFoundError, type Trigger, type TriggerStore } from "../control/trigger.js";
 import { agentProfileDefinitionSchema } from "../execution/api-schema.js";
@@ -101,7 +109,7 @@ export async function migratePostgresRuntimeStore(options: PostgresRuntimeStoreO
   }
 }
 
-export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, BindingStore, EventAdmissionStore, OutboxStore, DispatcherExecutionStore {
+export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, BindingStore, ConnectionStore, EventAdmissionStore, OutboxStore, DispatcherExecutionStore {
   constructor(
     private readonly pool: pg.Pool,
     private readonly db: RuntimeDatabase,
@@ -181,21 +189,39 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
 
   async publishProfileVersion(command: PublishProfileVersionCommand): Promise<AgentProfileVersion> {
     const definition = agentProfileDefinitionSchema.parse(command.definition);
-    const rows = await this.db
-      .insert(agentProfileVersions)
-      .values({
-        createdAt: new Date(command.createdAt),
-        definition,
-        id: command.id,
-        profileID: command.profileId,
-        tenantID: command.tenantId,
-        version: command.version,
-      })
-      .onConflictDoNothing()
-      .returning();
-    const row = rows[0];
-    if (!row) throw new ProfileVersionAlreadyExistsError(command.profileId, command.version);
-    return profileVersionFromRow(row);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const inserted = await client.query<AgentProfileVersionSqlRow>({
+        text: `INSERT INTO agentbay_agent_profile_versions
+          (id, tenant_id, profile_id, version, definition, created_at)
+          VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+          ON CONFLICT DO NOTHING RETURNING *`,
+        values: [command.id, command.tenantId, command.profileId, command.version, JSON.stringify(definition), new Date(command.createdAt)],
+      });
+      const row = inserted.rows[0];
+      if (!row) throw new ProfileVersionAlreadyExistsError(command.profileId, command.version);
+
+      for (const [ordinal, grant] of definition.connections.entries()) {
+        const connection = await client.query<{ id: string }>(
+          "SELECT id FROM agentbay_connections WHERE tenant_id = $1 AND connection_id = $2 FOR SHARE",
+          [command.tenantId, grant.id],
+        );
+        if (!connection.rows[0]) throw new ConnectionNotFoundError(grant.id);
+        await client.query(`INSERT INTO agentbay_agent_profile_version_connections
+          (profile_version_id, tenant_id, connection_id, sidecar, ordinal)
+          VALUES ($1, $2, $3, $4, $5)`,
+        [command.id, command.tenantId, connection.rows[0].id, grant.sidecar, ordinal]);
+      }
+
+      await client.query("COMMIT");
+      return profileVersionFromSqlRow(row);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async getProfileVersion(tenantId: string, profileId: string, version: number): Promise<AgentProfileVersion | undefined> {
@@ -209,6 +235,25 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       ))
       .limit(1);
     return rows[0] ? profileVersionFromRow(rows[0]) : undefined;
+  }
+
+  async createConnection(command: CreateConnectionCommand): Promise<Connection> {
+    command = parseConnection(command);
+    const result = await this.pool.query<ConnectionRow>(`INSERT INTO agentbay_connections
+      (id, tenant_id, connection_id, type, created_at)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT DO NOTHING RETURNING *`,
+    [command.id, command.tenantId, command.connection.id, command.connection.type, new Date(command.createdAt)]);
+    if (!result.rows[0]) throw new ConnectionAlreadyExistsError(command.connection.id);
+    return connectionFromRow(result.rows[0]);
+  }
+
+  async getConnection(tenantId: string, connectionId: string): Promise<Connection | undefined> {
+    const result = await this.pool.query<ConnectionRow>(
+      "SELECT * FROM agentbay_connections WHERE tenant_id = $1 AND connection_id = $2",
+      [tenantId, connectionId],
+    );
+    return result.rows[0] ? connectionFromRow(result.rows[0]) : undefined;
   }
 
   async createTrigger(value: Trigger): Promise<Trigger> {
@@ -842,6 +887,21 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
 }
 
 type AgentProfileVersionRow = InferSelectModel<typeof agentProfileVersions>;
+type AgentProfileVersionSqlRow = {
+  created_at: Date;
+  definition: unknown;
+  id: string;
+  profile_id: string;
+  tenant_id: string;
+  version: number;
+};
+type ConnectionRow = {
+  connection_id: string;
+  created_at: Date;
+  id: string;
+  tenant_id: string;
+  type: string;
+};
 type ExecutionRow = InferSelectModel<typeof executions>;
 type BindingRow = {
   binding_id: string;
@@ -1016,6 +1076,25 @@ function profileVersionFromRow(row: AgentProfileVersionRow): AgentProfileVersion
     profile: { id: row.profileID, version: row.version },
     tenantId: row.tenantID,
   };
+}
+
+function profileVersionFromSqlRow(row: AgentProfileVersionSqlRow): AgentProfileVersion {
+  return {
+    createdAt: row.created_at.toISOString(),
+    definition: agentProfileDefinitionSchema.parse(row.definition),
+    id: row.id,
+    profile: { id: row.profile_id, version: row.version },
+    tenantId: row.tenant_id,
+  };
+}
+
+function connectionFromRow(row: ConnectionRow): Connection {
+  return parseConnection({
+    connection: { id: row.connection_id, type: row.type },
+    createdAt: row.created_at.toISOString(),
+    id: row.id,
+    tenantId: row.tenant_id,
+  });
 }
 
 function triggerFromRow(row: TriggerSqlRow): Trigger {

@@ -46,6 +46,7 @@ describe("execution persistence", () => {
         schemaVersion: 1,
         runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: { prompt: "Test" } } } },
         sandbox: { templateName: "opencode", warmPool: "none" },
+        connections: [],
         permissions: { onRequest: "fail" },
         timeoutSeconds: 3_600,
       },

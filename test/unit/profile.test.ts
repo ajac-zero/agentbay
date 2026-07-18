@@ -19,6 +19,7 @@ describe("parseExecutionAttemptProfile", () => {
       schemaVersion: 1,
       runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: {} } } },
       sandbox: { templateName: "opencode", warmPool: "none" },
+      connections: [],
       permissions: { onRequest: "fail" },
       timeoutSeconds: 3_600,
       retention: { sandboxSecondsAfterFinished: 0 },
@@ -54,6 +55,27 @@ describe("parseExecutionAttemptProfile", () => {
         retention: { sandboxSecondsAfterFinished: 86_401 },
       })),
     ).toThrow();
+  });
+
+  it("validates connection IDs and sidecars", () => {
+    expect(() => parseExecutionAttemptProfile(claimedExecution({
+      ...validDefinition(),
+      connections: [{ id: "github", sidecar: "github-api" }, { id: "github", sidecar: "other" }],
+    }))).toThrow();
+    for (const sidecar of ["opencode", "workspace-materializer", "agentbay-gateway-proxy", "Not_DNS"]) {
+      expect(() => parseExecutionAttemptProfile(claimedExecution({
+        ...validDefinition(),
+        connections: [{ id: "github", sidecar }],
+      }))).toThrow();
+    }
+  });
+
+  it("requires warm pool none when connections are configured", () => {
+    expect(() => parseExecutionAttemptProfile(claimedExecution({
+      ...validDefinition(),
+      sandbox: { templateName: "opencode", warmPool: "shared" },
+      connections: [{ id: "github", sidecar: "github-api" }],
+    }))).toThrow();
   });
 });
 

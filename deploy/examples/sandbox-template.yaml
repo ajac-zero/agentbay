@@ -75,6 +75,27 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+        # This template-owned sidecar is the only consumer of the placeholder
+        # operator-managed credential Secret. Agent profiles select it by name.
+        - name: github-api
+          image: ghcr.io/example/github-api-sidecar:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: github-api-credentials
+              mountPath: /var/run/agentbay/credentials
+              readOnly: true
       volumes:
         - name: workspace
           emptyDir: {}
+        # Create this placeholder Secret out of band. Do not commit its values.
+        - name: github-api-credentials
+          secret:
+            secretName: placeholder-operator-managed-connection-secret

@@ -1,9 +1,143 @@
 {
-  "id": "b2ee15e4-96fb-4afa-bf97-4310106dc1fe",
+  "id": "dd798912-f104-4501-9e72-855a4c52575d",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.agentbay_agent_profile_version_connections": {
+      "name": "agentbay_agent_profile_version_connections",
+      "schema": "",
+      "columns": {
+        "connection_id": {
+          "name": "connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ordinal": {
+          "name": "ordinal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "profile_version_id": {
+          "name": "profile_version_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sidecar": {
+          "name": "sidecar",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "agentbay_agent_profile_version_connections_ordinal_unique": {
+          "name": "agentbay_agent_profile_version_connections_ordinal_unique",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "profile_version_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "ordinal",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agentbay_agent_profile_version_connections_connection_unique": {
+          "name": "agentbay_agent_profile_version_connections_connection_unique",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "profile_version_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "agentbay_agent_profile_version_connections_profile_tenant_fk": {
+          "name": "agentbay_agent_profile_version_connections_profile_tenant_fk",
+          "tableFrom": "agentbay_agent_profile_version_connections",
+          "tableTo": "agentbay_agent_profile_versions",
+          "columnsFrom": [
+            "profile_version_id",
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id",
+            "tenant_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "agentbay_agent_profile_version_connections_connection_tenant_fk": {
+          "name": "agentbay_agent_profile_version_connections_connection_tenant_fk",
+          "tableFrom": "agentbay_agent_profile_version_connections",
+          "tableTo": "agentbay_connections",
+          "columnsFrom": [
+            "connection_id",
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id",
+            "tenant_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "agentbay_agent_profile_version_connections_ordinal_nonnegative": {
+          "name": "agentbay_agent_profile_version_connections_ordinal_nonnegative",
+          "value": "\"agentbay_agent_profile_version_connections\".\"ordinal\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.agentbay_agent_profile_versions": {
       "name": "agentbay_agent_profile_versions",
       "schema": "",
@@ -326,6 +460,102 @@
           "value": "\"agentbay_binding_versions\".\"enabled\" = (\"agentbay_binding_versions\".\"disabled_at\" IS NULL)"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.agentbay_connections": {
+      "name": "agentbay_connections",
+      "schema": "",
+      "columns": {
+        "connection_id": {
+          "name": "connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "agentbay_connections_tenant_connection_unique": {
+          "name": "agentbay_connections_tenant_connection_unique",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "agentbay_connections_tenant_type_idx": {
+          "name": "agentbay_connections_tenant_type_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "agentbay_connections_id_tenant_unique": {
+          "name": "agentbay_connections_id_tenant_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "tenant_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.agentbay_events": {

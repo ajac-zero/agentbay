@@ -7,6 +7,11 @@ export type SandboxEnvVar = {
   value: string;
 };
 
+export type ConnectionAuthorizationGrant = {
+  readonly id: string;
+  readonly sidecar: string;
+};
+
 export type SandboxClaimAPIVersion = "v1alpha1" | "v1beta1";
 
 export type SandboxClaimCondition = {
@@ -54,6 +59,7 @@ export type SandboxClaim = {
 };
 
 export type ExecutionAttemptProvisioningInput = {
+  connections: readonly ConnectionAuthorizationGrant[];
   tenantId: string;
   executionId: string;
   attempt: number;
