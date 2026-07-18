@@ -187,3 +187,52 @@ for template in migrations-job.yaml reconciler-cronjob.yaml sandboxtemplates.yam
     exit 1
   fi
 done
+
+cat > "$work_dir/connection-sidecar-values.yaml" <<'EOF'
+sandboxTemplates:
+  enabled: true
+  templates:
+    - name: connection-sidecar
+      image:
+        repository: example/sandbox
+        tag: v1
+      workspace:
+        type: emptyDir
+      networkPolicy:
+        ingressFromOrchestrator: false
+        egress:
+          allowDNS: false
+          allowInternetExceptPrivate: false
+      sidecars:
+        - name: github-api
+          image: example/github-api-sidecar:v1
+          volumeMounts:
+            - name: github-api-credentials
+              mountPath: /var/run/agentbay/credentials
+              readOnly: true
+      extraVolumes:
+        - name: github-api-credentials
+          secret:
+            secretName: placeholder-operator-managed-connection-secret
+EOF
+
+helm template demo "$chart_dir" \
+  --namespace agentbay-helm-test \
+  --show-only templates/sandboxtemplates.yaml \
+  -f "$work_dir/connection-sidecar-values.yaml" > "$work_dir/connection-sidecar.yaml"
+
+test "$(grep -c 'name: github-api-credentials' "$work_dir/connection-sidecar.yaml")" -eq 2
+test "$(grep -c 'mountPath: /var/run/agentbay/credentials' "$work_dir/connection-sidecar.yaml")" -eq 1
+test "$(grep -c 'secretName: placeholder-operator-managed-connection-secret' "$work_dir/connection-sidecar.yaml")" -eq 1
+test "$(grep -c 'name: github-api' "$work_dir/connection-sidecar.yaml")" -eq 1
+
+for template in rbac.yaml reconciler-rbac.yaml; do
+  helm template demo "$chart_dir" \
+    --namespace agentbay-helm-test \
+    --show-only "templates/$template" > "$work_dir/rbac-$template"
+  grep -q 'resources: \["sandboxclaims"\]' "$work_dir/rbac-$template"
+  if grep -q 'secrets' "$work_dir/rbac-$template"; then
+    echo "Secret access unexpectedly rendered in $template" >&2
+    exit 1
+  fi
+done

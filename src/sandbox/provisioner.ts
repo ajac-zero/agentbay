@@ -14,6 +14,21 @@ import type {
 
 const GROUP = "extensions.agents.x-k8s.io";
 const PLURAL = "sandboxclaims";
+const CONNECTIONS_DIGEST_ANNOTATION = "agentbay.dev/connections-digest";
+const TERMINAL_CLAIM_REASONS = new Set([
+  "EnvVarsInjectionRejected",
+  "InvalidMetadata",
+  "ReconcilerError",
+  "TemplateNotFound",
+  "WarmPoolNotFound",
+]);
+
+export class SandboxClaimRejectedError extends Error {
+  constructor(claimName: string, reason: string) {
+    super(`SandboxClaim ${claimName} was rejected: ${reason}`);
+    this.name = "SandboxClaimRejectedError";
+  }
+}
 
 export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttemptProvisioner {
   private readonly api: CustomObjectsApi;
@@ -28,6 +43,12 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
     throwIfAborted(signal);
     if (input.workspace.type === "git" && input.warmPool && input.warmPool !== "none") {
       throw new Error("Git workspaces cannot be provisioned from a warm pool");
+    }
+    if (input.connections.length > 0 && input.warmPool !== "none") {
+      throw new Error("Connection authorization cannot be provisioned from a warm pool");
+    }
+    if (input.connections.some(({ sidecar }) => sidecar === "opencode")) {
+      throw new Error("Connection authorization cannot target the opencode container");
     }
     const claimName = claimNameForExecutionAttempt(input.executionId, input.attempt);
     const ownership = ownershipAnnotations(input);
@@ -113,6 +134,15 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
         { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_GIT_COMMIT", value: input.workspace.revision.commit },
       );
     }
+    for (const [sidecar, refs] of groupedConnections(input.connections)) {
+      env.push({
+        containerName: sidecar,
+        name: "AGENTBAY_CONNECTIONS",
+        value: canonicalJson({ schemaVersion: 1, tenantId: input.tenantId, refs }),
+      });
+    }
+
+    const connectionAnnotations = authorizationAnnotations(input);
 
     return {
       apiVersion: `extensions.agents.x-k8s.io/${this.config.sandboxClaimApiVersion}`,
@@ -138,6 +168,7 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
         },
         env,
         additionalPodMetadata: {
+          annotations: connectionAnnotations,
           labels: {
             "agentbay.dev/managed-by": "agentbay",
             "agentbay.dev/execution": labelValue(input.executionId),
@@ -209,6 +240,11 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
           assertOwnership(claim, ownership);
         } catch (error) {
           settle(() => reject(asError(error)));
+          return;
+        }
+        const rejected = rejectedCondition(claim);
+        if (rejected) {
+          settle(() => reject(new SandboxClaimRejectedError(claimName, rejected)));
           return;
         }
         if (!isReady(claim)) return;
@@ -324,7 +360,37 @@ function ownershipAnnotations(input: ExecutionAttemptProvisioningInput): Record<
     "agentbay.dev/profile-id": input.profileVersion.profileId,
     "agentbay.dev/profile-version": String(input.profileVersion.version),
     "agentbay.dev/workspace-digest": createHash("sha256").update(canonicalJson(input.workspace)).digest("hex"),
+    [CONNECTIONS_DIGEST_ANNOTATION]: authorizationAnnotations(input)[CONNECTIONS_DIGEST_ANNOTATION]!,
   };
+}
+
+function authorizationAnnotations(input: ExecutionAttemptProvisioningInput): Record<string, string> {
+  const authorization = canonicalJson(sortedConnections(input.connections));
+  return {
+    [CONNECTIONS_DIGEST_ANNOTATION]: createHash("sha256").update(authorization).digest("hex"),
+  };
+}
+
+function sortedConnections(connections: ExecutionAttemptProvisioningInput["connections"]): Array<{ id: string; sidecar: string }> {
+  return connections
+    .map(({ id, sidecar }) => ({ id, sidecar }))
+    .sort((left, right) => compareStrings(left.id, right.id) || compareStrings(left.sidecar, right.sidecar));
+}
+
+function compareStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function groupedConnections(connections: ExecutionAttemptProvisioningInput["connections"]): Array<[string, string[]]> {
+  const grouped = new Map<string, string[]>();
+  for (const { id, sidecar } of connections) {
+    const refs = grouped.get(sidecar);
+    if (refs) refs.push(id);
+    else grouped.set(sidecar, [id]);
+  }
+  return [...grouped]
+    .sort(([left], [right]) => compareStrings(left, right))
+    .map(([sidecar, refs]) => [sidecar, refs.sort(compareStrings)]);
 }
 
 function canonicalJson(value: unknown): string {
@@ -354,6 +420,13 @@ function passwordFromClaim(claim: SandboxClaim): string {
 
 function isReady(claim: SandboxClaim): boolean {
   return claim.status?.conditions?.some((condition) => condition.type === "Ready" && condition.status === "True") ?? false;
+}
+
+function rejectedCondition(claim: SandboxClaim): string | undefined {
+  const condition = claim.status?.conditions?.find(({ type, status, reason }) =>
+    type === "Ready" && status === "False" && reason !== undefined && TERMINAL_CLAIM_REASONS.has(reason));
+  if (!condition) return undefined;
+  return [condition.reason, condition.message].filter(Boolean).join(": ") || "controller reported Ready=False";
 }
 
 function isNotFound(error: unknown): boolean {

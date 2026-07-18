@@ -380,8 +380,9 @@ sandboxTemplates:
           tag: ""
           pullPolicy: ""
       # -- SandboxTemplate.spec.envVarsInjectionPolicy. Must be `Allowed`
-      # -- for the orchestrator to inject per-claim secrets via
-      # -- `claim.spec.env`.
+      # -- for the orchestrator to inject per-claim authorization and runtime
+      # -- configuration via `claim.spec.env`. Secret values must not be placed
+      # -- in claim env.
       envVarsInjectionPolicy: Allowed
       # -- SandboxTemplate.spec.service. Required for the orchestrator to
       # -- reach the Pod via DNS.
@@ -407,10 +408,15 @@ sandboxTemplates:
       # -- Extra volume mounts appended to the opencode container.
       extraVolumeMounts: []
       # -- Additional containers appended to the sandbox Pod. Useful for local
-      # -- authz/proxy sidecars that expose model or MCP gateways on localhost.
+      # -- authz/proxy sidecars that expose model, API, or MCP gateways on
+      # -- localhost. Connection profiles may select only sidecars already
+      # -- owned by this template and use cold sandboxes (`warmPool: none`).
       sidecars: []
       # -- Additional volumes appended to the sandbox Pod. Use with `sidecars`
-      # -- for projected tokens, config, or sidecar-specific state.
+      # -- for projected tokens, config, sidecar-specific state, or a static
+      # -- operator-managed Secret fallback. Mount credential volumes only on
+      # -- their sidecar through `sidecars[].volumeMounts`; do not add them to
+      # -- OpenCode through `extraVolumeMounts`.
       extraVolumes: []
       # -- Pod-level overrides applied under spec.podTemplate.spec. User init
       # -- containers are appended after the workspace materializer, and Pod

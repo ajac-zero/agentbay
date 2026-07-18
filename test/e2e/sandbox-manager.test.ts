@@ -143,6 +143,11 @@ describe("SandboxClaimExecutionAttemptProvisioner e2e", () => {
         { containerName: "opencode", name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
         { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_TYPE", value: "empty" },
         {
+          containerName: "github-api",
+          name: "AGENTBAY_CONNECTIONS",
+          value: '{"refs":["github-production"],"schemaVersion":1,"tenantId":"tenant-e2e"}',
+        },
+        {
           containerName: "opencode",
           name: "OPENCODE_CONFIG_CONTENT",
           value: JSON.stringify({
@@ -236,6 +241,7 @@ function testProvisioningInput(executionId: string, attempt: number): ExecutionA
     },
     sandboxTemplate: "opencode-template",
     warmPool: "none",
+    connections: [{ id: "github-production", sidecar: "github-api" }],
     workspace: { type: "empty" },
     opencodeConfig: {
       permission: { "*": "allow" },
@@ -504,6 +510,18 @@ function sandboxTemplate(): ManifestObject {
                 httpGet: { path: "/global/health", port: 4096 },
                 periodSeconds: 1,
               },
+            },
+            {
+              name: "github-api",
+              image: "node:25-alpine",
+              imagePullPolicy: "IfNotPresent",
+              command: [
+                "node",
+                "-e",
+                `const expected = '{"refs":["github-production"],"schemaVersion":1,"tenantId":"tenant-e2e"}';
+if (process.env.AGENTBAY_CONNECTIONS !== expected) process.exit(1);
+setInterval(() => {}, 60_000);`,
+              ],
             },
           ],
         },

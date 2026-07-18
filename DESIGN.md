@@ -69,6 +69,8 @@ Changing a profile creates a new version. Existing executions continue to refere
 
 A named reference to an external service identity or credential policy, for example `github-production`, `grafana-readonly`, or `anthropic-team-a`. Connections describe how a connector or execution obtains short-lived access. They never contain secrets in exported profile or binding documents.
 
+The generic management surface creates and reads connection metadata with `POST /v1/connections` and `GET /v1/connections/:connectionID`. Creation accepts `{ id, type }`; neither request nor response contains credential material. An agent profile grants a connection to one template-owned sidecar with `connections: [{ id, sidecar }]`; profiles cannot supply sidecar images, commands, volumes, or Secret names. This keeps workload composition under the platform operator's immutable `SandboxTemplate` rather than profile-author control.
+
 ### 3.3 Trigger
 
 A configured instance of an event connector. It defines the connector type, source-specific configuration, authentication policy, and connection references. Examples include a `github.app.webhook`, a Grafana alert webhook, a cron schedule, or an SQS subscription. The GitHub trigger configuration references the environment-variable name containing its webhook secret; it never stores the secret itself and has no workflow policy. Event selection and execution policy belong to bindings and profiles.
@@ -137,6 +139,9 @@ definition:
   sandbox:
     templateName: opencode
     warmPool: none
+  connections:
+    - id: github-production
+      sidecar: github-api
   permissions:
     onRequest: fail
   timeoutSeconds: 1800
@@ -297,6 +302,8 @@ The implemented V1 management and ingress surface is:
 ```text
 POST /v1/agent-profiles/:profileID/versions
 GET  /v1/agent-profiles/:profileID/versions/:version
+POST /v1/connections
+GET  /v1/connections/:connectionID
 POST /v1/triggers
 GET  /v1/triggers/:triggerID
 POST /v1/triggers/:triggerID/disable
@@ -665,7 +672,11 @@ OpenCode runs headlessly inside the workload. The execution worker:
 
 The platform must tolerate SSE disconnects and worker restarts. Durable execution state, OpenCode session status, and artifact checkpoints determine whether to reconnect, resume, retry, or fail.
 
-Future sandbox templates may include authenticated MCP proxy sidecars that expose standard, policy-bounded tools to OpenCode over localhost. These sidecars provide ordinary tool access to external systems; they are not a privileged execution-creation channel. If an agent uses a standard MCP tool to create an issue, publish a message, enqueue work, or perform another external effect, the corresponding source connector may later normalize that effect into an event. An enabled binding can then create a delegated execution. No Agentbay-specific delegation MCP is required.
+Sandbox templates may include authenticated API, proxy, or MCP sidecars that expose standard, policy-bounded tools to OpenCode over localhost. Profile `connections: [{ id, sidecar }]` entries authorize named connections for those template-owned sidecars; they do not create or mutate containers. Agentbay validates each connection reference and sends the grant only to the named container. The agent-sandbox controller rejects a claim when that container is absent. The selected sidecar remains the enforcement boundary and must parse `AGENTBAY_CONNECTIONS` at startup and fail closed; Agentbay does not introspect or certify arbitrary sidecar implementations. Connection-enabled attempts use cold sandboxes rather than a `SandboxWarmPool` so claim-specific authorization cannot arrive after a sidecar has initialized.
+
+Agentbay injects resolved, non-secret metadata through one canonical `AGENTBAY_CONNECTIONS` envelope per selected sidecar. Its JSON representation is `{"refs":["github-production"],"schemaVersion":1,"tenantId":"default"}`; `refs` contains only that sidecar's sorted connection IDs. The envelope is the complete authorized set for that sidecar and attempt; consumers must not merge it with ambient defaults. Credentials remain outside the envelope. A static compatibility deployment references an operator-managed Kubernetes Secret as a volume mounted only into the selected sidecar. OpenCode and the workspace materializer receive no credential mount, and Agentbay neither reads Secret values nor receives Kubernetes RBAC for Secrets.
+
+These sidecars provide ordinary tool access to external systems; they are not a privileged execution-creation channel. If an agent uses a standard tool to create an issue, publish a message, enqueue work, or perform another external effect, the corresponding source connector may later normalize that effect into an event. An enabled binding can then create a delegated execution. No Agentbay-specific delegation MCP is required.
 
 This event-producing delegation path is distinct from a **destination**. A delegation effect becomes a new admitted source event and may cause new executions through bindings. A destination consumes an existing execution result for delivery and does not create another execution by itself.
 
@@ -765,6 +776,10 @@ Every delivery records request identity, attempt, response metadata, external ob
 Each execution receives a unique workload identity where the environment supports it. Prefer short-lived, audience-bound credentials from workload identity or a secret broker. Static credentials are a compatibility fallback.
 
 Connections are references resolved at runtime. Raw secrets are never embedded in events, profile versions, bindings, queue messages, or execution results.
+
+Static Secret volumes are a compatibility fallback and expand the sidecar's blast radius to every operation allowed by that credential. A sidecar is trusted with the requests it receives, its mounted credentials, and any reachable upstream; compromise of the sidecar compromises all three. Use a dedicated, least-privilege identity per connection purpose, constrain egress, avoid sharing credential volumes between sidecars, and never mount them into OpenCode.
+
+Rotation updates the operator-managed Secret and replaces cold sandboxes; existing Pods may retain old mounted material until terminated. Revocation therefore disables or deletes the upstream credential, then terminates affected sandboxes. Connection records are create/read-only in V1 and do not provide online revocation. The intended future secret broker exchanges workload and connection identity for short-lived, audience-bound credentials and supports central revocation without changing the canonical envelope or profile mapping.
 
 ### 14.2 Sandbox hardening
 

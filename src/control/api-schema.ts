@@ -79,6 +79,30 @@ const securedErrors = {
 };
 const triggerParams = z.object({ triggerID: simpleIdSchema });
 const bindingParams = z.object({ bindingID: simpleIdSchema, version: versionSchema });
+const connectionTypeSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/, "must contain only lowercase letters, numbers, '.', or '-' and start and end with a letter or number");
+const connectionSchema = z.object({
+  id: simpleIdSchema,
+  tenantId: simpleIdSchema,
+  type: connectionTypeSchema,
+  createdAt: z.string().datetime(),
+}).strict().openapi("Connection");
+const connectionIdSchema = z.string().min(1).max(128).regex(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/);
+const createConnectionRequestSchema = z.object({ id: connectionIdSchema, type: connectionTypeSchema }).strict();
+const connectionParams = z.object({ connectionID: connectionIdSchema });
+
+export const createConnectionRoute = createRoute({
+  method: "post", path: "/connections", tags: ["control"], summary: "Create a connection", security: [{ bearerAuth: [] }],
+  request: { body: { required: true, content: { "application/json": { schema: createConnectionRequestSchema } } } },
+  responses: { 201: jsonResponse("Connection created.", connectionSchema), ...securedErrors, 409: jsonResponse("Connection already exists.", errorSchema) },
+});
+export const getConnectionRoute = createRoute({
+  method: "get", path: "/connections/{connectionID}", tags: ["control"], summary: "Read a connection", security: [{ bearerAuth: [] }],
+  request: { params: connectionParams }, responses: { 200: jsonResponse("Connection found.", connectionSchema), ...securedErrors, 404: jsonResponse("Connection not found.", errorSchema) },
+});
 
 export const createTriggerRoute = createRoute({
   method: "post", path: "/triggers", tags: ["control"], summary: "Create a trigger", security: [{ bearerAuth: [] }],

@@ -42,6 +42,7 @@ describe("GitHub webhook persistence", () => {
         schemaVersion: 1,
         runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: { prompt: "Review" } } } },
         sandbox: { templateName: "opencode", warmPool: "none" },
+        connections: [],
         permissions: { onRequest: "fail" },
         timeoutSeconds: 3_600,
       },

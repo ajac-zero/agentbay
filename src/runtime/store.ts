@@ -6,8 +6,9 @@ import type { OutboxStore } from "../outbox/types.js";
 import type { DispatcherExecutionStore } from "../dispatch/store.js";
 import type { TriggerStore } from "../control/trigger.js";
 import type { BindingStore } from "../control/binding.js";
+import type { ConnectionStore } from "../connection/index.js";
 
-export type RuntimeStore = ExecutionStore & TriggerStore & BindingStore & EventAdmissionStore & OutboxStore & DispatcherExecutionStore & {
+export type RuntimeStore = ExecutionStore & TriggerStore & BindingStore & ConnectionStore & EventAdmissionStore & OutboxStore & DispatcherExecutionStore & {
   close: () => Promise<void>;
 };
 

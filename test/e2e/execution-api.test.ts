@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Config } from "../../src/config.js";
+import { ConnectionAlreadyExistsError, ConnectionNotFoundError, type Connection, type CreateConnectionCommand } from "../../src/connection/index.js";
 import { mountControlApi, type ControlApiStore } from "../../src/control/api.js";
 import { planAdmission, type AdmissionCommand, type AdmissionResult } from "../../src/control/admission.js";
 import { BindingVersionAlreadyExistsError, type PublishedBindingVersion } from "../../src/control/binding.js";
@@ -23,6 +24,33 @@ describe("public API", () => {
     expect((await request(app, "GET", "/v1/agent-profiles/coder/versions/1")).body).toEqual(published.body);
     expect((await request(app, "POST", "/v1/agent-profiles/coder/versions", { version: 1, definition: profileDefinition("coder") })).status).toBe(409);
     expect((await request(app, "POST", "/v1/agent-profiles/coder/versions", { version: 2, definition: profileDefinition("coder"), extra: true })).status).toBe(400);
+  });
+
+  it("creates and reads strict provider-neutral connections", async () => {
+    const app = testApp();
+    const created = await request(app, "POST", "/v1/connections", { id: "github-main", type: "github.api" });
+    expect(created).toMatchObject({ status: 201, body: { id: "github-main", tenantId: "default", type: "github.api", createdAt: expect.any(String) } });
+    expect(Object.keys(created.body as object).sort()).toEqual(["createdAt", "id", "tenantId", "type"]);
+    expect((await request(app, "GET", "/v1/connections/github-main")).body).toEqual(created.body);
+    expect((await request(app, "POST", "/v1/connections", { id: "github-main", type: "github.api" })).status).toBe(409);
+    expect((await request(app, "GET", "/v1/connections/missing")).status).toBe(404);
+  });
+
+  it.each([
+    { id: "github", type: "github.api", secretRef: "secret" },
+    { id: "github", type: "github.api", config: {} },
+    { id: "GitHub", type: "github.api" },
+    { id: "github_main", type: "github.api" },
+    { id: "github", type: "GitHub" },
+  ])("rejects invalid connection bodies", async (body) => {
+    expect((await request(testApp(), "POST", "/v1/connections", body)).status).toBe(400);
+  });
+
+  it("maps a profile's missing connection to 404", async () => {
+    const definition = { ...profileDefinition("coder"), connections: [{ id: "missing", sidecar: "github-tools" }] };
+    const response = await request(testApp(), "POST", "/v1/agent-profiles/coder/versions", { version: 1, definition });
+
+    expect(response).toMatchObject({ status: 404, body: { error: "Connection missing was not found" } });
   });
 
   it("creates, reads, and disables triggers", async () => {
@@ -183,6 +211,7 @@ describe("public API", () => {
 });
 
 class FakeControlStore implements ControlApiStore {
+  readonly connections = new Map<string, Connection>();
   readonly profiles = new Map<string, AgentProfileVersion>();
   readonly triggers = new Map<string, Trigger>();
   readonly bindings = new Map<string, PublishedBindingVersion>();
@@ -191,8 +220,14 @@ class FakeControlStore implements ControlApiStore {
   lastAdmission?: AdmissionCommand;
   failure?: Error;
 
+  async createConnection(command: CreateConnectionCommand) { this.maybeFail(); const key = `${command.tenantId}:${command.connection.id}`; if (this.connections.has(key)) throw new ConnectionAlreadyExistsError(command.connection.id); this.connections.set(key, command); return command; }
+  async getConnection(tenantId: string, connectionId: string) { this.maybeFail(); return this.connections.get(`${tenantId}:${connectionId}`); }
+
   async publishProfileVersion(command: PublishProfileVersionCommand): Promise<AgentProfileVersion> {
     this.maybeFail();
+    for (const grant of command.definition.connections ?? []) {
+      if (!this.connections.has(`${command.tenantId}:${grant.id}`)) throw new ConnectionNotFoundError(grant.id);
+    }
     const key = `${command.tenantId}:${command.profileId}:${command.version}`;
     if (this.profiles.has(key)) throw new ProfileVersionAlreadyExistsError(command.profileId, command.version);
     const value = { id: command.id, tenantId: command.tenantId, profile: { id: command.profileId, version: command.version }, definition: command.definition, createdAt: command.createdAt };

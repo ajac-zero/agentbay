@@ -8,6 +8,7 @@ import type { ExecutionAttemptProvisioningInput, SandboxClaim } from "../../src/
 
 const NAMESPACE = "test-ns";
 const input: ExecutionAttemptProvisioningInput = {
+  connections: [],
   tenantId: "tenant-1",
   executionId: "execution-1",
   attempt: 2,
@@ -57,6 +58,7 @@ users:
 }
 
 function ownership(): Record<string, string> {
+  const authorization = "[]";
   return {
     "agentbay.dev/tenant-id": input.tenantId,
     "agentbay.dev/execution-id": input.executionId,
@@ -65,6 +67,7 @@ function ownership(): Record<string, string> {
     "agentbay.dev/profile-id": input.profileVersion.profileId,
     "agentbay.dev/profile-version": String(input.profileVersion.version),
     "agentbay.dev/workspace-digest": createHash("sha256").update('{"type":"empty"}').digest("hex"),
+    "agentbay.dev/connections-digest": createHash("sha256").update(authorization).digest("hex"),
   };
 }
 
@@ -138,6 +141,85 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
       { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_TYPE", value: "empty" },
     ]));
     expect(created.spec?.env?.filter(({ name }) => name.startsWith("AGENTBAY_WORKSPACE_GIT_"))).toEqual([]);
+    expect(created.spec?.env?.filter(({ name }) => name === "AGENTBAY_CONNECTIONS")).toEqual([]);
+    expect(created.spec?.additionalPodMetadata?.annotations).toEqual({
+      "agentbay.dev/connections-digest": createHash("sha256").update("[]").digest("hex"),
+    });
+  });
+
+  it("groups sorted connection IDs into one canonical env value per sidecar", async () => {
+    const connectionInput: ExecutionAttemptProvisioningInput = {
+      ...input,
+      connections: [
+        { id: "zeta", sidecar: "mcp-b", type: "oauth", credentials: { token: "do-not-pass" } },
+        { id: "charlie", sidecar: "mcp-a" },
+        { id: "alpha", sidecar: "mcp-a" },
+      ] as ExecutionAttemptProvisioningInput["connections"],
+    };
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockRejectedValue({ code: 404 });
+    const create = vi.spyOn(CustomObjectsApi.prototype, "createNamespacedCustomObject").mockImplementation(async ({ body }) => ({
+      ...(body as SandboxClaim),
+      status: {
+        conditions: [{ type: "Ready", status: "True", lastTransitionTime: "", message: "" }],
+        sandbox: { podIPs: ["10.0.0.8"] },
+      },
+    }));
+
+    await provisioner().provision(connectionInput, new AbortController().signal);
+
+    const created = create.mock.calls[0]![0].body as SandboxClaim;
+    expect(created.spec?.env?.filter(({ name }) => name === "AGENTBAY_CONNECTIONS")).toEqual([
+      {
+        containerName: "mcp-a",
+        name: "AGENTBAY_CONNECTIONS",
+        value: '{"refs":["alpha","charlie"],"schemaVersion":1,"tenantId":"tenant-1"}',
+      },
+      {
+        containerName: "mcp-b",
+        name: "AGENTBAY_CONNECTIONS",
+        value: '{"refs":["zeta"],"schemaVersion":1,"tenantId":"tenant-1"}',
+      },
+    ]);
+    const authorization = '[{"id":"alpha","sidecar":"mcp-a"},{"id":"charlie","sidecar":"mcp-a"},{"id":"zeta","sidecar":"mcp-b"}]';
+    const digest = createHash("sha256").update(authorization).digest("hex");
+    expect(created.metadata.annotations).toMatchObject({ "agentbay.dev/connections-digest": digest });
+    expect(created.metadata.annotations).not.toHaveProperty("agentbay.dev/connections");
+    expect(created.spec?.additionalPodMetadata?.annotations).toEqual({
+      "agentbay.dev/connections-digest": digest,
+    });
+    expect(JSON.stringify(created)).not.toContain("secret");
+    expect(JSON.stringify(created)).not.toContain("credential");
+  });
+
+  it("digests canonical authorization sorted by ID independently of sidecar grouping", async () => {
+    const connectionInput: ExecutionAttemptProvisioningInput = {
+      ...input,
+      connections: [
+        { id: "alpha", sidecar: "z-sidecar" },
+        { id: "zeta", sidecar: "a-sidecar" },
+      ],
+    };
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockRejectedValue({ code: 404 });
+    const create = vi.spyOn(CustomObjectsApi.prototype, "createNamespacedCustomObject").mockImplementation(async ({ body }) => ({
+      ...(body as SandboxClaim),
+      status: {
+        conditions: [{ type: "Ready", status: "True", lastTransitionTime: "", message: "" }],
+        sandbox: { podIPs: ["10.0.0.8"] },
+      },
+    }));
+
+    await provisioner().provision(connectionInput, new AbortController().signal);
+
+    const created = create.mock.calls[0]![0].body as SandboxClaim;
+    const authorization = '[{"id":"alpha","sidecar":"z-sidecar"},{"id":"zeta","sidecar":"a-sidecar"}]';
+    expect(created.metadata.annotations?.["agentbay.dev/connections-digest"]).toBe(
+      createHash("sha256").update(authorization).digest("hex"),
+    );
+    expect(created.metadata.annotations).not.toHaveProperty("agentbay.dev/connections");
+    expect(created.spec?.env?.filter(({ name }) => name === "AGENTBAY_CONNECTIONS").map(({ containerName }) => containerName)).toEqual([
+      "a-sidecar",
+      "z-sidecar",
+    ]);
   });
 
   it("adds git workspace materializer variables and omits credentials", async () => {
@@ -189,6 +271,29 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it("rejects connections with a warm pool before reading or creating a claim", async () => {
+    const get = vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject");
+    const create = vi.spyOn(CustomObjectsApi.prototype, "createNamespacedCustomObject");
+
+    await expect(provisioner().provision({
+      ...input,
+      connections: [{ id: "github", sidecar: "mcp-proxy" }],
+      warmPool: "opencode-pool",
+    }, new AbortController().signal)).rejects.toThrow(/Connection authorization.*warm pool/);
+    expect(get).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("never permits connection authorization to target opencode", async () => {
+    const get = vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject");
+
+    await expect(provisioner().provision({
+      ...input,
+      connections: [{ id: "github", sidecar: "opencode" }],
+    }, new AbortController().signal)).rejects.toThrow(/opencode/);
+    expect(get).not.toHaveBeenCalled();
+  });
+
   it("observes an existing claim only when all ownership annotations match", async () => {
     vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(claim(true));
     const create = vi.spyOn(CustomObjectsApi.prototype, "createNamespacedCustomObject");
@@ -222,6 +327,16 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  it("rejects an existing claim when its connection authorization digest differs", async () => {
+    const existing = claim(true);
+    existing.metadata.annotations!["agentbay.dev/connections-digest"] = "different";
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(existing);
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject");
+
+    await expect(provisioner().provision(input, new AbortController().signal)).rejects.toThrow(/connections-digest/);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
   it("waits across watch reconnects until the claim is ready", async () => {
     vi.useFakeTimers();
     vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(claim());
@@ -239,6 +354,69 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     handles[1]!.event("MODIFIED", claim(true));
 
     await expect(result).resolves.toMatchObject({ host: `sandbox-1.${NAMESPACE}.svc` });
+  });
+
+  it("rejects immediately when a watched claim reports Ready=False", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(claim());
+    let onEvent: ((phase: string, object: unknown) => void) | undefined;
+    const watchController = new AbortController();
+    vi.spyOn(Watch.prototype, "watch").mockImplementation(async (_path, _query, event) => {
+      onEvent = event;
+      return watchController;
+    });
+
+    const result = provisioner(10_000).provision(input, new AbortController().signal);
+    await Promise.resolve();
+    await Promise.resolve();
+    const rejected = claim();
+    rejected.status = {
+      conditions: [{
+        type: "Ready",
+        status: "False",
+        lastTransitionTime: "2026-07-17T12:00:01.000Z",
+        reason: "ReconcilerError",
+        message: "required sidecar is missing",
+      }],
+    };
+    onEvent!("MODIFIED", rejected);
+
+    await expect(result).rejects.toThrow(/was rejected: ReconcilerError: required sidecar is missing$/);
+    expect(watchController.signal.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("ignores transient Ready=False and resolves when the claim later becomes ready", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(claim());
+    let onEvent: ((phase: string, object: unknown) => void) | undefined;
+    const watchController = new AbortController();
+    vi.spyOn(Watch.prototype, "watch").mockImplementation(async (_path, _query, event) => {
+      onEvent = event;
+      return watchController;
+    });
+
+    const result = provisioner(10_000).provision(input, new AbortController().signal);
+    await Promise.resolve();
+    await Promise.resolve();
+    const pending = claim();
+    pending.status = {
+      conditions: [{
+        type: "Ready",
+        status: "False",
+        lastTransitionTime: "2026-07-17T12:00:01.000Z",
+        reason: "SandboxNotReady",
+        message: "sandbox is still starting",
+      }],
+    };
+    onEvent!("MODIFIED", pending);
+    expect(watchController.signal.aborted).toBe(false);
+
+    onEvent!("MODIFIED", claim(true));
+
+    await expect(result).resolves.toMatchObject({ host: `sandbox-1.${NAMESPACE}.svc` });
+    expect(watchController.signal.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("aborts a readiness wait and closes its watch", async () => {

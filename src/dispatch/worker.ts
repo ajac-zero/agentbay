@@ -7,6 +7,7 @@ import { ExecutionLeaseLostError, startExecutionLeaseHeartbeat } from "./heartbe
 import type { JsonValue } from "../execution/types.js";
 import { runExecutionAttempt } from "../agent/runner.js";
 import type { OpenCodeConnectionOptions } from "../agent/client.js";
+import { SandboxClaimRejectedError } from "../sandbox/provisioner.js";
 
 type AttemptProfile = ExecutionAttemptProfile;
 type ProvisionedAttempt = Awaited<ReturnType<ExecutionAttemptProvisioner["provision"]>>;
@@ -144,6 +145,7 @@ export class DispatcherWorker {
       provisioningStarted = true;
       provisioned = await this.#options.provisioner.provision({
         attempt: execution.lease.attempt,
+        connections: profile.resolvedPolicy.connections,
         executionId: execution.executionId,
         opencodeConfig: profile.resolvedPolicy.runtime.opencodeConfig,
         profileVersion: {
@@ -210,7 +212,7 @@ export class DispatcherWorker {
         const timedOut = Date.now() >= execution.timeoutAt.getTime();
         if (heartbeat.fenceLost) throw new ExecutionLeaseLostError();
         if (!timedOut) heartbeat.assertOwned();
-        const retry = !timedOut
+        const retry = !(error instanceof SandboxClaimRejectedError) && !timedOut
           && execution.lease.attempt < this.#options.maxAttempts
           && Date.now() + this.#options.retryDelayMs < execution.timeoutAt.getTime();
         await this.#transitionOrLose(execution, running

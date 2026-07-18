@@ -18,6 +18,14 @@ const dnsLabelSchema = z
   .min(1)
   .max(63)
   .regex(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/, "must be a valid DNS label");
+const reservedConnectionSidecars = new Set(["opencode", "workspace-materializer", "agentbay-gateway-proxy"]);
+const connectionIdSchema = z.string().min(1).max(128).regex(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/);
+const profileConnectionSchema = z
+  .object({
+    id: connectionIdSchema,
+    sidecar: dnsLabelSchema.refine((value) => !reservedConnectionSidecars.has(value), "must not use a reserved sidecar name"),
+  })
+  .strict();
 
 export const agentProfileDefinitionSchema: z.ZodType<AgentProfileDefinition> = z
   .object({
@@ -35,6 +43,7 @@ export const agentProfileDefinitionSchema: z.ZodType<AgentProfileDefinition> = z
         warmPool: dnsLabelSchema.default("none"),
       })
       .strict(),
+    connections: z.array(profileConnectionSchema).max(32).default([]),
     permissions: z.object({ onRequest: z.literal("fail") }).strict(),
     timeoutSeconds: z.number().int().min(1).max(86_400),
     retention: z
@@ -50,6 +59,20 @@ export const agentProfileDefinitionSchema: z.ZodType<AgentProfileDefinition> = z
         code: "custom",
         message: `opencodeConfig.agent must define selected agent ${definition.runtime.agent}`,
         path: ["runtime", "opencodeConfig", "agent"],
+      });
+    }
+    const connectionIds = new Set<string>();
+    definition.connections.forEach((connection, index) => {
+      if (connectionIds.has(connection.id)) {
+        context.addIssue({ code: "custom", message: "connection IDs must be unique", path: ["connections", index, "id"] });
+      }
+      connectionIds.add(connection.id);
+    });
+    if (definition.connections.length > 0 && definition.sandbox.warmPool !== "none") {
+      context.addIssue({
+        code: "custom",
+        message: "must be none when connections are configured",
+        path: ["sandbox", "warmPool"],
       });
     }
   });
@@ -128,6 +151,7 @@ export const publishProfileVersionRoute = createRoute({
   responses: {
     201: jsonResponse("Profile version published.", profileVersionSchema),
     ...securedErrors,
+    404: jsonResponse("A referenced connection was not found.", executionErrorSchema),
     409: jsonResponse("Profile version already exists.", executionErrorSchema),
   },
 });
