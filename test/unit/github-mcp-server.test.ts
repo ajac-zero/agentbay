@@ -14,13 +14,24 @@ afterEach(async () => {
   await Promise.all(running.splice(0).map((entry) => entry.close()));
 });
 
-async function serve(service = { createIssueComment: vi.fn() }, ready = true, options: Record<string, unknown> = {}) {
-  const server = http.createServer(createMcpHandler(service, { isReady: () => ready, ...options }));
+function completeService(service: Record<string, unknown> = {}) {
+  return {
+    createIssueComment: vi.fn(),
+    branchCreate: vi.fn(),
+    contentsPut: vi.fn(),
+    pullRequestCreate: vi.fn(),
+    ...service,
+  };
+}
+
+async function serve(service: Record<string, unknown> = {}, ready = true, options: Record<string, unknown> = {}) {
+  const complete = completeService(service);
+  const server = http.createServer(createMcpHandler(complete, { isReady: () => ready, ...options }));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const close = () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   running.push({ server, close });
   const { port } = server.address() as AddressInfo;
-  return { service, baseUrl: `http://127.0.0.1:${port}` };
+  return { service: complete, baseUrl: `http://127.0.0.1:${port}` };
 }
 
 async function rpc(baseUrl: string, body: unknown, headers: Record<string, string> = {}) {
@@ -42,6 +53,49 @@ const callArguments = {
   body: "hello",
   idempotency_key: "execution-1",
 };
+
+const sha = "a".repeat(40);
+const toolCases = [
+  {
+    name: "branch_create",
+    method: "branchCreate",
+    arguments: { branch: "agent/change", base_sha: sha, idempotency_key: "branch-1" },
+    mapped: { branch: "agent/change", baseSha: sha, idempotencyKey: "branch-1" },
+    invalid: { branch: "bad..branch", base_sha: sha, idempotency_key: "branch-1" },
+  },
+  {
+    name: "contents_put",
+    method: "contentsPut",
+    arguments: {
+      path: "src/index.ts", branch: "agent/change", content: "Y29udGVudA==", encoding: "base64",
+      expected_sha: null, message: "Update index", idempotency_key: "contents-1",
+    },
+    mapped: {
+      path: "src/index.ts", branch: "agent/change", content: "Y29udGVudA==", encoding: "base64",
+      expectedSha: null, message: "Update index", idempotencyKey: "contents-1",
+    },
+    invalid: {
+      path: "../index.ts", branch: "agent/change", content: "content", encoding: "hex",
+      expected_sha: null, message: "Update index", idempotency_key: "contents-1",
+    },
+  },
+  {
+    name: "pull_request_create",
+    method: "pullRequestCreate",
+    arguments: {
+      head: "agent/change", base: "main", title: "Improve index", body: "Details", draft: false,
+      idempotency_key: "pr-1",
+    },
+    mapped: {
+      head: "agent/change", base: "main", title: "Improve index", body: "Details", draft: false,
+      idempotencyKey: "pr-1",
+    },
+    invalid: {
+      head: "agent/change", base: "main", title: "", body: "Details", draft: false,
+      idempotency_key: "pr-1",
+    },
+  },
+] as const;
 
 describe("GitHub MCP sidecar protocol", () => {
   it("supports the protocol version offered by OpenCode 1.14.50", async () => {
@@ -74,7 +128,7 @@ describe("GitHub MCP sidecar protocol", () => {
     const payload = await tools.json() as any;
     expect(payload.jsonrpc).toBe("2.0");
     expect(payload.id).toBe(2);
-    expect(payload.result.tools).toHaveLength(1);
+    expect(payload.result.tools).toHaveLength(4);
     expect(payload.result.tools[0].name).toBe("issue_comment");
   });
 
@@ -110,11 +164,11 @@ describe("GitHub MCP sidecar protocol", () => {
     await expect(previous.json()).resolves.toMatchObject({ result: { protocolVersion: "2025-03-26" } });
   });
 
-  it("lists exactly the strict issue_comment tool", async () => {
+  it("lists exactly four strict tools", async () => {
     const { baseUrl } = await serve();
     const response = await rpc(baseUrl, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
     const payload = await response.json() as any;
-    expect(payload.result.tools).toHaveLength(1);
+    expect(payload.result.tools).toHaveLength(4);
     expect(payload.result.tools[0]).toMatchObject({
       name: "issue_comment",
       inputSchema: {
@@ -131,6 +185,33 @@ describe("GitHub MCP sidecar protocol", () => {
       repo: { maxLength: 100 },
       body: { minLength: 1, maxLength: 16 * 1024 },
       idempotency_key: { maxLength: 128, pattern: "^[A-Za-z0-9._:-]{1,128}$" },
+    });
+    expect(payload.result.tools.map((tool: any) => tool.name)).toEqual([
+      "issue_comment", "branch_create", "contents_put", "pull_request_create",
+    ]);
+    for (const tool of payload.result.tools) {
+      expect(tool.description).toContain("fixed GitHub repository");
+      expect(tool.inputSchema.additionalProperties).toBe(false);
+    }
+    expect(payload.result.tools[1].inputSchema).toMatchObject({
+      required: ["branch", "base_sha", "idempotency_key"],
+      properties: { base_sha: { minLength: 40, maxLength: 40, pattern: "^[a-f0-9]{40}$" } },
+    });
+    expect(payload.result.tools[2].inputSchema).toMatchObject({
+      required: ["path", "branch", "content", "encoding", "expected_sha", "message", "idempotency_key"],
+      properties: {
+        content: { maxLength: 349_528 },
+        encoding: { enum: ["utf8", "base64"] },
+        expected_sha: { anyOf: [{ pattern: "^[a-f0-9]{40}$" }, { type: "null" }] },
+      },
+    });
+    expect(payload.result.tools[3].inputSchema).toMatchObject({
+      required: ["head", "base", "title", "body", "draft", "idempotency_key"],
+      properties: {
+        title: { minLength: 1, maxLength: 256 },
+        body: { maxLength: 65_536 },
+        draft: { type: "boolean" },
+      },
     });
   });
 
@@ -157,6 +238,86 @@ describe("GitHub MCP sidecar protocol", () => {
     });
   });
 
+  it.each(toolCases)("maps $name arguments to its core service method", async ({ name, method, arguments: args, mapped }) => {
+    const serviceMethod = vi.fn().mockResolvedValue({ ok: true });
+    const { baseUrl } = await serve({ [method]: serviceMethod });
+    const response = await rpc(baseUrl, {
+      jsonrpc: "2.0", id: 3, method: "tools/call", params: { name, arguments: args },
+    });
+    expect(serviceMethod).toHaveBeenCalledWith(mapped);
+    await expect(response.json()).resolves.toMatchObject({
+      result: { structuredContent: { ok: true }, content: [{ type: "text", text: '{"ok":true}' }] },
+    });
+  });
+
+  it.each(toolCases)("rejects invalid $name arguments", async ({ name, method, invalid }) => {
+    const serviceMethod = vi.fn();
+    const { baseUrl } = await serve({ [method]: serviceMethod });
+    const response = await rpc(baseUrl, {
+      jsonrpc: "2.0", id: 4, method: "tools/call", params: { name, arguments: invalid },
+    });
+    await expect(response.json()).resolves.toMatchObject({ error: { code: -32602, message: "Invalid params" } });
+    expect(serviceMethod).not.toHaveBeenCalled();
+  });
+
+  it("applies the core branch-ref validation rules at runtime", async () => {
+    const branchCreate = vi.fn();
+    const { baseUrl } = await serve({ branchCreate });
+    for (const branch of ["feature/.hidden", "feature/trailing.", "feature/locked.lock", "feature//nested", "feature/"]) {
+      const response = await rpc(baseUrl, {
+        jsonrpc: "2.0", id: branch, method: "tools/call",
+        params: {
+          name: "branch_create",
+          arguments: { ...toolCases[0].arguments, branch },
+        },
+      });
+      await expect(response.json()).resolves.toMatchObject({ error: { code: -32602 } });
+    }
+    expect(branchCreate).not.toHaveBeenCalled();
+  });
+
+  it.each(toolCases)("sanitizes $name failures and exposes safe state conflicts", async ({ name, method, arguments: args }) => {
+    const serviceMethod = vi.fn().mockRejectedValue(
+      new GitHubApiError("secret token ghp_leaked", { code: "STATE_CONFLICT" }),
+    );
+    const { baseUrl } = await serve({ [method]: serviceMethod });
+    const response = await rpc(baseUrl, {
+      jsonrpc: "2.0", id: 5, method: "tools/call", params: { name, arguments: args },
+    });
+    const text = await response.text();
+    expect(text).not.toContain("ghp_leaked");
+    expect(JSON.parse(text)).toMatchObject({
+      result: { isError: true, structuredContent: { error: `${name} failed`, code: "STATE_CONFLICT" } },
+    });
+  });
+
+  it("does not expose the legacy CONFLICT error code", async () => {
+    const branchCreate = vi.fn().mockRejectedValue(new GitHubApiError("state details", { code: "CONFLICT" }));
+    const { baseUrl } = await serve({ branchCreate });
+    const response = await rpc(baseUrl, {
+      jsonrpc: "2.0", id: 5, method: "tools/call",
+      params: { name: "branch_create", arguments: toolCases[0].arguments },
+    });
+    const payload = await response.json() as any;
+    expect(payload).toMatchObject({
+      result: { isError: true, structuredContent: { error: "branch_create failed" } },
+    });
+    expect(payload.result.structuredContent).not.toHaveProperty("code");
+  });
+
+  it("accepts the maximum contents_put content length", async () => {
+    const contentsPut = vi.fn().mockResolvedValue({ ok: true });
+    const { baseUrl } = await serve({ contentsPut });
+    const content = Buffer.alloc(256 * 1024).toString("base64");
+    expect(content).toHaveLength(349_528);
+    const response = await rpc(baseUrl, {
+      jsonrpc: "2.0", id: 6, method: "tools/call",
+      params: { name: "contents_put", arguments: { ...toolCases[1].arguments, content } },
+    });
+    expect(response.status).toBe(200);
+    expect(contentsPut).toHaveBeenCalledWith({ ...toolCases[1].mapped, content });
+  });
+
   it("uses -32602 for invalid calls and sanitizes operational failures", async () => {
     const createIssueComment = vi.fn().mockRejectedValue(
       new GitHubApiError("secret token ghp_leaked and stack", { code: "IDEMPOTENCY_CONFLICT" }),
@@ -177,7 +338,7 @@ describe("GitHub MCP sidecar protocol", () => {
     const text = await failed.text();
     expect(text).not.toContain("ghp_leaked");
     expect(JSON.parse(text)).toMatchObject({
-      result: { isError: true, structuredContent: { error: "Issue comment failed", code: "IDEMPOTENCY_CONFLICT" } },
+      result: { isError: true, structuredContent: { error: "issue_comment failed", code: "IDEMPOTENCY_CONFLICT" } },
     });
   });
 
@@ -328,7 +489,7 @@ describe("GitHub MCP sidecar protocol", () => {
   it("does not listen before asynchronous core initialization succeeds", async () => {
     let finishInitialization!: () => void;
     const initialize = vi.fn(() => new Promise<void>((resolve) => { finishInitialization = resolve; }));
-    const starting = startServer({ initialize, createIssueComment: vi.fn() }, { host: "127.0.0.1", port: 0 });
+    const starting = startServer({ initialize, ...completeService() }, { host: "127.0.0.1", port: 0 });
     let settled = false;
     void starting.then(() => { settled = true; });
     await new Promise((resolve) => setImmediate(resolve));
@@ -345,4 +506,17 @@ describe("GitHub MCP sidecar protocol", () => {
     expect(started.server.maxRequestsPerSocket).toBe(100);
     expect(started.server.maxConnections).toBe(32);
   });
+
+  it.each(["createIssueComment", "branchCreate", "contentsPut", "pullRequestCreate"])(
+    "rejects a service missing %s during handler construction and before startup initialization",
+    async (method) => {
+      const service = { initialize: vi.fn(), ...completeService() } as Record<string, unknown>;
+      delete service[method];
+      expect(() => createMcpHandler(service)).toThrow(`service.${method} must be a function`);
+      await expect(startServer(service, { host: "127.0.0.1", port: 0 })).rejects.toThrow(
+        `service.${method} must be a function`,
+      );
+      expect(service.initialize).not.toHaveBeenCalled();
+    },
+  );
 });

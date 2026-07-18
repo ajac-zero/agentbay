@@ -411,9 +411,13 @@ sandboxTemplates:
       # -- authz/proxy sidecars that expose model, API, or MCP gateways on
       # -- localhost. Connection profiles may select only sidecars already
       # -- owned by this template and use cold sandboxes (`warmPool: none`).
-      # -- See the chart README for a production-hardened GitHub MCP sidecar
-      # -- example. Pin sidecar images by digest and mount its credential volume
-      # -- only on that sidecar, never through `extraVolumeMounts`.
+      # -- See the chart README for a production-hardened four-tool GitHub MCP
+      # -- sidecar example. Its selected-repository GitHub App needs Issues,
+      # -- Contents, and Pull requests write, with no Workflows permission. Pin
+      # -- sidecar images by digest and mount its credential volume only on that
+      # -- sidecar, never through `extraVolumeMounts`. Do not mount `workspace`
+      # -- or `/workspace` into the GitHub sidecar; OpenCode sends bounded full
+      # -- file content through MCP.
       sidecars: []
       # -- Additional volumes appended to the sandbox Pod. Use with `sidecars`
       # -- for projected tokens, config, sidecar-specific state, or a static

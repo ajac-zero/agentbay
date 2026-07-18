@@ -6,6 +6,8 @@ const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8082;
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_COMMENT_BYTES = 16 * 1024;
+const MAX_CONTENT_LENGTH = 349_528;
+const MAX_PULL_REQUEST_BODY_LENGTH = 64 * 1024;
 const DEFAULT_BODY_TIMEOUT_MS = 10_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_TOOL_CONCURRENCY = 8;
@@ -21,21 +23,33 @@ const SAFE_GITHUB_ERROR_CODES = new Set([
   "INVALID_RESPONSE",
   "REPOSITORY_NOT_ALLOWED",
   "REQUEST_TOO_LARGE",
+  "STATE_CONFLICT",
   "UPSTREAM_ERROR",
   "UPSTREAM_FAILURE",
 ]);
 const OWNER_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$";
 const REPOSITORY_PATTERN = "^(?!\\.{1,2}$)[A-Za-z0-9._-]+$";
 const IDEMPOTENCY_KEY_PATTERN = "^[A-Za-z0-9._:-]{1,128}$";
+const SHA_PATTERN = "^[a-f0-9]{40}$";
+const BRANCH_PATTERN = "^(?!@$)(?![/.])(?!.*[/.]$)(?!.*(?:/\\.|\\./))(?!.*//)(?!.*\\.\\.)(?!.*@\\{)(?!.*[\\u0000-\\u0020\\u007f~^:?*\\[\\\\])(?!.*\\.lock(?:/|$)).+$";
+const PATH_PATTERN = "^(?!/)(?!.*//$)(?!.*//)(?!.*\\\\)(?!.*[\\u0000-\\u001f\\u007f])(?!\\.{1,2}(?:/|$))(?!.*\/\\.{1,2}(?:/|$))(?!\\.[gG][iI][tT][hH][uU][bB]\/[wW][oO][rR][kK][fF][lL][oO][wW][sS](?:/|$))(?!.*\/$).+$";
 const VALID_UTF16_PATTERN = "^(?:[^\\uD800-\\uDFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$";
 const INVALID_SURROGATE_PATTERN = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 const VALID_OWNER = new RegExp(OWNER_PATTERN);
 const VALID_REPOSITORY = new RegExp(REPOSITORY_PATTERN);
 const VALID_IDEMPOTENCY_KEY = new RegExp(IDEMPOTENCY_KEY_PATTERN);
+const VALID_SHA = new RegExp(SHA_PATTERN);
+const VALID_BRANCH = new RegExp(BRANCH_PATTERN);
+const VALID_PATH = new RegExp(PATH_PATTERN);
+
+const UTF16_STRING = { type: "string", pattern: VALID_UTF16_PATTERN };
+const IDEMPOTENCY_KEY = { type: "string", minLength: 1, maxLength: 128, pattern: IDEMPOTENCY_KEY_PATTERN };
+const BRANCH = { ...UTF16_STRING, minLength: 1, maxLength: 255, pattern: BRANCH_PATTERN };
+const SHA = { type: "string", minLength: 40, maxLength: 40, pattern: SHA_PATTERN };
 
 const ISSUE_COMMENT_TOOL = Object.freeze({
   name: "issue_comment",
-  description: "Create a comment on a GitHub issue",
+  description: "Create a comment on an issue in the fixed GitHub repository",
   inputSchema: {
     type: "object",
     properties: {
@@ -43,12 +57,71 @@ const ISSUE_COMMENT_TOOL = Object.freeze({
       repo: { type: "string", minLength: 1, maxLength: 100, pattern: REPOSITORY_PATTERN },
       issue_number: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
       body: { type: "string", minLength: 1, maxLength: MAX_COMMENT_BYTES, pattern: VALID_UTF16_PATTERN },
-      idempotency_key: { type: "string", minLength: 1, maxLength: 128, pattern: IDEMPOTENCY_KEY_PATTERN },
+      idempotency_key: IDEMPOTENCY_KEY,
     },
     required: ["owner", "repo", "issue_number", "body", "idempotency_key"],
     additionalProperties: false,
   },
 });
+
+const BRANCH_CREATE_TOOL = Object.freeze({
+  name: "branch_create",
+  description: "Create a branch in the fixed GitHub repository",
+  inputSchema: {
+    type: "object",
+    properties: {
+      branch: BRANCH,
+      base_sha: SHA,
+      idempotency_key: IDEMPOTENCY_KEY,
+    },
+    required: ["branch", "base_sha", "idempotency_key"],
+    additionalProperties: false,
+  },
+});
+
+const CONTENTS_PUT_TOOL = Object.freeze({
+  name: "contents_put",
+  description: "Create or update a file in the fixed GitHub repository",
+  inputSchema: {
+    type: "object",
+    properties: {
+      path: { ...UTF16_STRING, minLength: 1, maxLength: 1024, pattern: PATH_PATTERN },
+      branch: BRANCH,
+      content: { ...UTF16_STRING, maxLength: MAX_CONTENT_LENGTH },
+      encoding: { type: "string", enum: ["utf8", "base64"] },
+      expected_sha: { anyOf: [SHA, { type: "null" }] },
+      message: { ...UTF16_STRING, minLength: 1, maxLength: 1024 },
+      idempotency_key: IDEMPOTENCY_KEY,
+    },
+    required: ["path", "branch", "content", "encoding", "expected_sha", "message", "idempotency_key"],
+    additionalProperties: false,
+  },
+});
+
+const PULL_REQUEST_CREATE_TOOL = Object.freeze({
+  name: "pull_request_create",
+  description: "Create a pull request in the fixed GitHub repository",
+  inputSchema: {
+    type: "object",
+    properties: {
+      head: BRANCH,
+      base: BRANCH,
+      title: { ...UTF16_STRING, minLength: 1, maxLength: 256 },
+      body: { ...UTF16_STRING, maxLength: MAX_PULL_REQUEST_BODY_LENGTH },
+      draft: { type: "boolean" },
+      idempotency_key: IDEMPOTENCY_KEY,
+    },
+    required: ["head", "base", "title", "body", "draft", "idempotency_key"],
+    additionalProperties: false,
+  },
+});
+
+const TOOLS = Object.freeze([
+  ISSUE_COMMENT_TOOL,
+  BRANCH_CREATE_TOOL,
+  CONTENTS_PUT_TOOL,
+  PULL_REQUEST_CREATE_TOOL,
+]);
 
 function sendJson(response, status, value) {
   const body = JSON.stringify(value);
@@ -82,11 +155,23 @@ function acceptsStreamableHttp(value) {
   return accepted.has("application/json") && accepted.has("text/event-stream");
 }
 
-function validIssueCommentArguments(value) {
+function hasExactKeys(value, expected) {
   if (!isObject(value)) return false;
   const keys = Object.keys(value);
-  const expected = ["owner", "repo", "issue_number", "body", "idempotency_key"];
-  if (keys.length !== expected.length || keys.some((key) => !expected.includes(key))) return false;
+  return keys.length === expected.length && keys.every((key) => expected.includes(key));
+}
+
+function validString(value, { min = 0, max = Infinity, pattern } = {}) {
+  return typeof value === "string" && value.length >= min && Buffer.byteLength(value, "utf8") <= max &&
+    !INVALID_SURROGATE_PATTERN.test(value) && (pattern === undefined || pattern.test(value));
+}
+
+function validIdempotencyKey(value) {
+  return typeof value === "string" && VALID_IDEMPOTENCY_KEY.test(value);
+}
+
+function validIssueCommentArguments(value) {
+  if (!hasExactKeys(value, ["owner", "repo", "issue_number", "body", "idempotency_key"])) return false;
   return (
     typeof value.owner === "string" && VALID_OWNER.test(value.owner) &&
     typeof value.repo === "string" && value.repo.length <= 100 && VALID_REPOSITORY.test(value.repo) &&
@@ -96,6 +181,88 @@ function validIssueCommentArguments(value) {
     typeof value.idempotency_key === "string" && VALID_IDEMPOTENCY_KEY.test(value.idempotency_key)
   );
 }
+
+function validBranchCreateArguments(value) {
+  return hasExactKeys(value, ["branch", "base_sha", "idempotency_key"]) &&
+    validString(value.branch, { min: 1, max: 255, pattern: VALID_BRANCH }) &&
+    typeof value.base_sha === "string" && VALID_SHA.test(value.base_sha) &&
+    validIdempotencyKey(value.idempotency_key);
+}
+
+function validContentsPutArguments(value) {
+  if (!hasExactKeys(value, ["path", "branch", "content", "encoding", "expected_sha", "message", "idempotency_key"]) ||
+      !validString(value.content, { max: MAX_CONTENT_LENGTH })) return false;
+  let contentBytes;
+  if (value.encoding === "utf8") {
+    contentBytes = Buffer.byteLength(value.content, "utf8");
+  } else if (value.encoding === "base64" && value.content.length % 4 === 0 &&
+      /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.content)) {
+    const decoded = Buffer.from(value.content, "base64");
+    if (decoded.toString("base64") !== value.content) return false;
+    contentBytes = decoded.length;
+  } else {
+    return false;
+  }
+  return contentBytes <= 256 * 1024 &&
+    validString(value.path, { min: 1, max: 1024, pattern: VALID_PATH }) &&
+    validString(value.branch, { min: 1, max: 255, pattern: VALID_BRANCH }) &&
+    (value.expected_sha === null || (typeof value.expected_sha === "string" && VALID_SHA.test(value.expected_sha))) &&
+    validString(value.message, { min: 1, max: 1024 }) &&
+    validIdempotencyKey(value.idempotency_key);
+}
+
+function validPullRequestCreateArguments(value) {
+  return hasExactKeys(value, ["head", "base", "title", "body", "draft", "idempotency_key"]) &&
+    validString(value.head, { min: 1, max: 255, pattern: VALID_BRANCH }) &&
+    validString(value.base, { min: 1, max: 255, pattern: VALID_BRANCH }) &&
+    validString(value.title, { min: 1, max: 256 }) &&
+    validString(value.body, { max: MAX_PULL_REQUEST_BODY_LENGTH }) &&
+    typeof value.draft === "boolean" && validIdempotencyKey(value.idempotency_key);
+}
+
+const TOOL_HANDLERS = new Map([
+  ["issue_comment", {
+    validate: validIssueCommentArguments,
+    call: (service, input) => service.createIssueComment({
+      owner: input.owner,
+      repository: input.repo,
+      issueNumber: input.issue_number,
+      body: input.body,
+      idempotencyKey: input.idempotency_key,
+    }),
+  }],
+  ["branch_create", {
+    validate: validBranchCreateArguments,
+    call: (service, input) => service.branchCreate({
+      branch: input.branch,
+      baseSha: input.base_sha,
+      idempotencyKey: input.idempotency_key,
+    }),
+  }],
+  ["contents_put", {
+    validate: validContentsPutArguments,
+    call: (service, input) => service.contentsPut({
+      path: input.path,
+      branch: input.branch,
+      content: input.content,
+      encoding: input.encoding,
+      expectedSha: input.expected_sha,
+      message: input.message,
+      idempotencyKey: input.idempotency_key,
+    }),
+  }],
+  ["pull_request_create", {
+    validate: validPullRequestCreateArguments,
+    call: (service, input) => service.pullRequestCreate({
+      head: input.head,
+      base: input.base,
+      title: input.title,
+      body: input.body,
+      draft: input.draft,
+      idempotencyKey: input.idempotency_key,
+    }),
+  }],
+]);
 
 function localOrigin(origin) {
   if (origin === undefined) return true;
@@ -206,26 +373,22 @@ async function dispatch(message, service, toolSlots) {
     if (message.params !== undefined && !isObject(message.params)) {
       return { body: jsonRpcError(id, -32602, "Invalid params") };
     }
-    return { body: { jsonrpc: "2.0", id, result: { tools: [ISSUE_COMMENT_TOOL] } } };
+    return { body: { jsonrpc: "2.0", id, result: { tools: TOOLS } } };
   }
 
   if (message.method === "tools/call") {
+    const handler = isObject(message.params) && typeof message.params.name === "string"
+      ? TOOL_HANDLERS.get(message.params.name)
+      : undefined;
     if (!isObject(message.params) || Object.keys(message.params).length !== 2 ||
         !Object.hasOwn(message.params, "name") || !Object.hasOwn(message.params, "arguments") ||
-        message.params.name !== ISSUE_COMMENT_TOOL.name ||
-        !validIssueCommentArguments(message.params.arguments)) {
+        handler === undefined || !handler.validate(message.params.arguments)) {
       return { body: jsonRpcError(id, -32602, "Invalid params") };
     }
     if (!toolSlots.acquire()) return toolError(id, "Server busy", "BUSY");
     try {
       const input = message.params.arguments;
-      const result = await service.createIssueComment({
-        owner: input.owner,
-        repository: input.repo,
-        issueNumber: input.issue_number,
-        body: input.body,
-        idempotencyKey: input.idempotency_key,
-      });
+      const result = await handler.call(service, input);
       return {
         body: {
           jsonrpc: "2.0",
@@ -238,7 +401,7 @@ async function dispatch(message, service, toolSlots) {
       };
     } catch (error) {
       const code = error instanceof GitHubApiError && SAFE_GITHUB_ERROR_CODES.has(error.code) ? error.code : undefined;
-      return toolError(id, "Issue comment failed", code);
+      return toolError(id, `${message.params.name} failed`, code);
     } finally {
       toolSlots.release();
     }
@@ -247,10 +410,16 @@ async function dispatch(message, service, toolSlots) {
   return { body: jsonRpcError(id, -32601, "Method not found") };
 }
 
-export function createMcpHandler(service, options = {}) {
-  if (!service || typeof service.createIssueComment !== "function") {
-    throw new TypeError("service.createIssueComment must be a function");
+function validateToolService(service) {
+  for (const method of ["createIssueComment", "branchCreate", "contentsPut", "pullRequestCreate"]) {
+    if (!service || typeof service[method] !== "function") {
+      throw new TypeError(`service.${method} must be a function`);
+    }
   }
+}
+
+export function createMcpHandler(service, options = {}) {
+  validateToolService(service);
   const isReady = options.isReady ?? (() => true);
   const bodyTimeoutMs = options.bodyTimeoutMs ?? DEFAULT_BODY_TIMEOUT_MS;
   const maxToolConcurrency = options.maxToolConcurrency ?? DEFAULT_MAX_TOOL_CONCURRENCY;
@@ -323,6 +492,7 @@ export async function startServer(service, options = {}) {
   if (!service || typeof service.initialize !== "function") {
     throw new TypeError("service.initialize must be a function");
   }
+  validateToolService(service);
 
   const readiness = { ready: false };
   await service.initialize();
@@ -369,6 +539,15 @@ async function main() {
     },
     createIssueComment(input) {
       return core.createIssueComment(input);
+    },
+    branchCreate(input) {
+      return core.branchCreate(input);
+    },
+    contentsPut(input) {
+      return core.contentsPut(input);
+    },
+    pullRequestCreate(input) {
+      return core.pullRequestCreate(input);
     },
   };
   const running = await startServer(service);

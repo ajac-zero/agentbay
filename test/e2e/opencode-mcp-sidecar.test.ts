@@ -20,11 +20,14 @@ afterEach(async () => {
 });
 
 describe.skipIf(!enabled)("OpenCode MCP sidecar compatibility", () => {
-  it("connects OpenCode 1.14.50 and discovers the sidecar tool", async () => {
+  it("connects OpenCode 1.14.50 and discovers the sidecar tools", async () => {
     const methods: string[] = [];
     running = await startServer({
       initialize: async () => {},
       createIssueComment: async () => ({ id: 1, html_url: "https://github.test/comment/1" }),
+      branchCreate: async () => ({ branch: "test", sha: "a".repeat(40), replayed: false }),
+      contentsPut: async () => ({ path: "test", sha: "b".repeat(40), replayed: false }),
+      pullRequestCreate: async () => ({ number: 1, state: "open", replayed: false }),
     }, { host: "0.0.0.0", port: 0 }) as RunningServer;
 
     running.server.on("request", (request) => {
@@ -72,5 +75,15 @@ describe.skipIf(!enabled)("OpenCode MCP sidecar compatibility", () => {
     expect(output).toMatch(/github\s+connected/);
     expect(methods).toContain("initialize");
     expect(methods).toContain("tools/list");
+
+    const discovered = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: { accept: "application/json, text/event-stream", "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+    });
+    const payload = await discovered.json() as { result: { tools: Array<{ name: string }> } };
+    expect(payload.result.tools.map((tool) => tool.name)).toEqual([
+      "issue_comment", "branch_create", "contents_put", "pull_request_create",
+    ]);
   }, 600_000);
 });

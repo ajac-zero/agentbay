@@ -280,6 +280,7 @@ helm template demo "$chart_dir" \
 
 test "$(grep -c 'name: github-app-credentials' "$work_dir/connection-sidecar.yaml")" -eq 2
 test "$(grep -c 'mountPath: /var/run/agentbay/github-app' "$work_dir/connection-sidecar.yaml")" -eq 1
+test "$(grep -c 'mountPath: /workspace' "$work_dir/connection-sidecar.yaml")" -eq 2
 test "$(grep -c 'secretName: example-github-app-credentials' "$work_dir/connection-sidecar.yaml")" -eq 1
 test "$(grep -c 'name: github-mcp' "$work_dir/connection-sidecar.yaml")" -eq 1
 grep -q 'example/github-mcp-sidecar@sha256:1111111111111111111111111111111111111111111111111111111111111111' "$work_dir/connection-sidecar.yaml"
@@ -303,6 +304,10 @@ if grep -q 'httpGet:' "$work_dir/connection-sidecar.yaml"; then
 fi
 grep -q 'readOnlyRootFilesystem: true' "$work_dir/connection-sidecar.yaml"
 grep -q 'runAsUser: 65532' "$work_dir/connection-sidecar.yaml"
+if grep -Eq 'Issues:|Contents:|Pull requests:|Workflows:' "$work_dir/connection-sidecar.yaml"; then
+  echo "GitHub App permission documentation unexpectedly rendered into the SandboxTemplate" >&2
+  exit 1
+fi
 
 for template in rbac.yaml reconciler-rbac.yaml; do
   helm template demo "$chart_dir" \
