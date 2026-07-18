@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DispatcherExecutionStore } from "../../src/dispatch/store.js";
-import type { ClaimedExecution, TransitionLeasedExecutionCommand } from "../../src/dispatch/types.js";
+import type {
+  ClaimedExecution,
+  ExecutionLeaseRenewalResult,
+  TransitionLeasedExecutionCommand,
+  TransitionLeasedExecutionResult,
+} from "../../src/dispatch/types.js";
 import { DispatcherWorker, type ExecutionAttemptRunner } from "../../src/dispatch/worker.js";
-import { SandboxClaimRejectedError } from "../../src/sandbox/provisioner.js";
+import { SandboxClaimCleanupError, SandboxClaimRejectedError } from "../../src/sandbox/provisioner.js";
 import type { ExecutionAttemptEndpoint, ExecutionAttemptProvisioner } from "../../src/sandbox/types.js";
 
 afterEach(() => vi.useRealTimers());
@@ -131,7 +136,7 @@ describe("DispatcherWorker", () => {
 
   it("aborts the runner and performs no late transition after heartbeat fence loss", async () => {
     vi.useFakeTimers();
-    const fixture = workerFixture({ renew: false });
+    const fixture = workerFixture({ renew: "LOST" });
     fixture.runner.run = vi.fn(({ onSession, signal }) => new Promise<never>(async (_resolve, reject) => {
       await onSession("session-1");
       signal.addEventListener("abort", () => reject(signal.reason), { once: true });
@@ -145,6 +150,122 @@ describe("DispatcherWorker", () => {
     expect(fixture.store.renewExecutionLease).toHaveBeenCalledOnce();
     expect(fixture.store.transitions).toHaveLength(1);
     expect(fixture.provisioner.release).toHaveBeenCalledOnce();
+  });
+
+  it("aborts provisioning and acknowledges a heartbeat cancellation with the exact lease", async () => {
+    vi.useFakeTimers();
+    const fixture = workerFixture({ renew: "CANCEL_REQUESTED" });
+    fixture.provisioner.provision = vi.fn((_input, signal) => new Promise<never>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }));
+
+    const running = fixture.worker.runOne();
+    await vi.waitFor(() => expect(fixture.provisioner.provision).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(10);
+    await running;
+
+    expect(fixture.store.acknowledgeLeasedExecutionCancellation).toHaveBeenCalledWith({
+      actor: "dispatcher-worker",
+      attempt: 1,
+      executionId: "execution-1",
+      fencingToken: "fence-1",
+      leaseOwner: "worker-1",
+      reason: "execution cancellation acknowledged by worker",
+      tenantId: "tenant-1",
+    });
+    expect(fixture.provisioner.release).not.toHaveBeenCalled();
+    expect(fixture.store.transitions).toHaveLength(0);
+  });
+
+  it("does not acknowledge or release again when cancelled provisioning rejects with SandboxClaimCleanupError", async () => {
+    vi.useFakeTimers();
+    const fixture = workerFixture({ renew: "CANCEL_REQUESTED" });
+    fixture.provisioner.provision = vi.fn((_input, signal) => new Promise<never>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new SandboxClaimCleanupError({
+        cause: new Error("claim deletion failed"),
+      })), { once: true });
+    }));
+
+    const running = fixture.worker.runOne();
+    await vi.waitFor(() => expect(fixture.provisioner.provision).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(10);
+    await running;
+
+    expect(fixture.store.acknowledgeLeasedExecutionCancellation).not.toHaveBeenCalled();
+    expect(fixture.provisioner.release).not.toHaveBeenCalled();
+    expect(fixture.store.transitions).toHaveLength(0);
+  });
+
+  it("aborts a running attempt on heartbeat cancellation without failing or retrying it", async () => {
+    vi.useFakeTimers();
+    const fixture = workerFixture({ renew: "CANCEL_REQUESTED" });
+    fixture.runner.run = vi.fn(({ onSession, signal }) => new Promise<never>(async (_resolve, reject) => {
+      await onSession("session-1");
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }));
+
+    const running = fixture.worker.runOne();
+    await vi.waitFor(() => expect(fixture.store.transitions).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(10);
+    await running;
+
+    expect(fixture.store.transitions).toHaveLength(1);
+    expect(fixture.store.acknowledgeLeasedExecutionCancellation).toHaveBeenCalledOnce();
+    expect(fixture.provisioner.release).toHaveBeenCalledOnce();
+    expect(vi.mocked(fixture.provisioner.release).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(fixture.store.acknowledgeLeasedExecutionCancellation).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("does not acknowledge or retry cleanup when cancellation release fails", async () => {
+    vi.useFakeTimers();
+    const fixture = workerFixture({ renew: "CANCEL_REQUESTED" });
+    fixture.provisioner.release = vi.fn().mockRejectedValue(new Error("release failed"));
+    fixture.runner.run = vi.fn(({ onSession, signal }) => new Promise<never>(async (_resolve, reject) => {
+      await onSession("session-1");
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }));
+
+    const running = fixture.worker.runOne();
+    await vi.waitFor(() => expect(fixture.store.transitions).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(10);
+    await running;
+
+    expect(fixture.provisioner.release).toHaveBeenCalledOnce();
+    expect(fixture.store.acknowledgeLeasedExecutionCancellation).not.toHaveBeenCalled();
+    expect(fixture.store.transitions).toHaveLength(1);
+  });
+
+  it("acknowledges cancellation when the transition to running loses a state race", async () => {
+    const fixture = workerFixture();
+    vi.mocked(fixture.store.transitionLeasedExecution).mockResolvedValueOnce({ applied: false, reason: "STATE_MISMATCH" });
+
+    await fixture.worker.runOne();
+
+    expect(fixture.store.acknowledgeLeasedExecutionCancellation).toHaveBeenCalledOnce();
+    expect(fixture.store.transitionLeasedExecution).toHaveBeenCalledOnce();
+    expect(fixture.provisioner.release).toHaveBeenCalledOnce();
+    expect(vi.mocked(fixture.provisioner.release).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(fixture.store.acknowledgeLeasedExecutionCancellation).mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("acknowledges cancellation when the success transition loses a state race", async () => {
+    const fixture = workerFixture();
+    vi.mocked(fixture.store.transitionLeasedExecution).mockResolvedValueOnce({
+      applied: true,
+      attemptState: "RUNNING",
+      executionState: "RUNNING",
+    }).mockResolvedValueOnce({ applied: false, reason: "STATE_MISMATCH" });
+
+    await fixture.worker.runOne();
+
+    expect(fixture.store.acknowledgeLeasedExecutionCancellation).toHaveBeenCalledOnce();
+    expect(fixture.store.transitionLeasedExecution).toHaveBeenCalledTimes(2);
+    expect(fixture.provisioner.release).toHaveBeenCalledOnce();
+    expect(vi.mocked(fixture.provisioner.release).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(fixture.store.acknowledgeLeasedExecutionCancellation).mock.invocationCallOrder[0]!,
+    );
   });
 
   it("rejects invalid heartbeat timing and prevents overlapping runOne calls", async () => {
@@ -164,13 +285,16 @@ describe("DispatcherWorker", () => {
   });
 });
 
-function workerFixture(overrides: { renew?: boolean } = {}) {
+function workerFixture(overrides: { renew?: ExecutionLeaseRenewalResult } = {}) {
   const execution = claimedExecution();
   const transitions: TransitionLeasedExecutionCommand[] = [];
   const store = {
     claimNextQueuedExecution: vi.fn().mockResolvedValue(execution),
-    renewExecutionLease: vi.fn().mockResolvedValue(overrides.renew ?? true),
-    transitionLeasedExecution: vi.fn(async (command: TransitionLeasedExecutionCommand) => {
+    acknowledgeLeasedExecutionCancellation: vi.fn().mockResolvedValue({ applied: true as const }),
+    listRequestedCancellationCleanups: vi.fn().mockResolvedValue([]),
+    finalizeRequestedExecutionCancellation: vi.fn().mockResolvedValue(undefined),
+    renewExecutionLease: vi.fn().mockResolvedValue(overrides.renew ?? "RENEWED"),
+    transitionLeasedExecution: vi.fn(async (command: TransitionLeasedExecutionCommand): Promise<TransitionLeasedExecutionResult> => {
       transitions.push(command);
       return {
         applied: true as const,
@@ -229,7 +353,7 @@ function claimedExecution(): ClaimedExecution {
     lease: {
       attempt: 1,
       fencingToken: "fence-1",
-      leaseExpiresAt: new Date("2026-01-01T00:01:00Z"),
+      leaseExpiresAt: new Date(Date.now() + 100),
       leaseOwner: "worker-1",
     },
     profileVersion: {

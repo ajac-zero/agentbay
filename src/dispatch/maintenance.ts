@@ -1,5 +1,6 @@
 import { logger, toErrCtx, type Logger } from "../logger.js";
 import type { DispatcherExecutionStore } from "./store.js";
+import type { ExecutionCancellationCleaner } from "./types.js";
 
 export type ExecutionMaintenanceOptions = {
   batchSize: number;
@@ -7,7 +8,14 @@ export type ExecutionMaintenanceOptions = {
   maxAttempts: number;
   retryDelayMs: number;
   signal: AbortSignal;
-  store: Pick<DispatcherExecutionStore, "promoteDueExecutionRetries" | "recoverExpiredExecutionLeases">;
+  cancellationCleaner: ExecutionCancellationCleaner;
+  store: Pick<
+    DispatcherExecutionStore,
+    | "finalizeRequestedExecutionCancellation"
+    | "listRequestedCancellationCleanups"
+    | "promoteDueExecutionRetries"
+    | "recoverExpiredExecutionLeases"
+  >;
   log?: Logger;
 };
 
@@ -15,6 +23,30 @@ export async function runExecutionMaintenanceLoop(options: ExecutionMaintenanceO
   const log = options.log ?? logger.child({ component: "execution-maintenance" });
 
   while (!options.signal.aborted) {
+    try {
+      const candidates = await options.store.listRequestedCancellationCleanups({ limit: options.batchSize });
+      let finalized = 0;
+      for (const candidate of candidates) {
+        if (options.signal.aborted) break;
+        try {
+          await options.cancellationCleaner.releaseCancelledExecution(candidate, options.signal);
+          if (await options.store.finalizeRequestedExecutionCancellation(candidate)) finalized += 1;
+        } catch (error) {
+          log.error("requested execution cancellation cleanup failed", {
+            attempt: candidate.attempt,
+            err: toErrCtx(error),
+            executionId: candidate.executionId,
+            tenantId: candidate.tenantId,
+          });
+        }
+      }
+      if (finalized > 0) log.info("requested execution cancellations finalized", { count: finalized });
+    } catch (error) {
+      log.error("requested execution cancellation listing failed", { err: toErrCtx(error) });
+    }
+
+    if (options.signal.aborted) break;
+
     try {
       const recovered = await options.store.recoverExpiredExecutionLeases({
         limit: options.batchSize,

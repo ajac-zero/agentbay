@@ -10,6 +10,25 @@ export type ExecutionLease = {
   leaseExpiresAt: Date;
 };
 
+export type ExecutionLeaseRenewalResult = "RENEWED" | "CANCEL_REQUESTED" | "LOST";
+
+export type AcknowledgeLeasedExecutionCancellationCommand = {
+  executionId: string;
+  tenantId: string;
+  attempt: number;
+  fencingToken: string;
+  leaseOwner: string;
+  actor: string;
+  reason: string;
+};
+
+export type AcknowledgeLeasedExecutionCancellationResult =
+  | { applied: true }
+  | {
+      applied: false;
+      reason: "NOT_FOUND" | "STATE_MISMATCH" | "LEASE_MISMATCH" | "LEASE_EXPIRED";
+    };
+
 /** Immutable inputs needed to provision and run one execution. */
 export type ClaimedExecution = {
   executionId: string;
@@ -72,3 +91,23 @@ export type PromotedExecutionRetry = {
   tenantId: string;
   promotedAt: Date;
 };
+
+export type RequestedCancellationCleanup = {
+  executionId: string;
+  tenantId: string;
+  attempt: number | null;
+  workloadName: string | null;
+};
+
+export type FinalizeRequestedExecutionCancellationCommand = RequestedCancellationCleanup;
+
+export type FinalizedRequestedExecutionCancellation = {
+  executionId: string;
+  tenantId: string;
+  attempt: number | null;
+  finalizedAt: Date;
+};
+
+export interface ExecutionCancellationCleaner {
+  releaseCancelledExecution(candidate: RequestedCancellationCleanup, signal: AbortSignal): Promise<void>;
+}

@@ -16,9 +16,11 @@ The current server provides the binding-driven execution foundation:
 - Publish and retrieve immutable agent profile versions.
 - Create, retrieve, and disable normalized CloudEvents HTTP triggers.
 - Publish, retrieve, and disable immutable binding versions.
-- Admit idempotent normalized CloudEvents and retrieve resulting execution state.
+- Admit idempotent normalized CloudEvents and retrieve resulting execution state,
+  attempt records, and transition history.
 - Atomically persist normalized events, executions, lifecycle transitions, and
   transactional outbox messages.
+- Request best-effort cancellation of pending and active executions.
 - Promote due retries and recover expired execution leases through an embedded
   maintenance loop.
 - Expose generated OpenAPI 3.1 documentation.
@@ -130,6 +132,7 @@ GET  /v1/bindings/:bindingID/versions/:version
 POST /v1/bindings/:bindingID/versions/:version/disable
 POST /v1/triggers/:triggerID/events
 GET  /v1/executions/:id
+POST /v1/executions/:id/cancel
 ```
 
 The public `POST /hooks/github/:triggerID` endpoint accepts GitHub deliveries for
@@ -274,6 +277,49 @@ and are not an execution-creation mechanism.
 
 The generated OpenAPI document contains the authoritative request and response
 schemas.
+
+`GET /v1/executions/:id` returns the materialized current execution together
+with its ordered attempt records and append-only state-transition history. The
+execution `state` is the current scheduling/lifecycle state; each attempt has
+its own status, so a failed or cancelled attempt can remain in history while a
+later attempt determines the execution's current state.
+
+`POST /v1/executions/:id/cancel` requires a JSON object. The object may be empty,
+or may contain an optional human-readable reason:
+
+```json
+{"reason":"Superseded by a newer pull-request revision"}
+```
+
+Cancellation is idempotent for an execution already in `CANCEL_REQUESTED` or
+`CANCELLED`. Work in `AWAITING_APPROVAL`, like other work without an active
+attempt, moves immediately to `CANCELLED`. Active `PROVISIONING` or `RUNNING`
+work first moves to `CANCEL_REQUESTED` while its fenced attempt is interrupted
+and cleaned up. The endpoint returns `200 OK` with state `CANCELLED` when
+cancellation is already or immediately complete, and `202 Accepted` with state
+`CANCEL_REQUESTED` while active cleanup remains. `SUCCEEDED` is intentionally
+not cancellable: agent work has already committed, and the delivery lifecycle
+is not implemented. It returns `409 Conflict`, as do non-cancellable terminal
+outcomes, rather than being rewritten as cancelled.
+
+Active workers learn about cancellation when they renew their execution lease,
+so interruption latency is normally bounded by
+`AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS`, plus in-flight operation latency. The
+worker deletes the provisioned workload before acknowledging `CANCELLED` using
+its attempt and fencing token; a stale worker cannot acknowledge after losing
+its lease. If cleanup fails, the execution remains `CANCEL_REQUESTED` until the
+lease expires. Existing claim shutdown behavior and the Kubernetes reconciler
+provide workload-cleanup fallbacks; execution maintenance does not itself
+delete Kubernetes resources. Consequently, `202 Accepted` confirms that the
+cancellation request is durable, not that the workload was deleted immediately.
+Recovery currently does not adopt an existing OpenCode session: a recovered
+retry starts a new attempt and session.
+
+Cancellation is best effort at the external-effect boundary. Aborting the
+OpenCode request and deleting its sandbox can prevent later work, but cannot
+roll back an effect already committed outside Agentbay. For example, a GitHub
+mutation accepted before cancellation remains committed and must be reconciled
+or compensated separately.
 
 The API currently assigns records to the `default` tenant. Tenant-aware
 authentication and authorization remain roadmap work.

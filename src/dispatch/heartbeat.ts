@@ -8,8 +8,16 @@ export class ExecutionLeaseLostError extends Error {
   }
 }
 
+export class ExecutionCancellationRequestedError extends Error {
+  constructor() {
+    super("Execution cancellation was requested");
+    this.name = "ExecutionCancellationRequestedError";
+  }
+}
+
 export type ExecutionLeaseHeartbeat = {
   readonly signal: AbortSignal;
+  readonly cancellationRequested: boolean;
   readonly fenceLost: boolean;
   assertOwned(): void;
   stop(): Promise<void>;
@@ -29,6 +37,7 @@ export function startExecutionLeaseHeartbeat(input: {
   }
 
   const controller = new AbortController();
+  let cancellationRequested = false;
   let fenceLost = false;
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -44,6 +53,12 @@ export function startExecutionLeaseHeartbeat(input: {
     if (stopped || fenceLost) return;
     fenceLost = true;
     controller.abort(new ExecutionLeaseLostError());
+  };
+
+  const requestCancellation = (): void => {
+    if (stopped || cancellationRequested) return;
+    cancellationRequested = true;
+    controller.abort(new ExecutionCancellationRequestedError());
   };
 
   const watchExpiry = (): void => {
@@ -66,7 +81,7 @@ export function startExecutionLeaseHeartbeat(input: {
     try {
       const execution = input.execution;
       const { lease } = execution;
-      const renewed = await input.store.renewExecutionLease({
+      const result = await input.store.renewExecutionLease({
         attempt: lease.attempt,
         executionId: execution.executionId,
         fencingToken: lease.fencingToken,
@@ -74,7 +89,8 @@ export function startExecutionLeaseHeartbeat(input: {
         leaseOwner: lease.leaseOwner,
         tenantId: execution.tenantId,
       });
-      if (!renewed) loseFence();
+      if (result === "CANCEL_REQUESTED") requestCancellation();
+      else if (result === "LOST") loseFence();
       else {
         confirmedExpiry = Math.max(confirmedExpiry, Date.now() + input.leaseDurationMs);
         watchExpiry();
@@ -91,10 +107,14 @@ export function startExecutionLeaseHeartbeat(input: {
     get signal() {
       return controller.signal;
     },
+    get cancellationRequested() {
+      return cancellationRequested;
+    },
     get fenceLost() {
       return fenceLost;
     },
     assertOwned() {
+      if (cancellationRequested) throw new ExecutionCancellationRequestedError();
       if (fenceLost) throw new ExecutionLeaseLostError();
       input.signal?.throwIfAborted();
     },

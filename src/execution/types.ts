@@ -1,4 +1,5 @@
 import type { ExecutionState } from "./states.js";
+import type { AttemptState } from "../dispatch/states.js";
 import type { ResolvedWorkspace } from "../workspace/types.js";
 
 export type JsonPrimitive = boolean | null | number | string;
@@ -66,6 +67,46 @@ export type Execution = {
   result: JsonValue | null;
 };
 
+export type ExecutionAttempt = {
+  attempt: number;
+  state: AttemptState;
+  startedAt: string | null;
+  finishedAt: string | null;
+  leaseExpiresAt: string | null;
+  opencodeSessionId: string | null;
+  workloadName: string | null;
+};
+
+export type ExecutionStateTransition = {
+  id: string;
+  attempt: number | null;
+  sequence: number;
+  fromState: ExecutionState | null;
+  toState: ExecutionState;
+  actor: string;
+  reason: string | null;
+  createdAt: string;
+  traceContext: Record<string, string>;
+};
+
+export type ExecutionDetail = Execution & {
+  attempts: ExecutionAttempt[];
+  transitions: ExecutionStateTransition[];
+};
+
+export type RequestExecutionCancellationCommand = {
+  tenantId: string;
+  executionId: string;
+  transitionId: string;
+  actor: string;
+  reason: string;
+  requestedAt: string;
+};
+
+export type RequestExecutionCancellationResult =
+  | { outcome: "CANCELLED"; id: string; state: "CANCELLED" }
+  | { outcome: "REQUESTED"; id: string; state: "CANCEL_REQUESTED" };
+
 export class ProfileVersionAlreadyExistsError extends Error {
   readonly code = "PROFILE_VERSION_ALREADY_EXISTS";
 
@@ -90,6 +131,15 @@ export class ExecutionNotFoundError extends Error {
   constructor(executionId: string) {
     super(`Execution ${executionId} was not found`);
     this.name = "ExecutionNotFoundError";
+  }
+}
+
+export class ExecutionCancellationConflictError extends Error {
+  readonly code = "EXECUTION_CANCELLATION_CONFLICT";
+
+  constructor(executionId: string) {
+    super(`Execution ${executionId} cannot be cancelled in its current state`);
+    this.name = "ExecutionCancellationConflictError";
   }
 }
 

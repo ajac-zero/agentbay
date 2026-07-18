@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../../src/config.js";
 import { claimNameForExecutionAttempt } from "../../src/sandbox/naming.js";
-import { SandboxClaimExecutionAttemptProvisioner } from "../../src/sandbox/provisioner.js";
+import {
+  SandboxClaimCleanupError,
+  SandboxClaimExecutionAttemptProvisioner,
+} from "../../src/sandbox/provisioner.js";
 import type { ExecutionAttemptProvisioningInput, SandboxClaim } from "../../src/sandbox/types.js";
 
 const NAMESPACE = "test-ns";
@@ -75,7 +78,11 @@ function claim(ready = false): SandboxClaim {
   return {
     apiVersion: "extensions.agents.x-k8s.io/v1alpha1",
     kind: "SandboxClaim",
-    metadata: { name: claimNameForExecutionAttempt(input.executionId, input.attempt), annotations: ownership() },
+    metadata: {
+      name: claimNameForExecutionAttempt(input.executionId, input.attempt),
+      annotations: ownership(),
+      labels: { "app.kubernetes.io/managed-by": "agentbay" },
+    },
     spec: {
       sandboxTemplateRef: { name: input.sandboxTemplate },
       env: [{ containerName: "opencode", name: "OPENCODE_SERVER_PASSWORD", value: "existing-password" }],
@@ -358,7 +365,15 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
 
   it("rejects immediately when a watched claim reports Ready=False", async () => {
     vi.useFakeTimers();
-    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(claim());
+    let deleted = false;
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockImplementation(async () => {
+      if (deleted) throw { code: 404 };
+      return claim();
+    });
+    vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject").mockImplementation(async () => {
+      deleted = true;
+      return {};
+    });
     let onEvent: ((phase: string, object: unknown) => void) | undefined;
     const watchController = new AbortController();
     vi.spyOn(Watch.prototype, "watch").mockImplementation(async (_path, _query, event) => {
@@ -384,6 +399,35 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     await expect(result).rejects.toThrow(/was rejected: ReconcilerError: required sidecar is missing$/);
     expect(watchController.signal.aborted).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("throws SandboxClaimCleanupError when readiness fails and deleting the claim fails", async () => {
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(claim());
+    let onEvent: ((phase: string, object: unknown) => void) | undefined;
+    vi.spyOn(Watch.prototype, "watch").mockImplementation(async (_path, _query, event) => {
+      onEvent = event;
+      return new AbortController();
+    });
+    const cleanupFailure = new Error("claim deletion failed");
+    vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject").mockRejectedValue(cleanupFailure);
+
+    const result = provisioner().provision(input, new AbortController().signal);
+    await vi.waitFor(() => expect(onEvent).toBeDefined());
+    const rejected = claim();
+    rejected.status = {
+      conditions: [{
+        type: "Ready",
+        status: "False",
+        lastTransitionTime: "2026-07-17T12:00:01.000Z",
+        reason: "ReconcilerError",
+        message: "required sidecar is missing",
+      }],
+    };
+    onEvent!("MODIFIED", rejected);
+
+    const error = await result.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(SandboxClaimCleanupError);
+    expect((error as Error).cause).toBe(cleanupFailure);
   });
 
   it("ignores transient Ready=False and resolves when the claim later becomes ready", async () => {
@@ -420,7 +464,15 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
   });
 
   it("aborts a readiness wait and closes its watch", async () => {
-    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(claim());
+    let deleted = false;
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockImplementation(async () => {
+      if (deleted) throw { code: 404 };
+      return claim();
+    });
+    vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject").mockImplementation(async () => {
+      deleted = true;
+      return {};
+    });
     const watchController = new AbortController();
     vi.spyOn(Watch.prototype, "watch").mockResolvedValue(watchController);
     const controller = new AbortController();
@@ -431,6 +483,23 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
 
     await expect(result).rejects.toMatchObject({ name: "AbortError" });
     expect(watchController.signal.aborted).toBe(true);
+  });
+
+  it("throws SandboxClaimCleanupError when readiness is aborted and deleting the claim fails", async () => {
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(claim());
+    vi.spyOn(Watch.prototype, "watch").mockResolvedValue(new AbortController());
+    const cleanupFailure = new Error("claim deletion failed");
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject").mockRejectedValue(cleanupFailure);
+    const controller = new AbortController();
+    const result = provisioner().provision(input, controller.signal);
+    await flush();
+
+    controller.abort();
+
+    const error = await result.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(SandboxClaimCleanupError);
+    expect((error as Error).cause).toBe(cleanupFailure);
+    expect(remove).toHaveBeenCalledOnce();
   });
 
   it("releases the deterministic claim with foreground propagation", async () => {
@@ -454,5 +523,150 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     await expect(provisioner().release(input, new AbortController().signal)).resolves.toBeUndefined();
     expect(get).toHaveBeenCalledOnce();
     expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("releases a cancelled execution claim using only cancellation ownership metadata", async () => {
+    const cancellationClaim = claim(true);
+    cancellationClaim.metadata.annotations = {
+      "agentbay.dev/tenant-id": input.tenantId,
+      "agentbay.dev/execution-id": input.executionId,
+      "agentbay.dev/attempt": String(input.attempt),
+    };
+    cancellationClaim.metadata.uid = "claim-uid";
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject").mockResolvedValue({});
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject")
+      .mockResolvedValueOnce(cancellationClaim)
+      .mockRejectedValue({ code: 404 });
+
+    await provisioner().releaseCancelledExecution({
+      attempt: input.attempt,
+      executionId: input.executionId,
+      tenantId: input.tenantId,
+      workloadName: claimNameForExecutionAttempt(input.executionId, input.attempt),
+    }, new AbortController().signal);
+
+    expect(remove).toHaveBeenCalledWith(expect.objectContaining({
+      body: { preconditions: { uid: "claim-uid" } },
+      name: claimNameForExecutionAttempt(input.executionId, input.attempt),
+      propagationPolicy: "Foreground",
+    }));
+  });
+
+  it("derives and releases the deterministic claim when a cancellation attempt has no workload name", async () => {
+    const cancellationClaim = claim(true);
+    cancellationClaim.metadata.uid = "claim-uid";
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject").mockResolvedValue({});
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject")
+      .mockResolvedValueOnce(cancellationClaim)
+      .mockRejectedValue({ code: 404 });
+
+    await provisioner().releaseCancelledExecution({
+      attempt: input.attempt,
+      executionId: input.executionId,
+      tenantId: input.tenantId,
+      workloadName: null,
+    }, new AbortController().signal);
+
+    expect(remove).toHaveBeenCalledWith(expect.objectContaining({
+      body: { preconditions: { uid: "claim-uid" } },
+      name: claimNameForExecutionAttempt(input.executionId, input.attempt),
+      propagationPolicy: "Foreground",
+    }));
+  });
+
+  it("deletes a claim that appears after an initial missing read and waits for quiescence", async () => {
+    const lateClaim = claim(true);
+    lateClaim.metadata.uid = "late-uid";
+    const get = vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject")
+      .mockRejectedValueOnce({ code: 404 })
+      .mockResolvedValueOnce(lateClaim)
+      .mockRejectedValue({ code: 404 });
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject").mockResolvedValue({});
+
+    await expect(provisioner(500).releaseCancelledExecution({
+      attempt: input.attempt,
+      executionId: input.executionId,
+      tenantId: input.tenantId,
+      workloadName: null,
+    }, new AbortController().signal)).resolves.toBeUndefined();
+
+    expect(get.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(remove).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledWith(expect.objectContaining({
+      body: { preconditions: { uid: "late-uid" } },
+    }));
+  });
+
+  it("deletes a replacement claim that appears after deleting the original", async () => {
+    const original = claim(true);
+    original.metadata.uid = "original-uid";
+    const replacement = claim(true);
+    replacement.metadata.uid = "replacement-uid";
+    const get = vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject")
+      .mockResolvedValueOnce(original)
+      .mockResolvedValueOnce(replacement)
+      .mockRejectedValue({ code: 404 });
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject").mockResolvedValue({});
+
+    await expect(provisioner(500).releaseCancelledExecution({
+      attempt: input.attempt,
+      executionId: input.executionId,
+      tenantId: input.tenantId,
+      workloadName: null,
+    }, new AbortController().signal)).resolves.toBeUndefined();
+
+    expect(get.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(remove).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      body: { preconditions: { uid: "original-uid" } },
+    }));
+    expect(remove).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      body: { preconditions: { uid: "replacement-uid" } },
+    }));
+  });
+
+  it("rejects quickly when deleting a persistent claim fails", async () => {
+    const persistentClaim = claim(true);
+    persistentClaim.metadata.uid = "persistent-uid";
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(persistentClaim);
+    const deletionFailure = new Error("claim deletion failed");
+    const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject").mockRejectedValue(deletionFailure);
+    const startedAt = Date.now();
+
+    await expect(provisioner(500).releaseCancelledExecution({
+      attempt: input.attempt,
+      executionId: input.executionId,
+      tenantId: input.tenantId,
+      workloadName: null,
+    }, new AbortController().signal)).rejects.toBe(deletionFailure);
+
+    expect(Date.now() - startedAt).toBeLessThan(300);
+    expect(remove).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a cancellation workload that is not the deterministic attempt claim", async () => {
+    const get = vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject");
+
+    await expect(provisioner().releaseCancelledExecution({
+      attempt: input.attempt,
+      executionId: input.executionId,
+      tenantId: input.tenantId,
+      workloadName: "wrong-claim",
+    }, new AbortController().signal)).rejects.toThrow("does not match expected claim");
+
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("does nothing for a cancelled execution without a workload", async () => {
+    const get = vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject");
+
+    await expect(provisioner().releaseCancelledExecution({
+      attempt: null,
+      executionId: input.executionId,
+      tenantId: input.tenantId,
+      workloadName: null,
+    }, new AbortController().signal)).resolves.toBeUndefined();
+
+    expect(get).not.toHaveBeenCalled();
   });
 });

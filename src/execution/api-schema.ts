@@ -1,5 +1,6 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { EXECUTION_STATES } from "./states.js";
+import { ATTEMPT_STATES } from "../dispatch/states.js";
 import type { AgentProfileDefinition, ExecutionInput, JsonObject } from "./types.js";
 import { resolvedWorkspaceSchema } from "../workspace/schema.js";
 
@@ -127,6 +128,51 @@ export const executionSchema = z
   .strict()
   .openapi("Execution");
 
+export const executionAttemptSchema = z
+  .object({
+    attempt: z.number().int().positive(),
+    state: z.enum(ATTEMPT_STATES),
+    startedAt: z.string().datetime().nullable(),
+    finishedAt: z.string().datetime().nullable(),
+    leaseExpiresAt: z.string().datetime().nullable(),
+    opencodeSessionId: z.string().nullable(),
+    workloadName: z.string().nullable(),
+  })
+  .strict()
+  .openapi("ExecutionAttempt");
+
+export const executionTransitionSchema = z
+  .object({
+    id: z.string(),
+    attempt: z.number().int().positive().nullable(),
+    sequence: z.number().int().positive(),
+    fromState: z.enum(EXECUTION_STATES).nullable(),
+    toState: z.enum(EXECUTION_STATES),
+    actor: z.string(),
+    reason: z.string().nullable(),
+    createdAt: z.string().datetime(),
+    traceContext: z.record(z.string(), z.string()),
+  })
+  .strict()
+  .openapi("ExecutionTransition");
+
+export const executionDetailSchema = executionSchema
+  .extend({
+    attempts: z.array(executionAttemptSchema),
+    transitions: z.array(executionTransitionSchema),
+  })
+  .strict()
+  .openapi("ExecutionDetail");
+
+export const cancelExecutionBodySchema = z
+  .object({ reason: z.string().trim().min(1).max(1024).optional() })
+  .strict();
+
+export const cancellationResponseSchema = z
+  .object({ id: z.string(), state: z.enum(["CANCEL_REQUESTED", "CANCELLED"]) })
+  .strict()
+  .openapi("ExecutionCancellation");
+
 export const executionErrorSchema = z.object({ error: z.string().min(1) }).strict().openapi("ExecutionError");
 
 const profileParams = z.object({ profileID: simpleIdSchema, version: versionSchema });
@@ -178,9 +224,28 @@ export const getExecutionRoute = createRoute({
   security: [{ bearerAuth: [] }],
   request: { params: executionParams },
   responses: {
-    200: jsonResponse("Execution found.", executionSchema),
+    200: jsonResponse("Execution found.", executionDetailSchema),
     ...securedErrors,
     404: jsonResponse("Execution not found.", executionErrorSchema),
+  },
+});
+
+export const cancelExecutionRoute = createRoute({
+  method: "post",
+  path: "/executions/{id}/cancel",
+  tags: ["executions"],
+  summary: "Request execution cancellation",
+  security: [{ bearerAuth: [] }],
+  request: {
+    params: executionParams,
+    body: { required: true, content: { "application/json": { schema: cancelExecutionBodySchema } } },
+  },
+  responses: {
+    200: jsonResponse("Execution cancelled.", cancellationResponseSchema),
+    202: jsonResponse("Execution cancellation requested.", cancellationResponseSchema),
+    ...securedErrors,
+    404: jsonResponse("Execution not found.", executionErrorSchema),
+    409: jsonResponse("Execution cannot be cancelled in its current state.", executionErrorSchema),
   },
 });
 

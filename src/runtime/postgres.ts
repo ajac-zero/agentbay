@@ -11,9 +11,15 @@ import {
   type DispatcherExecutionStore,
 } from "../dispatch/store.js";
 import type {
+  AcknowledgeLeasedExecutionCancellationCommand,
+  AcknowledgeLeasedExecutionCancellationResult,
   ClaimedExecution,
+  ExecutionLeaseRenewalResult,
+  FinalizeRequestedExecutionCancellationCommand,
+  FinalizedRequestedExecutionCancellation,
   PromotedExecutionRetry,
   RecoveredExecutionLease,
+  RequestedCancellationCleanup,
   TransitionLeasedExecutionCommand,
   TransitionLeasedExecutionResult,
 } from "../dispatch/types.js";
@@ -28,10 +34,16 @@ import type {
 } from "../outbox/types.js";
 import {
   IdempotencyConflictError,
+  ExecutionCancellationConflictError,
   ProfileVersionAlreadyExistsError,
   ProfileVersionNotFoundError,
   type AgentProfileVersion,
   type Execution,
+  type ExecutionAttempt,
+  type ExecutionDetail,
+  type ExecutionStateTransition,
+  type RequestExecutionCancellationCommand,
+  type RequestExecutionCancellationResult,
 } from "../execution/types.js";
 import { planExecution, type AdmissionCommand, type AdmissionResult } from "../control/admission.js";
 import {
@@ -57,6 +69,11 @@ import {
   outboxEntries,
   triggers,
 } from "./schema.js";
+
+const cancellationCleanupFence = Symbol("cancellationCleanupFence");
+type CancellationCleanupCandidate = RequestedCancellationCleanup & {
+  [cancellationCleanupFence]?: string | null;
+};
 
 const { Pool } = pg;
 
@@ -450,6 +467,116 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     return result.rows[0] ? executionRecordFromJoined(result.rows[0]) : undefined;
   }
 
+  async getExecutionDetail(tenantId: string, executionId: string): Promise<ExecutionDetail | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      const executionResult = await client.query<ExecutionJoinedRow>(
+        EXECUTION_SELECT + " WHERE execution.tenant_id = $1 AND execution.id = $2",
+        [tenantId, executionId],
+      );
+      const row = executionResult.rows[0];
+      if (!row) {
+        await client.query("COMMIT");
+        return undefined;
+      }
+      const attemptsResult = await client.query<ExecutionAttemptRow>(`
+        SELECT attempt, state, started_at, finished_at, lease_expires_at, opencode_session_id, workload_name
+        FROM agentbay_execution_attempts
+        WHERE tenant_id = $1 AND execution_id = $2
+        ORDER BY attempt`, [tenantId, executionId]);
+      const transitionsResult = await client.query<ExecutionTransitionRow>(`
+        SELECT id, attempt, sequence, from_state, to_state, actor, reason, created_at, trace_context
+        FROM agentbay_execution_transitions
+        WHERE tenant_id = $1 AND execution_id = $2
+        ORDER BY sequence`, [tenantId, executionId]);
+      const detail = {
+        ...executionRecordFromJoined(row),
+        attempts: attemptsResult.rows.map((attempt) => executionAttemptFromRow(executionId, attempt)),
+        transitions: transitionsResult.rows.map((transition) => executionTransitionFromRow(executionId, transition)),
+      };
+      await client.query("COMMIT");
+      return detail;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async requestExecutionCancellation(
+    command: RequestExecutionCancellationCommand,
+  ): Promise<RequestExecutionCancellationResult | undefined> {
+    const requestedAt = new Date(command.requestedAt);
+    if (Number.isNaN(requestedAt.getTime())) throw new Error("Execution cancellation request time must be valid");
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const executionResult = await client.query<{ id: string; state: string }>(
+        "SELECT id, state FROM agentbay_executions WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+        [command.tenantId, command.executionId],
+      );
+      const execution = executionResult.rows[0];
+      if (!execution) {
+        await client.query("COMMIT");
+        return undefined;
+      }
+      if (!isExecutionState(execution.state)) {
+        throw new PersistedExecutionCorruptionError(command.executionId, "state");
+      }
+      if (execution.state === "CANCELLED") {
+        await client.query("COMMIT");
+        return { id: execution.id, outcome: "CANCELLED", state: "CANCELLED" };
+      }
+      if (execution.state === "CANCEL_REQUESTED") {
+        await client.query("COMMIT");
+        return { id: execution.id, outcome: "REQUESTED", state: "CANCEL_REQUESTED" };
+      }
+      if (execution.state !== "QUEUED" && execution.state !== "RETRY_WAIT" && execution.state !== "AWAITING_APPROVAL"
+        && execution.state !== "PROVISIONING" && execution.state !== "RUNNING") {
+        throw new ExecutionCancellationConflictError(command.executionId);
+      }
+
+      const immediate = execution.state === "QUEUED" || execution.state === "RETRY_WAIT"
+        || execution.state === "AWAITING_APPROVAL";
+      const transitionIds = immediate ? [command.transitionId, randomUUID()] : [command.transitionId];
+      await client.query({
+        text: `WITH cancellation_clock AS (SELECT $3::timestamptz AS requested_at),
+          updated_execution AS (
+            UPDATE agentbay_executions
+            SET state = $4, updated_at = cancellation_clock.requested_at,
+                completed_at = CASE WHEN $5 THEN cancellation_clock.requested_at ELSE completed_at END
+            FROM cancellation_clock
+            WHERE id = $1 AND tenant_id = $2 AND state = $6
+            RETURNING id
+          )
+          INSERT INTO agentbay_execution_transitions
+            (id, tenant_id, execution_id, attempt, sequence, from_state, to_state, actor, reason, created_at)
+          SELECT transition.id, $2, $1, NULL,
+            (SELECT COALESCE(MAX(sequence), 0) FROM agentbay_execution_transitions WHERE tenant_id = $2 AND execution_id = $1)
+              + transition.ordinality::integer,
+            transition.from_state, transition.to_state, $7, $8, cancellation_clock.requested_at
+          FROM updated_execution, cancellation_clock,
+            unnest($9::text[], $10::text[], $11::text[]) WITH ORDINALITY
+              AS transition(id, from_state, to_state, ordinality)`,
+        values: [command.executionId, command.tenantId, requestedAt, immediate ? "CANCELLED" : "CANCEL_REQUESTED",
+          immediate, execution.state, command.actor, command.reason, transitionIds,
+          immediate ? [execution.state, "CANCEL_REQUESTED"] : [execution.state],
+          immediate ? ["CANCEL_REQUESTED", "CANCELLED"] : ["CANCEL_REQUESTED"]],
+      });
+      await client.query("COMMIT");
+      return immediate
+        ? { id: execution.id, outcome: "CANCELLED", state: "CANCELLED" }
+        : { id: execution.id, outcome: "REQUESTED", state: "CANCEL_REQUESTED" };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async claimNextQueuedExecution(command: { leaseOwner: string; leaseDurationMs: number }): Promise<ClaimedExecution | undefined> {
     assertPositiveInteger(command.leaseDurationMs, "Execution lease duration");
 
@@ -537,7 +664,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     fencingToken: string;
     leaseOwner: string;
     leaseDurationMs: number;
-  }): Promise<boolean> {
+  }): Promise<ExecutionLeaseRenewalResult> {
     assertPositiveInteger(command.leaseDurationMs, "Execution lease duration");
     const result = await this.pool.query<{ lease_expires_at: Date }>({
       text: `
@@ -547,16 +674,269 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           attempt.lease_expires_at,
           lease_clock.renewed_at + ($6::double precision * interval '1 millisecond')
         )
-        FROM lease_clock
+        FROM agentbay_executions AS execution, lease_clock
         WHERE attempt.execution_id = $1 AND attempt.tenant_id = $2
           AND attempt.attempt = $3 AND attempt.fencing_token = $4 AND attempt.lease_owner = $5
           AND attempt.state IN ('LEASED', 'RUNNING')
           AND attempt.lease_expires_at > lease_clock.renewed_at
+          AND execution.id = attempt.execution_id AND execution.tenant_id = attempt.tenant_id
+          AND execution.state IN ('PROVISIONING', 'RUNNING')
         RETURNING attempt.lease_expires_at
       `,
       values: [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, command.leaseDurationMs],
     });
-    return result.rowCount === 1;
+    if (result.rowCount === 1) return "RENEWED";
+
+    const cancellation = await this.pool.query<{ cancellation_requested: boolean }>({
+      text: `
+        SELECT EXISTS (
+          SELECT 1
+          FROM agentbay_execution_attempts AS attempt
+          JOIN agentbay_executions AS execution
+            ON execution.id = attempt.execution_id AND execution.tenant_id = attempt.tenant_id
+          WHERE attempt.execution_id = $1 AND attempt.tenant_id = $2
+            AND attempt.attempt = $3 AND attempt.fencing_token = $4 AND attempt.lease_owner = $5
+            AND attempt.state IN ('LEASED', 'RUNNING')
+            AND attempt.lease_expires_at > clock_timestamp()
+            AND execution.state = 'CANCEL_REQUESTED'
+        ) AS cancellation_requested
+      `,
+      values: [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner],
+    });
+    return cancellation.rows[0]?.cancellation_requested ? "CANCEL_REQUESTED" : "LOST";
+  }
+
+  async acknowledgeLeasedExecutionCancellation(
+    command: AcknowledgeLeasedExecutionCancellationCommand,
+  ): Promise<AcknowledgeLeasedExecutionCancellationResult> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const executionResult = await client.query<{ state: string }>(
+        "SELECT state FROM agentbay_executions WHERE id = $1 AND tenant_id = $2 FOR UPDATE",
+        [command.executionId, command.tenantId],
+      );
+      const execution = executionResult.rows[0];
+      if (!execution) {
+        await client.query("ROLLBACK");
+        return { applied: false, reason: "NOT_FOUND" };
+      }
+      if (execution.state !== "CANCEL_REQUESTED") {
+        await client.query("ROLLBACK");
+        return { applied: false, reason: "STATE_MISMATCH" };
+      }
+
+      const attemptResult = await client.query<{ lease_expires_at: Date; state: string }>({
+        text: `SELECT state, lease_expires_at
+          FROM agentbay_execution_attempts
+          WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
+            AND fencing_token = $4 AND lease_owner = $5
+          FOR UPDATE`,
+        values: [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner],
+      });
+      const attempt = attemptResult.rows[0];
+      if (!attempt) {
+        const exists = await client.query<{ exists: boolean }>(
+          "SELECT EXISTS (SELECT 1 FROM agentbay_execution_attempts WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3) AS exists",
+          [command.executionId, command.tenantId, command.attempt],
+        );
+        await client.query("ROLLBACK");
+        return { applied: false, reason: exists.rows[0]?.exists ? "LEASE_MISMATCH" : "NOT_FOUND" };
+      }
+      if (attempt.state !== "LEASED" && attempt.state !== "RUNNING") {
+        await client.query("ROLLBACK");
+        return { applied: false, reason: "STATE_MISMATCH" };
+      }
+      const clock = await client.query<{ now: Date }>("SELECT clock_timestamp() AS now");
+      const acknowledgedAt = clock.rows[0]!.now;
+      if (attempt.lease_expires_at <= acknowledgedAt) {
+        await client.query("ROLLBACK");
+        return { applied: false, reason: "LEASE_EXPIRED" };
+      }
+
+      const updated = await client.query({
+        text: `WITH updated_attempt AS (
+            UPDATE agentbay_execution_attempts
+            SET state = 'CANCELLED', finished_at = $6, lease_owner = NULL, lease_expires_at = NULL
+            WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
+              AND fencing_token = $4 AND lease_owner = $5 AND state = $7
+            RETURNING execution_id
+          ), updated_execution AS (
+            UPDATE agentbay_executions
+            SET state = 'CANCELLED', completed_at = $6, updated_at = $6
+            WHERE id = $1 AND tenant_id = $2 AND state = 'CANCEL_REQUESTED'
+              AND EXISTS (SELECT 1 FROM updated_attempt)
+            RETURNING id
+          ), inserted_transition AS (
+            INSERT INTO agentbay_execution_transitions
+              (id, tenant_id, execution_id, attempt, sequence, from_state, to_state, actor, reason, created_at)
+            SELECT $8, $2, id, $3,
+              (SELECT COALESCE(MAX(sequence), 0) + 1 FROM agentbay_execution_transitions WHERE tenant_id = $2 AND execution_id = $1),
+              'CANCEL_REQUESTED', 'CANCELLED', $9, $10, $6
+            FROM updated_execution
+            RETURNING execution_id
+          )
+          SELECT id FROM updated_execution WHERE EXISTS (SELECT 1 FROM inserted_transition)`,
+        values: [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner,
+          acknowledgedAt, attempt.state, randomUUID(), command.actor, command.reason],
+      });
+      if (updated.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        return { applied: false, reason: "STATE_MISMATCH" };
+      }
+      await client.query("COMMIT");
+      return { applied: true };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listRequestedCancellationCleanups(command: {
+    limit: number;
+  }): Promise<RequestedCancellationCleanup[]> {
+    assertPositiveInteger(command.limit, "Execution cancellation cleanup limit");
+    const result = await this.pool.query<{
+      attempt: number | null;
+      execution_id: string;
+      fencing_token: string | null;
+      tenant_id: string;
+      workload_name: string | null;
+    }>({
+      text: `WITH candidates AS (
+          SELECT execution.id, execution.tenant_id
+          FROM agentbay_executions AS execution
+          LEFT JOIN LATERAL (
+            SELECT candidate.attempt, candidate.lease_expires_at
+            FROM agentbay_execution_attempts AS candidate
+            WHERE candidate.execution_id = execution.id AND candidate.tenant_id = execution.tenant_id
+              AND candidate.state IN ('LEASED', 'RUNNING')
+            ORDER BY candidate.attempt DESC
+            LIMIT 1
+          ) AS active_attempt ON true
+          WHERE execution.state = 'CANCEL_REQUESTED'
+            AND (active_attempt.attempt IS NULL OR active_attempt.lease_expires_at <= clock_timestamp())
+          ORDER BY execution.updated_at, execution.created_at, execution.id
+          FOR UPDATE OF execution SKIP LOCKED
+          LIMIT $1
+        ), rotated AS (
+          UPDATE agentbay_executions AS execution
+          SET updated_at = clock_timestamp()
+          FROM candidates
+          WHERE execution.id = candidates.id AND execution.tenant_id = candidates.tenant_id
+          RETURNING execution.id, execution.tenant_id
+        )
+        SELECT rotated.id AS execution_id, rotated.tenant_id,
+          attempt.attempt, attempt.fencing_token, attempt.workload_name
+        FROM rotated
+        LEFT JOIN LATERAL (
+          SELECT candidate.attempt, candidate.fencing_token, candidate.lease_expires_at, candidate.workload_name
+          FROM agentbay_execution_attempts AS candidate
+          WHERE candidate.execution_id = rotated.id AND candidate.tenant_id = rotated.tenant_id
+            AND candidate.state IN ('LEASED', 'RUNNING')
+          ORDER BY candidate.attempt DESC
+          LIMIT 1
+        ) AS attempt ON true
+        ORDER BY rotated.id`,
+      values: [command.limit],
+    });
+    return result.rows.map((row) => {
+      const candidate: RequestedCancellationCleanup = {
+        attempt: row.attempt,
+        executionId: row.execution_id,
+        tenantId: row.tenant_id,
+        workloadName: row.workload_name,
+      };
+      Object.defineProperty(candidate, cancellationCleanupFence, { value: row.fencing_token });
+      return candidate;
+    });
+  }
+
+  async finalizeRequestedExecutionCancellation(
+    command: FinalizeRequestedExecutionCancellationCommand,
+  ): Promise<FinalizedRequestedExecutionCancellation | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const executionResult = await client.query<{ state: string }>(
+        "SELECT state FROM agentbay_executions WHERE id = $1 AND tenant_id = $2 FOR UPDATE",
+        [command.executionId, command.tenantId],
+      );
+      if (executionResult.rows[0]?.state !== "CANCEL_REQUESTED") {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+
+      const fencingToken = (command as CancellationCleanupCandidate)[cancellationCleanupFence];
+      const clock = await client.query<{ now: Date }>("SELECT clock_timestamp() AS now");
+      const finalizedAt = clock.rows[0]!.now;
+      if (command.attempt === null) {
+        const activeAttempt = await client.query(`SELECT attempt
+          FROM agentbay_execution_attempts
+          WHERE execution_id = $1 AND tenant_id = $2 AND state IN ('LEASED', 'RUNNING')
+          ORDER BY attempt DESC
+          FOR UPDATE
+          LIMIT 1`, [command.executionId, command.tenantId]);
+        if (activeAttempt.rowCount !== 0 || fencingToken !== null) {
+          await client.query("ROLLBACK");
+          return undefined;
+        }
+      } else {
+        const attemptResult = await client.query<{ fencing_token: string; lease_expires_at: Date; state: string }>({
+          text: `SELECT state, fencing_token, lease_expires_at
+            FROM agentbay_execution_attempts
+            WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
+            FOR UPDATE`,
+          values: [command.executionId, command.tenantId, command.attempt],
+        });
+        const attempt = attemptResult.rows[0];
+        if (!attempt || fencingToken === undefined || attempt.fencing_token !== fencingToken
+          || (attempt.state !== "LEASED" && attempt.state !== "RUNNING")
+          || attempt.lease_expires_at > finalizedAt) {
+          await client.query("ROLLBACK");
+          return undefined;
+        }
+      }
+
+      const result = await client.query({
+        text: `WITH updated_attempt AS (
+            UPDATE agentbay_execution_attempts
+            SET state = 'CANCELLED', finished_at = $4, lease_owner = NULL, lease_expires_at = NULL
+            WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
+              AND fencing_token = $5 AND state IN ('LEASED', 'RUNNING') AND lease_expires_at <= $4
+            RETURNING execution_id
+          ), updated_execution AS (
+            UPDATE agentbay_executions
+            SET state = 'CANCELLED', completed_at = $4, updated_at = $4
+            WHERE id = $1 AND tenant_id = $2 AND state = 'CANCEL_REQUESTED'
+              AND ($3::integer IS NULL OR EXISTS (SELECT 1 FROM updated_attempt))
+            RETURNING id
+          ), inserted_transition AS (
+            INSERT INTO agentbay_execution_transitions
+              (id, tenant_id, execution_id, attempt, sequence, from_state, to_state, actor, reason, created_at)
+            SELECT $6, $2, id, $3,
+              (SELECT COALESCE(MAX(sequence), 0) + 1 FROM agentbay_execution_transitions WHERE tenant_id = $2 AND execution_id = $1),
+              'CANCEL_REQUESTED', 'CANCELLED', 'execution-reconciler', 'execution cancellation finalized', $4
+            FROM updated_execution
+            RETURNING execution_id
+          )
+          SELECT id FROM updated_execution WHERE EXISTS (SELECT 1 FROM inserted_transition)`,
+        values: [command.executionId, command.tenantId, command.attempt, finalizedAt, fencingToken, randomUUID()],
+      });
+      if (result.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      await client.query("COMMIT");
+      return { ...command, finalizedAt };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async recoverExpiredExecutionLeases(command: {
@@ -958,6 +1338,28 @@ type ExecutionJoinedRow = {
   workspace: unknown;
 };
 
+type ExecutionAttemptRow = {
+  attempt: number;
+  finished_at: Date | null;
+  lease_expires_at: Date | null;
+  opencode_session_id: string | null;
+  started_at: Date | null;
+  state: string;
+  workload_name: string | null;
+};
+
+type ExecutionTransitionRow = {
+  actor: string;
+  attempt: number | null;
+  created_at: Date;
+  from_state: string | null;
+  id: string;
+  reason: string | null;
+  sequence: number;
+  to_state: string;
+  trace_context: Record<string, string>;
+};
+
 type ClaimedExecutionRow = {
   attempt: number;
   attempt_state: string;
@@ -1167,6 +1569,7 @@ async function loadEventExecutions(client: pg.PoolClient, tenantId: string, even
 }
 
 function executionRecordFromJoined(row: ExecutionJoinedRow): Execution {
+  if (!isExecutionState(row.state)) throw new PersistedExecutionCorruptionError(row.id, "state");
   return {
     binding: { id: row.binding_id, version: row.binding_version },
     createdAt: row.created_at.toISOString(),
@@ -1175,10 +1578,40 @@ function executionRecordFromJoined(row: ExecutionJoinedRow): Execution {
     input: row.input as Execution["input"],
     profile: { id: row.profile_id, version: row.profile_version },
     result: (row.result as Execution["result"]) ?? null,
-    state: row.state as Execution["state"],
+    state: row.state,
     tenantId: row.tenant_id,
     updatedAt: row.updated_at.toISOString(),
     workspace: persistedWorkspace(row.id, row.workspace),
+  };
+}
+
+function executionAttemptFromRow(executionId: string, row: ExecutionAttemptRow): ExecutionAttempt {
+  if (!isAttemptState(row.state)) throw new PersistedExecutionCorruptionError(executionId, "attempt state");
+  return {
+    attempt: row.attempt,
+    finishedAt: row.finished_at?.toISOString() ?? null,
+    leaseExpiresAt: row.lease_expires_at?.toISOString() ?? null,
+    opencodeSessionId: row.opencode_session_id,
+    startedAt: row.started_at?.toISOString() ?? null,
+    state: row.state,
+    workloadName: row.workload_name,
+  };
+}
+
+function executionTransitionFromRow(executionId: string, row: ExecutionTransitionRow): ExecutionStateTransition {
+  if ((row.from_state !== null && !isExecutionState(row.from_state)) || !isExecutionState(row.to_state)) {
+    throw new PersistedExecutionCorruptionError(executionId, "transition state");
+  }
+  return {
+    actor: row.actor,
+    attempt: row.attempt,
+    createdAt: row.created_at.toISOString(),
+    fromState: row.from_state,
+    id: row.id,
+    reason: row.reason,
+    sequence: row.sequence,
+    toState: row.to_state,
+    traceContext: row.trace_context,
   };
 }
 
