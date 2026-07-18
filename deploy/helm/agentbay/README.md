@@ -43,11 +43,25 @@ POST /v1/agent-profiles/:profileID/versions
 GET  /v1/agent-profiles/:profileID/versions/:version
 POST /v1/triggers/:triggerID/events
 GET  /v1/executions/:id
+POST /hooks/github/:triggerID
 ```
 
-All `/v1/*` routes require `Authorization: Bearer <token>`.
+Management routes and normalized event ingress require `Authorization: Bearer <token>`.
 `POST /v1/triggers/:triggerID/events` also requires an `Idempotency-Key` header. The generated
 OpenAPI document is the source of truth for request and response schemas.
+
+A `github.app.webhook` trigger additionally exposes public `POST /hooks/github/:triggerID`.
+Point the GitHub App webhook at the Ingress URL for that path. The route
+authenticates `X-Hub-Signature-256` and does not use the API bearer token. Each
+supported delivery produces zero or one event, with issue
+types named `com.github.issues.<action>` and pull-request types named
+`com.github.pull_request.<action>`. Signed pings and unsupported event/action
+pairs return `204 No Content` without producing an event.
+
+After a trigger is disabled, a new event delivery returns `404 Not Found`, even
+when the event would match no bindings. An exact replay of an event already
+persisted durably may still return `202 Accepted`; replay lookup precedes the
+enabled-trigger check and does not create another event or executions.
 
 ## PostgreSQL and migrations
 
@@ -92,6 +106,30 @@ Choose one secret mode:
 Do not put plaintext production credentials in a values file. Use an existing
 Secret, External Secrets, SOPS, Sealed Secrets, or workload identity. Profile
 documents should reference credential policy rather than embed secret values.
+
+For a GitHub App webhook, keep its HMAC secret in a dedicated Kubernetes Secret
+and expose only that key to the orchestrator. `orchestrator.extraEnv` with
+`secretKeyRef` is recommended because the public webhook is handled by the
+orchestrator, not by migrations, the reconciler, or execution sandboxes:
+
+```yaml
+orchestrator:
+  extraEnv:
+    - name: AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION
+      valueFrom:
+        secretKeyRef:
+          name: agentbay-github-webhook
+          key: webhook-secret
+```
+
+Set the trigger's `config.webhookSecretEnv` to
+`AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION`. Secret environment-variable names
+must match `AGENTBAY_GITHUB_WEBHOOK_SECRET_<NAME>`. This credential verifies
+inbound webhook signatures only. Do not reuse it as a GitHub App private key,
+installation/API token, or Git clone credential. GitHub workspaces currently
+clone only public HTTPS repositories, using
+`/pullRequest/head/repository/cloneUrl` and `/pullRequest/head/sha` from
+normalized pull-request event data.
 
 ## Replicas and maintenance
 

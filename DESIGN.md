@@ -71,7 +71,7 @@ A named reference to an external service identity or credential policy, for exam
 
 ### 3.3 Trigger
 
-A configured instance of an event connector. It defines the connector type, source-specific configuration, authentication policy, and connection references. Examples include a GitHub App webhook, a Grafana alert webhook, a cron schedule, or an SQS subscription.
+A configured instance of an event connector. It defines the connector type, source-specific configuration, authentication policy, and connection references. Examples include a `github.app.webhook`, a Grafana alert webhook, a cron schedule, or an SQS subscription. The GitHub trigger configuration references the environment-variable name containing its webhook secret; it never stores the secret itself and has no workflow policy. Event selection and execution policy belong to bindings and profiles.
 
 ### 3.4 Binding
 
@@ -89,7 +89,7 @@ Bindings are configuration, not execution history. A published binding version i
 
 An immutable, normalized input represented with a CloudEvents envelope. Agentbay retains source identity, normalized data, deduplication information, and a reference to the raw source payload when required.
 
-One source delivery may normalize into zero, one, or multiple events. One event may match multiple bindings and therefore produce multiple executions.
+One source delivery may normalize into zero, one, or multiple events according to its connector contract. `github.app.webhook` deliberately normalizes each delivery into zero or one event: unsupported event/action pairs produce none. One event may match multiple bindings and therefore produce multiple executions.
 
 Connectors and API callers both enter the execution system at this normalized-event boundary. Neither can create an execution directly.
 
@@ -145,9 +145,10 @@ definition:
 ---
 # POST /v1/triggers
 id: engineering-github
-type: cloudevents.http
+type: github.app.webhook
 config:
   schemaVersion: 1
+  webhookSecretEnv: AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION
 ---
 # POST /v1/bindings/review-new-pull-requests/versions
 version: 1
@@ -169,7 +170,13 @@ definition:
     literal: Review the pull-request event below.
     includeEvent: data
   workspace:
-    type: empty
+    type: git
+    repository:
+      url:
+        path: /pullRequest/head/repository/cloneUrl
+    revision:
+      commit:
+        path: /pullRequest/head/sha
 ```
 
 The profile and binding references are exact versions; V1 has no `latest` selector. Binding prompts are literal, not templates. When `includeEvent` is `data` or `envelope`, Agentbay appends canonical JSON between untrusted-event delimiters. V1 supports empty workspaces and public HTTPS Git workspaces selected from event `data` by RFC 6901 pointers. Git revisions must be full immutable 40-character SHA-1 commit object IDs, and repository DNS must resolve exclusively to public IPv4 addresses. Admission persists the canonical repository URL and commit on the execution; retries never resolve selectors or mutable refs again.
@@ -298,46 +305,126 @@ GET  /v1/bindings/:bindingID/versions/:version
 POST /v1/bindings/:bindingID/versions/:version/disable
 POST /v1/triggers/:triggerID/events
 GET  /v1/executions/:id
+POST /hooks/github/:triggerID
 ```
 
-`POST /v1/triggers/:triggerID/events` is generic normalized CloudEvent trigger ingress, not a vendor webhook. It requires `Idempotency-Key`, accepts a structured CloudEvents 1.0 JSON envelope as `application/cloudevents+json` or `application/json`, and returns `202 Accepted` with the admitted event, all executions created by matching bindings, and a replay indicator. Zero matches is still an accepted event. Reusing a key for the same normalized request returns the original result as a replay; reusing it for different content returns `409 Conflict`.
+`POST /v1/triggers/:triggerID/events` is generic normalized CloudEvent trigger ingress, not a vendor webhook. It requires `Idempotency-Key`, accepts a structured CloudEvents 1.0 JSON envelope as `application/cloudevents+json` or `application/json`, and returns `202 Accepted` with the admitted event, all executions created by matching bindings, and a replay indicator. Zero matches is still an accepted event. Reusing a key for the same normalized request returns the original result as a replay; reusing it for different content returns `409 Conflict`. Once a trigger is disabled, any new event admission returns `404 Not Found`, including an event that would match no bindings. Because replay lookup precedes the enabled-trigger check at the durable admission boundary, an exact replay of an event already persisted may still return its original result with `202 Accepted` and `replayed: true`.
 
-CLIs, CI systems, tests, and services use this same ingress with a configured `cloudevents.http` trigger and enabled binding. `POST /v1/executions` does not exist. Future vendor-specific connectors authenticate and normalize source deliveries, then call the same admission boundary rather than creating executions themselves.
+CLIs, CI systems, tests, and services use this same ingress with a configured `cloudevents.http` trigger and enabled binding. `POST /v1/executions` does not exist. Vendor-specific connectors authenticate and normalize source deliveries, then call the same admission boundary rather than creating executions themselves.
+
+`POST /hooks/github/:triggerID` is the public ingress for a
+`github.app.webhook` trigger and is the exception to bearer authentication on
+the management API. GitHub supplies `X-Hub-Signature-256`; verification uses
+the configured webhook secret and the exact raw request bytes before JSON
+parsing. `X-GitHub-Delivery` is the stable source-delivery deduplication key, so
+a redelivery cannot admit a second event or set of executions. The endpoint
+acknowledges a supported delivery after admitting its zero or one normalized
+event; it never creates an execution directly. Signed pings and unsupported
+event/action pairs produce no event and return `204 No Content`. For supported
+events, disabled-trigger behavior follows the durable admission semantics above:
+an exact persisted replay may return `202`, while a new delivery returns `404`.
 
 ## 7. Canonical Event Model
 
-Agentbay uses the CloudEvents 1.0 envelope. A normalized GitHub event might be:
+Agentbay uses the CloudEvents 1.0 envelope. A normalized GitHub event is:
 
 ```json
 {
   "specversion": "1.0",
-  "id": "github-delivery-8d91f1",
-  "source": "github://acme/platform",
-  "type": "com.github.pull_request.opened",
-  "subject": "pull/482",
-  "time": "2026-07-17T10:14:00Z",
+  "id": "8d91f1c2-76c4-4a7d-9d3b-1a2b3c4d5e6f",
+  "source": "https://github.com/acme/repo",
+  "type": "com.github.pull_request.synchronize",
+  "subject": "pulls/17",
   "datacontenttype": "application/json",
-  "tenantid": "acme",
+  "githubevent": "pull_request",
+  "githubpayloadsha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "data": {
+    "schemaVersion": 1,
+    "deliveryId": "8d91f1c2-76c4-4a7d-9d3b-1a2b3c4d5e6f",
+    "action": "synchronize",
+    "installationId": 12345678,
     "repository": {
-      "owner": "acme",
-      "name": "platform",
-      "fullName": "acme/platform",
-      "cloneUrl": "https://github.com/acme/platform.git"
+      "id": 1001,
+      "fullName": "acme/repo",
+      "cloneUrl": "https://github.com/acme/repo.git",
+      "defaultBranch": "main",
+      "private": false
     },
-    "number": 482,
-    "action": "opened",
-    "headSha": "abc123"
+    "sender": {
+      "id": 2001,
+      "login": "octocat",
+      "type": "User"
+    },
+    "pullRequest": {
+      "number": 17,
+      "title": "Harden webhook admission",
+      "body": "Verify signatures over raw bytes.",
+      "bodyTruncated": false,
+      "draft": false,
+      "state": "open",
+      "merged": false,
+      "user": {
+        "id": 2002,
+        "login": "contributor",
+        "type": "User"
+      },
+      "head": {
+        "sha": "abcdef0123456789abcdef0123456789abcdef01",
+        "ref": "webhook-hardening",
+        "repository": {
+          "id": 1002,
+          "fullName": "contributor/repo",
+          "cloneUrl": "https://github.com/contributor/repo.git"
+        }
+      },
+      "base": {
+        "sha": "1234567890abcdef1234567890abcdef12345678",
+        "ref": "main",
+        "repository": {
+          "id": 1001,
+          "fullName": "acme/repo",
+          "cloneUrl": "https://github.com/acme/repo.git"
+        }
+      },
+      "labels": ["security", "webhook"],
+      "assignees": [
+        {
+          "id": 2003,
+          "login": "maintainer",
+          "type": "User"
+        }
+      ],
+      "requestedReviewers": [
+        {
+          "id": 2004,
+          "login": "reviewer",
+          "type": "User"
+        }
+      ],
+      "createdAt": "2026-07-15T09:30:00.000Z",
+      "updatedAt": "2026-07-17T10:14:00.000Z",
+      "closedAt": null,
+      "mergedAt": null
+    }
   }
 }
 ```
+
+GitHub issue deliveries use exact event types `com.github.issues.<action>` and
+normalized `data.action`, `data.repository`, and `data.issue`. Pull-request
+deliveries use `com.github.pull_request.<action>` and normalized `data.action`,
+`data.repository`, and `data.pullRequest`. Nested head and base repositories are
+projected; the head repository is required because a fork's checkout source
+differs from the base repository. Public Git workspace bindings therefore use
+`/pullRequest/head/repository/cloneUrl` and `/pullRequest/head/sha`, not mutable
+refs or top-level convenience fields.
 
 Rules for event data:
 
 - Preserve vendor payloads by reference when they are needed for audit or future processing.
 - Normalize stable cross-vendor concepts used by bindings.
 - Keep large logs, archives, and attachments in object storage.
-- Include source timestamps and ingestion timestamps separately.
+- Preserve source timestamps in normalized data and record ingestion timestamps separately from the CloudEvent.
 - Never treat an event payload as trusted prompt text. Templates must delimit source data and defend against oversized input.
 - Version connector normalization schemas so bindings can migrate deliberately.
 - V1 binding `eventTypes` are exact strings, not glob or regular-expression patterns. A value containing `*` matches only an event type that literally contains `*`.
@@ -368,6 +455,14 @@ interface TriggerConnector<TConfig> {
   deduplicationKey(event: CloudEvent): string
 }
 ```
+
+Authentication is connector-specific and precedes normalization. In particular,
+the GitHub connector verifies `X-Hub-Signature-256` over the unmodified body,
+then parses and normalizes the delivery. Its webhook secret is solely an inbound
+HMAC credential. GitHub App private keys or installation tokens used for API
+calls, and any Git credentials used for cloning, are separate connections with
+separate scope and rotation. V1 performs no authenticated clone: Git workspace
+URLs must be public HTTPS URLs accepted by the workspace validator.
 
 Trigger modes are:
 
@@ -405,7 +500,7 @@ Build connectors in this order:
 
 1. `webhook.generic` trigger and destination
 2. `schedule.cron` trigger
-3. `github.pull_request` and `github.issue` triggers
+3. `github.app.webhook` trigger, normalizing issue and pull-request deliveries
 4. GitHub Check and comment destinations
 5. `grafana.alert` trigger and incident-note destination
 6. `chat.message` trigger and message destination

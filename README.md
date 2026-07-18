@@ -114,7 +114,8 @@ GET /docs
 GET /openapi.json
 ```
 
-All `/v1/*` routes require `Authorization: Bearer <AGENTBAY_ADMIN_TOKEN>`:
+Management routes and normalized event ingress require `Authorization: Bearer
+<AGENTBAY_ADMIN_TOKEN>`:
 
 ```text
 POST /v1/agent-profiles/:profileID/versions
@@ -128,6 +129,11 @@ POST /v1/bindings/:bindingID/versions/:version/disable
 POST /v1/triggers/:triggerID/events
 GET  /v1/executions/:id
 ```
+
+The public `POST /hooks/github/:triggerID` endpoint accepts GitHub deliveries for
+a `github.app.webhook` trigger. It does not accept the bearer token;
+GitHub authenticates with `X-Hub-Signature-256` using the trigger's configured
+webhook-secret environment variable.
 
 Publish an exact profile version, create a `cloudevents.http` trigger, and
 publish an enabled binding version before admitting an event. The binding names
@@ -184,6 +190,51 @@ the key with the same normalized request returns the original result; reusing it
 with different content returns `409 Conflict`. There is no
 `POST /v1/executions` route.
 
+Disabling a trigger prevents new event admission. A new delivery returns `404
+Not Found`, including an event that would be a no-op because it matches no
+bindings. An exact replay of an event already persisted durably can still return
+its original result with `202 Accepted` and `replayed: true`.
+
+For GitHub App delivery, create a trigger such as:
+
+```json
+{
+  "id": "github",
+  "type": "github.app.webhook",
+  "config": {
+    "schemaVersion": 1,
+    "webhookSecretEnv": "AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION"
+  }
+}
+```
+
+Configure GitHub to send webhooks to
+`https://agentbay.example.com/hooks/github/github`. Agentbay verifies the
+SHA-256 signature against the raw request bytes before parsing JSON, uses
+`X-GitHub-Delivery` to deduplicate retries, and normalizes each supported
+delivery to zero or one event. Signed pings and unsupported event/action pairs
+are acknowledged with `204 No Content` and produce no event. Issues use
+`com.github.issues.<action>` with normalized `repository` and
+`issue` data; pull requests use `com.github.pull_request.<action>` with
+normalized `repository` and `pullRequest` data. Bindings, rather than trigger
+configuration, decide which normalized event types invoke agents.
+
+For a public pull-request checkout, select the contributor repository and exact
+head commit from the normalized data:
+
+```json
+"workspace": {
+  "type": "git",
+  "repository": { "url": { "path": "/pullRequest/head/repository/cloneUrl" } },
+  "revision": { "commit": { "path": "/pullRequest/head/sha" } }
+}
+```
+
+The webhook secret authenticates inbound deliveries only. It is not a GitHub
+App private key, installation token, or Git credential. V1 Git workspaces remain
+limited to public HTTPS repositories and do not use the webhook secret for
+cloning or GitHub API access.
+
 An agent delegates by using ordinary tools or MCP servers to cause an external
 effect that a connector later normalizes into another event. Bindings consume
 that event exactly like any other; no special Agentbay delegation MCP is
@@ -204,6 +255,11 @@ Use Kubernetes Secrets, an external secret manager, or workload identity. The
 Helm chart can generate and preserve `AGENTBAY_ADMIN_TOKEN` for development, but
 production deployments should provide a managed Secret and rotate tokens under
 their normal credential policy.
+
+Reference a GitHub webhook secret from `orchestrator.extraEnv` with
+`valueFrom.secretKeyRef`; do not place the secret value in trigger configuration
+or Helm values. Keep webhook authentication, GitHub API/App credentials, and
+Git clone credentials separate.
 
 The optional Helm AI gateway authorization path lets sandbox workloads use
 short-lived Kubernetes identity instead of receiving model-provider keys.

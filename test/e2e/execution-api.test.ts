@@ -36,6 +36,51 @@ describe("public API", () => {
     expect((await request(app, "GET", "/v1/triggers/missing")).status).toBe(404);
   });
 
+  it("validates GitHub webhook secrets without persisting their values", async () => {
+    const store = new FakeControlStore();
+    const secret = "é".repeat(16);
+    const app = testApp(store, () => secret);
+    const body = {
+      id: "github-app",
+      type: "github.app.webhook",
+      config: { schemaVersion: 1, webhookSecretEnv: "AGENTBAY_GITHUB_WEBHOOK_SECRET_TEST" },
+    };
+
+    const created = await request(app, "POST", "/v1/triggers", body);
+
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject(body);
+    expect(JSON.stringify(store.triggers.get("default:github-app"))).not.toContain(secret);
+  });
+
+  it.each([undefined, "x".repeat(31), "x".repeat(1025), `${"x".repeat(32)}\0`])("returns fixed 422 when a GitHub webhook secret is unavailable or invalid", async (secret) => {
+    const store = new FakeControlStore();
+    const app = testApp(store, () => secret);
+    const response = await request(app, "POST", "/v1/triggers", {
+      id: "github-app",
+      type: "github.app.webhook",
+      config: { schemaVersion: 1, webhookSecretEnv: "AGENTBAY_GITHUB_WEBHOOK_SECRET_TEST" },
+    });
+
+    expect(response).toMatchObject({ status: 422, body: { error: "GitHub webhook secret unavailable" } });
+    expect(store.triggers.size).toBe(0);
+  });
+
+  it("hides GitHub webhook triggers from generic event ingress", async () => {
+    const store = new FakeControlStore();
+    const app = testApp(store, () => "x".repeat(32));
+    expect((await request(app, "POST", "/v1/triggers", {
+      id: "github-app",
+      type: "github.app.webhook",
+      config: { schemaVersion: 1, webhookSecretEnv: "AGENTBAY_GITHUB_WEBHOOK_SECRET_TEST" },
+    })).status).toBe(201);
+
+    const response = await request(app, "POST", "/v1/triggers/github-app/events", cloudEvent("push", {}), { "Idempotency-Key": "github-delivery" });
+
+    expect(response.status).toBe(404);
+    expect(store.lastAdmission).toBeUndefined();
+  });
+
   it("publishes, reads, and disables exact binding versions", async () => {
     const app = testApp();
     await publishDependencies(app);
@@ -185,6 +230,6 @@ function bindingBody() { return { version: 1, triggerId: "github", profile: { id
 function gitBindingBody() { return { ...bindingBody(), definition: { ...bindingBody().definition, workspace: { type: "git", repository: { url: { path: "/repository" } }, revision: { commit: { path: "/revision" } } } } }; }
 function cloudEvent(type: string, data: object) { return { specversion: "1.0", id: type === "push" ? "evt-2" : "evt-1", source: "https://github.example/hooks", type, data }; }
 function profileDefinition(agent: string) { return { schemaVersion: 1 as const, runtime: { agent, opencodeConfig: { agent: { [agent]: { prompt: "Test" } } }, type: "opencode" as const }, sandbox: { templateName: "opencode" }, permissions: { onRequest: "fail" as const }, timeoutSeconds: 3600 }; }
-function testApp(store: ControlApiStore = new FakeControlStore()) { const app = createOpenApiApp(); mountControlApi(app, testConfig(), store); return app; }
+function testApp(store: ControlApiStore = new FakeControlStore(), readEnvironmentVariable?: (name: string) => string | undefined) { const app = createOpenApiApp(); mountControlApi(app, testConfig(), store, readEnvironmentVariable); return app; }
 async function request(app: ReturnType<typeof createOpenApiApp>, method: string, path: string, body?: unknown, headers: Record<string, string> = {}) { const response = await app.request(path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: { authorization: "Bearer test-token", ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers } }); const text = await response.text(); const contentType = response.headers.get("content-type"); return { body: text && contentType?.includes("json") ? JSON.parse(text) as unknown : text || undefined, headers: response.headers, status: response.status }; }
 function testConfig(): Config { return { adminToken: "test-token", dispatcherEnabled: false, dispatcherIdlePollMs: 500, dispatcherLeaseDurationMs: 60_000, dispatcherRenewIntervalMs: 20_000, dispatcherWorkerId: "test-worker", executionMaintenanceBatchSize: 100, executionMaintenanceEnabled: true, executionMaintenanceIntervalMs: 5_000, executionMaxAttempts: 3, executionRetryDelayMs: 30_000, claimReadyTimeoutMs: 5_000, kubeNamespace: "unused", opencodeDirectory: "/workspace", opencodePort: 4096, port: 3000, sandboxClaimApiVersion: "v1alpha1" }; }

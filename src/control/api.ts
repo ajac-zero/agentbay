@@ -25,9 +25,15 @@ import {
 const TENANT_ID = "default";
 const MAX_BODY_BYTES = 128 * 1024;
 const WORKSPACE_RESOLUTION_MESSAGE = "Workspace could not be resolved from event data";
+const GITHUB_WEBHOOK_SECRET_UNAVAILABLE_MESSAGE = "GitHub webhook secret unavailable";
 export type ControlApiStore = ExecutionStore & TriggerStore & BindingStore & EventAdmissionStore;
 
-export function mountControlApi(app: OpenAPIHono<any>, config: Config, store: ControlApiStore): void {
+export function mountControlApi(
+  app: OpenAPIHono<any>,
+  config: Config,
+  store: ControlApiStore,
+  readEnvironmentVariable: (name: string) => string | undefined = (name) => process.env[name],
+): void {
   if (!config.adminToken) return;
   const token = config.adminToken;
   const api = new OpenAPIHono({ defaultHook: validationHook });
@@ -42,6 +48,13 @@ export function mountControlApi(app: OpenAPIHono<any>, config: Config, store: Co
 
   api.openapi(createTriggerRoute, async (context) => handle(context, async () => {
     const body = context.req.valid("json");
+    if (body.type === "github.app.webhook") {
+      const secret = readEnvironmentVariable(body.config.webhookSecretEnv);
+      const secretBytes = secret === undefined ? 0 : Buffer.byteLength(secret, "utf8");
+      if (secret === undefined || secret.includes("\0") || secretBytes < 32 || secretBytes > 1024) {
+        return context.json({ error: GITHUB_WEBHOOK_SECRET_UNAVAILABLE_MESSAGE }, 422);
+      }
+    }
     const createdAt = new Date().toISOString();
     return context.json(await store.createTrigger({ ...body, tenantId: TENANT_ID, enabled: true, createdAt, disabledAt: null }), 201);
   }) as never);
@@ -87,6 +100,7 @@ export function mountControlApi(app: OpenAPIHono<any>, config: Config, store: Co
     const { triggerID } = context.req.valid("param");
     const trigger = await store.getTrigger(TENANT_ID, triggerID);
     if (!trigger) throw new TriggerNotFoundError(triggerID);
+    if (trigger.type !== "cloudevents.http") throw new TriggerNotFoundError(triggerID);
     const normalized = normalizedCloudEventSchema.safeParse(context.req.valid("json"));
     if (!normalized.success) return context.json({ error: "Invalid request" }, 400);
     const event = normalized.data;

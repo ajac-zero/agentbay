@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { loadConfig } from "./config.js";
 import { logger } from "./logger.js";
 import { mountControlApi } from "./control/api.js";
+import { mountGitHubWebhookApi } from "./connectors/github/api.js";
 import { runExecutionMaintenanceLoop } from "./dispatch/maintenance.js";
 import { DispatcherWorker, OpenCodeExecutionAttemptRunner } from "./dispatch/worker.js";
 import { createOpenApiApp, mountHealthRoute, mountOpenApiDocs } from "./openapi.js";
@@ -50,6 +51,7 @@ const app = createOpenApiApp();
 
 mountHealthRoute(app);
 mountControlApi(app, config, runtimeStore);
+mountGitHubWebhookApi(app, runtimeStore);
 mountOpenApiDocs(app);
 
 const server = serve({ fetch: (request) => app.fetch(request), port: config.port }, (info) => {

@@ -155,3 +155,35 @@ if grep -q 'workspace-materializer' "$work_dir/spec-override.yaml"; then
   echo "specOverride unexpectedly contains the managed workspace materializer" >&2
   exit 1
 fi
+
+cat > "$work_dir/webhook-secret-values.yaml" <<'EOF'
+orchestrator:
+  extraEnv:
+    - name: AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION
+      valueFrom:
+        secretKeyRef:
+          name: agentbay-github-webhook
+          key: webhook-secret
+sandboxTemplates:
+  enabled: true
+EOF
+
+helm template demo "$chart_dir" \
+  --namespace agentbay-helm-test \
+  --show-only templates/deployment.yaml \
+  -f "$work_dir/webhook-secret-values.yaml" > "$work_dir/webhook-secret-deployment.yaml"
+
+test "$(grep -c 'name: AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION' "$work_dir/webhook-secret-deployment.yaml")" -eq 1
+grep -q 'name: agentbay-github-webhook' "$work_dir/webhook-secret-deployment.yaml"
+grep -q 'key: webhook-secret' "$work_dir/webhook-secret-deployment.yaml"
+
+for template in migrations-job.yaml reconciler-cronjob.yaml sandboxtemplates.yaml; do
+  helm template demo "$chart_dir" \
+    --namespace agentbay-helm-test \
+    --show-only "templates/$template" \
+    -f "$work_dir/webhook-secret-values.yaml" > "$work_dir/$template"
+  if grep -q 'AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION\|agentbay-github-webhook\|webhook-secret' "$work_dir/$template"; then
+    echo "GitHub webhook secret unexpectedly rendered in $template" >&2
+    exit 1
+  fi
+done
