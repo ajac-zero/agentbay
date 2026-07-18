@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Config } from "../../src/config.js";
 import { createOpenApiApp, mountHealthRoute, mountOpenApiDocs } from "../../src/openapi.js";
 import { mountControlApi, type ControlApiStore } from "../../src/control/api.js";
+import { mountGitHubWebhookApi } from "../../src/connectors/github/api.js";
 
 describe("OpenAPI docs", () => {
   it("serves the OpenAPI document", async () => {
@@ -25,9 +26,24 @@ describe("OpenAPI docs", () => {
       "/v1/bindings/{bindingID}/versions/{version}",
       "/v1/bindings/{bindingID}/versions/{version}/disable",
       "/v1/triggers/{triggerID}/events",
+      "/hooks/github/{triggerID}",
     ]);
     expect(body).toMatchObject({
       paths: {
+        "/hooks/github/{triggerID}": {
+          post: {
+            security: [],
+            parameters: expect.arrayContaining([
+              expect.objectContaining({ in: "path", name: "triggerID", schema: expect.objectContaining({ pattern: "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$" }) }),
+              expect.objectContaining({ in: "header", name: "Content-Type", schema: expect.objectContaining({ pattern: "^application\\/json(?:\\s*;\\s*charset\\s*=\\s*(?:utf-8|\"utf-8\"))?$" }) }),
+              expect.objectContaining({ in: "header", name: "X-GitHub-Delivery", schema: expect.objectContaining({ pattern: "^[A-Za-z0-9._:-]+$" }) }),
+              expect.objectContaining({ in: "header", name: "X-GitHub-Event", schema: expect.objectContaining({ pattern: "^(?=.{1,128}$)[a-z]+(?:_[a-z]+)*$" }) }),
+              expect.objectContaining({ in: "header", name: "X-Hub-Signature-256", schema: expect.objectContaining({ pattern: "^sha256=[0-9a-f]{64}$" }) }),
+            ]),
+            requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: true } } } },
+            responses: { "202": {}, "204": {}, "401": {}, "404": {} },
+          },
+        },
         "/v1/triggers/{triggerID}/events": {
           post: {
             responses: {
@@ -75,6 +91,7 @@ function createTestApp() {
   const app = createOpenApiApp();
   mountHealthRoute(app);
   mountControlApi(app, testConfig(), emptyControlStore());
+  mountGitHubWebhookApi(app, emptyControlStore());
   return app;
 }
 

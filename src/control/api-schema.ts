@@ -6,16 +6,29 @@ const errorSchema = z.object({ error: z.string().min(1) }).strict();
 const workspaceResolutionErrorSchema = z.object({
   error: z.literal("Workspace could not be resolved from event data"),
 }).strict().openapi("WorkspaceResolutionError");
-const triggerConfigSchema = z.object({ schemaVersion: z.literal(1) }).strict();
-const triggerSchema = z.object({
+const cloudEventsHttpTriggerConfigSchema = z.object({ schemaVersion: z.literal(1) }).strict();
+const githubAppWebhookTriggerConfigSchema = z.object({
+  schemaVersion: z.literal(1),
+  webhookSecretEnv: z.string().regex(/^AGENTBAY_GITHUB_WEBHOOK_SECRET_[A-Z0-9_]{1,96}$/),
+}).strict();
+const triggerFields = {
   id: simpleIdSchema,
   tenantId: simpleIdSchema,
-  type: z.literal("cloudevents.http"),
-  config: triggerConfigSchema,
   enabled: z.boolean(),
   createdAt: z.string().datetime(),
   disabledAt: z.string().datetime().nullable(),
-}).strict().openapi("Trigger");
+};
+const triggerSchema = z.discriminatedUnion("type", [
+  z.object({ ...triggerFields, type: z.literal("cloudevents.http"), config: cloudEventsHttpTriggerConfigSchema }).strict(),
+  z.object({ ...triggerFields, type: z.literal("github.app.webhook"), config: githubAppWebhookTriggerConfigSchema }).strict(),
+]).openapi("Trigger");
+const createTriggerRequestSchema = z.discriminatedUnion("type", [
+  z.object({ id: simpleIdSchema, type: z.literal("cloudevents.http"), config: cloudEventsHttpTriggerConfigSchema }).strict(),
+  z.object({ id: simpleIdSchema, type: z.literal("github.app.webhook"), config: githubAppWebhookTriggerConfigSchema }).strict(),
+]);
+const githubWebhookSecretUnavailableSchema = z.object({
+  error: z.literal("GitHub webhook secret unavailable"),
+}).strict().openapi("GitHubWebhookSecretUnavailableError");
 const bindingVersionSchema = z.object({
   id: simpleIdSchema,
   bindingId: simpleIdSchema,
@@ -69,8 +82,8 @@ const bindingParams = z.object({ bindingID: simpleIdSchema, version: versionSche
 
 export const createTriggerRoute = createRoute({
   method: "post", path: "/triggers", tags: ["control"], summary: "Create a trigger", security: [{ bearerAuth: [] }],
-  request: { body: { required: true, content: { "application/json": { schema: z.object({ id: simpleIdSchema, type: z.literal("cloudevents.http"), config: triggerConfigSchema }).strict() } } } },
-  responses: { 201: jsonResponse("Trigger created.", triggerSchema), ...securedErrors, 409: jsonResponse("Trigger already exists.", errorSchema) },
+  request: { body: { required: true, content: { "application/json": { schema: createTriggerRequestSchema } } } },
+  responses: { 201: jsonResponse("Trigger created.", triggerSchema), ...securedErrors, 409: jsonResponse("Trigger already exists.", errorSchema), 422: jsonResponse("GitHub webhook secret is unavailable or invalid.", githubWebhookSecretUnavailableSchema) },
 });
 export const getTriggerRoute = createRoute({
   method: "get", path: "/triggers/{triggerID}", tags: ["control"], summary: "Read a trigger", security: [{ bearerAuth: [] }],

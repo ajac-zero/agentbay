@@ -38,6 +38,24 @@ describe("triggerSchema", () => {
     expect(triggerSchema.safeParse({ ...trigger, version: 1 }).success).toBe(false);
     expect(triggerSchema.safeParse({ ...trigger, config: { schemaVersion: 2 } }).success).toBe(false);
   });
+
+  it("discriminates and persists GitHub App webhook trigger configuration", () => {
+    const trigger = {
+      id: "github-app",
+      tenantId: "acme",
+      type: "github.app.webhook",
+      config: { schemaVersion: 1, webhookSecretEnv: "AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION_1" },
+      enabled: true,
+      createdAt: "2026-07-18T10:00:00Z",
+      disabledAt: null,
+    } as const;
+
+    expect(triggerSchema.parse(JSON.parse(JSON.stringify(trigger)))).toEqual(trigger);
+    expect(triggerSchema.safeParse({ ...trigger, config: { schemaVersion: 1 } }).success).toBe(false);
+    expect(triggerSchema.safeParse({ ...trigger, type: "cloudevents.http" }).success).toBe(false);
+    expect(triggerSchema.safeParse({ ...trigger, config: { ...trigger.config, webhookSecretEnv: "GITHUB_SECRET" } }).success).toBe(false);
+    expect(triggerSchema.safeParse({ ...trigger, config: { ...trigger.config, extra: true } }).success).toBe(false);
+  });
 });
 
 describe("binding schemas", () => {

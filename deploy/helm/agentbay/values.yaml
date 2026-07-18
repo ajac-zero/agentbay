@@ -215,11 +215,18 @@ orchestrator:
     leaseDurationMs: 60000
     # -- Lease renewal interval; must be less than leaseDurationMs.
     renewIntervalMs: 20000
-  # -- Extra orchestrator env vars expressed as a name/value list. These are
-  # -- attached as plain `env` entries; use `secrets` for sensitive values.
+  # -- Extra orchestrator env vars expressed as a Kubernetes `env` list. For
+  # -- sensitive values, use `valueFrom.secretKeyRef`; for example, expose a
+  # -- GitHub webhook secret here so it is available only to the orchestrator
+  # -- serving the public webhook endpoint, not migrations or the reconciler.
   extraEnv: []
   #  - name: LOG_LEVEL
   #    value: debug
+  #  - name: AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION
+  #    valueFrom:
+  #      secretKeyRef:
+  #        name: agentbay-github-webhook
+  #        key: webhook-secret
   # -- Extra `envFrom` entries appended after the chart-managed Secret. Use
   # -- this to layer in additional ConfigMaps or Secrets you manage outside
   # -- this chart.

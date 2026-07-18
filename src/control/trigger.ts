@@ -1,18 +1,35 @@
 import { z } from "zod";
 
-export const triggerConfigSchema = z.object({ schemaVersion: z.literal(1) }).strict();
+export const cloudEventsHttpTriggerConfigSchema = z.object({ schemaVersion: z.literal(1) }).strict();
+export const githubAppWebhookTriggerConfigSchema = z.object({
+  schemaVersion: z.literal(1),
+  webhookSecretEnv: z.string().regex(/^AGENTBAY_GITHUB_WEBHOOK_SECRET_[A-Z0-9_]{1,96}$/),
+}).strict();
+export const triggerConfigSchema = z.union([
+  cloudEventsHttpTriggerConfigSchema,
+  githubAppWebhookTriggerConfigSchema,
+]);
 
-export const triggerSchema = z
-  .object({
-    id: z.string().min(1).max(128),
-    tenantId: z.string().min(1).max(128),
+const triggerFields = {
+  id: z.string().min(1).max(128),
+  tenantId: z.string().min(1).max(128),
+  enabled: z.boolean(),
+  createdAt: z.iso.datetime({ offset: true }),
+  disabledAt: z.iso.datetime({ offset: true }).nullable(),
+};
+
+export const triggerSchema = z.discriminatedUnion("type", [
+  z.object({
+    ...triggerFields,
     type: z.literal("cloudevents.http"),
-    config: triggerConfigSchema,
-    enabled: z.boolean(),
-    createdAt: z.iso.datetime({ offset: true }),
-    disabledAt: z.iso.datetime({ offset: true }).nullable(),
-  })
-  .strict();
+    config: cloudEventsHttpTriggerConfigSchema,
+  }).strict(),
+  z.object({
+    ...triggerFields,
+    type: z.literal("github.app.webhook"),
+    config: githubAppWebhookTriggerConfigSchema,
+  }).strict(),
+]);
 
 export type TriggerConfig = z.infer<typeof triggerConfigSchema>;
 export type Trigger = z.infer<typeof triggerSchema>;
