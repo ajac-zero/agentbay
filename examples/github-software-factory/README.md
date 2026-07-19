@@ -32,9 +32,11 @@ never uses a mutable branch name.
 
 Durable wake bindings consume active waits atomically during normal event
 admission. GitHub PR events provide safe repository ID plus pull request number
-correlation. The example does not enable a PR continuation yet because a
-`synchronize` event also changes the immutable workspace revision; continuation
-workspace reconstruction is the next lifecycle slice.
+correlation. Each opened or synchronize event creates a review execution pinned
+to that event's exact head SHA, so a push cannot be lost merely because another
+review turn is running. Generic wake continuations can also resolve a new
+per-turn immutable workspace, but the factory will use that path only after wake
+events can be durably coalesced while an execution is queued or running.
 
 The developer binding also cannot enable a PR lifecycle wait yet: an
 issue-origin execution needs the future PR identity before it can safely

@@ -241,7 +241,8 @@ Wake bindings declare `disposition: "wake"`, an exact wait name, bounded
 correlation projections over normalized event data, and either a `continue` or
 `complete` action. Admission atomically consumes each matching one-shot wait.
 A continuation appends immutable input history and moves `WAITING -> QUEUED`;
-retries use that same input sequence. A terminal action moves directly to
+it may also resolve a new immutable workspace from the wake event, and retries
+use that same input and workspace sequence. A terminal action moves directly to
 `COMPLETED`. Exact event replay reloads persisted wake results and never rematches
 current bindings or active waits.
 

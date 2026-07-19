@@ -134,11 +134,20 @@ describe("binding schemas", () => {
       wake: {
         waitName: "developer-pr-lifecycle",
         correlation: [{ name: "repositoryId", path: "/repository/id" }, { name: "pullRequest", path: "/pullRequest/number" }],
-        action: { type: "continue", prompt: { literal: "Address review feedback.", includeEvent: "data" } },
+        action: {
+          type: "continue",
+          prompt: { literal: "Address review feedback.", includeEvent: "data" },
+          workspace: {
+            type: "git",
+            repository: { url: { path: "/pullRequest/head/repository/cloneUrl" } },
+            revision: { commit: { path: "/pullRequest/head/sha" } },
+          },
+        },
       },
     } as const;
     expect(bindingDefinitionSchema.safeParse(wake).success).toBe(true);
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, action: { type: "complete" } } }).success).toBe(true);
+    expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, action: { type: "complete", workspace: { type: "empty" } } } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...wake, workspace: { type: "empty" } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, correlation: [] } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, correlation: [{ name: "x", path: "/x" }, { name: "x", path: "/y" }] } }).success).toBe(false);

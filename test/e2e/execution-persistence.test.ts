@@ -139,7 +139,7 @@ describe("execution persistence", () => {
   ])("rejects malformed persisted execution workspaces on API reads", async (workspace) => {
     const admitted = await store.admitEvent(freshAdmissionCommand());
     const execution = admitted.executions[0]!;
-    await pool.query("update agentbay_executions set workspace = $1 where id = $2", [workspace, execution.id]);
+    await pool.query("update agentbay_execution_inputs set workspace = $1 where execution_id = $2 and sequence = 1", [workspace, execution.id]);
 
     await expect(store.getExecution("default", execution.id)).rejects.toBeInstanceOf(PersistedExecutionCorruptionError);
   });

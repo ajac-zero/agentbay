@@ -3,6 +3,8 @@ import pg from "pg";
 import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { hashCanonicalJson, type JsonValue } from "../../src/json.js";
+import type { BindingWorkspace } from "../../src/workspace/types.js";
+import { WorkspaceResolutionError } from "../../src/workspace/resolver.js";
 import { createPostgresRuntimeStore, type PostgresRuntimeStore } from "../../src/runtime/postgres.js";
 
 const { Pool } = pg;
@@ -79,6 +81,60 @@ describe("wake admission persistence", () => {
     expect(claimed).toMatchObject({ executionId, input: { text: expect.stringContaining("Continue after review.") }, lease: { attempt: 2 } });
   });
 
+  it("pins a continuation and all retries to the wake event workspace revision", async () => {
+    const correlation = randomUUID();
+    const initialCommit = "a".repeat(40);
+    const updatedCommit = "b".repeat(40);
+    const executionId = await createWaitingExecution(correlation, {
+      type: "git", repository: { url: { path: "/repositoryUrl" } }, revision: { commit: { path: "/commit" } },
+    }, { repositoryUrl: "https://github.com/acme/repo.git", commit: initialCommit });
+    await publishWakeBinding(`revision-${correlation}`, "work.synchronize", {
+      type: "continue",
+      prompt: { literal: "Review updated revision.", includeEvent: "data" },
+      workspace: { type: "git", repository: { url: { path: "/repositoryUrl" } }, revision: { commit: { path: "/commit" } } },
+    });
+
+    await store.admitEvent(admissionCommand("work.synchronize", {
+      key: correlation, repositoryUrl: "https://github.com/acme/repo.git", commit: updatedCommit,
+    }));
+
+    const expectedWorkspace = {
+      type: "git", repository: { url: "https://github.com/acme/repo.git" }, revision: { type: "commit", commit: updatedCommit },
+    };
+    expect(await store.getExecution("default", executionId)).toMatchObject({ workspace: expectedWorkspace });
+    expect((await pool.query("select sequence, workspace from agentbay_execution_inputs where execution_id = $1 order by sequence", [executionId])).rows).toEqual([
+      { sequence: 1, workspace: { ...expectedWorkspace, revision: { type: "commit", commit: initialCommit } } },
+      { sequence: 2, workspace: expectedWorkspace },
+    ]);
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: `revision-worker-${correlation}`, leaseDurationMs: 60_000 });
+    expect(claimed).toMatchObject({ executionId, workspace: expectedWorkspace, lease: { attempt: 2 } });
+    await pool.query("update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1 and attempt = 2", [executionId]);
+    await pool.query("update agentbay_executions set state = 'RUNNING' where id = $1", [executionId]);
+    await pool.query(`update agentbay_execution_attempts set state = 'RUNNING', workload_name = 'sandbox', opencode_session_id = 'session'
+      where execution_id = $1 and attempt = 2`, [executionId]);
+    const retried = await store.claimExpiredRunningExecution({ leaseOwner: `retry-worker-${correlation}`, leaseDurationMs: 60_000 });
+    expect(retried).toMatchObject({ executionId, workspace: expectedWorkspace, lease: { attempt: 2 } });
+  });
+
+  it("rolls back admission when a continuation workspace cannot be resolved", async () => {
+    const correlation = randomUUID();
+    const executionId = await createWaitingExecution(correlation);
+    await publishWakeBinding(`invalid-revision-${correlation}`, "work.invalid-revision", {
+      type: "continue",
+      prompt: { literal: "Review updated revision.", includeEvent: "data" },
+      workspace: { type: "git", repository: { url: { path: "/repositoryUrl" } }, revision: { commit: { path: "/commit" } } },
+    });
+    const command = admissionCommand("work.invalid-revision", {
+      key: correlation, repositoryUrl: "https://github.com/acme/repo.git", commit: "mutable-branch",
+    });
+
+    await expect(store.admitEvent(command)).rejects.toBeInstanceOf(WorkspaceResolutionError);
+
+    expect((await pool.query("select count(*)::int as count from agentbay_events where id = $1", [command.internalEventId])).rows[0]).toEqual({ count: 0 });
+    expect((await pool.query("select state from agentbay_event_waits where execution_id = $1", [executionId])).rows[0]).toEqual({ state: "ACTIVE" });
+    expect(await store.getExecution("default", executionId)).toMatchObject({ state: "WAITING" });
+  });
+
   it("terminally completes a waiting execution without queueing another attempt", async () => {
     const correlation = randomUUID();
     const executionId = await createWaitingExecution(correlation);
@@ -124,18 +180,22 @@ describe("wake admission persistence", () => {
     expect(await store.getExecution("default", executionId)).toMatchObject({ state: "WAITING" });
   });
 
-  async function createWaitingExecution(correlation: string): Promise<string> {
+  async function createWaitingExecution(
+    correlation: string,
+    workspace: BindingWorkspace = { type: "empty" },
+    extraData: Record<string, JsonValue> = {},
+  ): Promise<string> {
     const bindingId = `start-${correlation}`;
     const createdAt = new Date().toISOString();
     await store.publishBindingVersion({
       bindingId, createdAt, disabledAt: null, enabled: true, id: randomUUID(), profile: { id: "developer", version: 1 }, tenantId: "default", triggerId: "events", version: 1,
       definition: {
         schemaVersion: 1, eventTypes: ["work.start"], filter: { all: [{ path: "/key", op: "eq", value: correlation }] },
-        prompt: { literal: "Start work.", includeEvent: "data" }, workspace: { type: "empty" },
+        prompt: { literal: "Start work.", includeEvent: "data" }, workspace,
         afterTurn: { disposition: "wait", wait: { name: "work-lifecycle", correlation: [{ name: "key", path: "/key" }], deadlineSeconds: 600 } },
       },
     });
-    const admitted = await store.admitEvent(admissionCommand("work.start", { key: correlation }));
+    const admitted = await store.admitEvent(admissionCommand("work.start", { key: correlation, ...extraData }));
     const executionId = admitted.executions[0]!.id;
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: `worker-${correlation}`, leaseDurationMs: 60_000 });
     if (!claimed || claimed.executionId !== executionId) throw new Error("Expected execution claim");
@@ -151,7 +211,9 @@ describe("wake admission persistence", () => {
     return executionId;
   }
 
-  async function publishWakeBinding(bindingId: string, eventType: string, action: { type: "complete" } | { type: "continue"; prompt: { literal: string; includeEvent: "data" } }): Promise<void> {
+  async function publishWakeBinding(bindingId: string, eventType: string, action: { type: "complete" } | {
+    type: "continue"; prompt: { literal: string; includeEvent: "data" }; workspace?: BindingWorkspace;
+  }): Promise<void> {
     await store.publishBindingVersion({
       bindingId, createdAt: new Date().toISOString(), disabledAt: null, enabled: true, id: randomUUID(),
       profile: { id: "developer", version: 1 }, tenantId: "default", triggerId: "events", version: 1,

@@ -246,6 +246,7 @@ export const executionInputs = pgTable("agentbay_execution_inputs", {
   kind: text("kind").notNull(),
   sequence: integer("sequence").notNull(),
   tenantID: text("tenant_id").notNull(),
+  workspace: jsonb("workspace").$type<import("../workspace/types.js").ResolvedWorkspace>().notNull(),
 }, (table) => [
   primaryKey({ columns: [table.executionID, table.sequence] }),
   check("agentbay_execution_inputs_sequence_positive", sql`${table.sequence} > 0`),
