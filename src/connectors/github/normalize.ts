@@ -74,6 +74,7 @@ const headBranchSchema = z.object({ ...branchShape, repo: gitRepositorySchema.nu
 const baseBranchSchema = z.object({ ...branchShape, repo: gitRepositorySchema });
 
 const pullRequestSchema = z.object({
+  id,
   number: z.number().int().positive(),
   title: bounded(4_096),
   body: z.string().nullable(),
@@ -214,6 +215,7 @@ function normalizedIssue(issue: z.infer<typeof issueSchema>) {
 
 function normalizedPullRequest(pullRequest: z.infer<typeof pullRequestSchema>) {
   return {
+    id: pullRequest.id,
     number: pullRequest.number,
     title: pullRequest.title,
     ...truncateBody(pullRequest.body),

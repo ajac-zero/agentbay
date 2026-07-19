@@ -29,6 +29,7 @@ sandboxTemplates:
         egress:
           allowDNS: true
           allowInternetExceptPrivate: true
+          allowControlPlane: true
           extra: []
       sidecars:
         - &developerMcp

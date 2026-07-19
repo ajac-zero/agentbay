@@ -18,6 +18,7 @@ const common = {
   unknown: { large: "not projected" },
 };
 const issue = {
+  id: 700,
   number: 7,
   title: "Bug",
   body: "Details",

@@ -874,6 +874,115 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     } finally { client.release(); }
   }
 
+  async registerGitHubPullRequestEffect(command: {
+    baseRef: string; executionId: string; fencingToken: string; headRef: string; pullRequestTitle: string; registeredAt: string; repositoryFullName: string;
+    repositoryId: number; requestHash: string; tenantId: string;
+  }): Promise<{ created: boolean; id: string; state: string }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const execution = await client.query<{ data: JsonValue; state: string }>(`SELECT event.data, execution.state
+        FROM agentbay_executions execution
+        JOIN agentbay_execution_attempts attempt ON attempt.execution_id=execution.id AND attempt.tenant_id=execution.tenant_id
+        JOIN agentbay_events event ON event.id=execution.event_id AND event.tenant_id=execution.tenant_id
+        WHERE execution.tenant_id=$1 AND execution.id=$2 AND attempt.fencing_token=$3
+          AND attempt.state IN ('LEASED','RUNNING') AND attempt.lease_expires_at > clock_timestamp()
+        FOR UPDATE OF execution`, [command.tenantId, command.executionId, command.fencingToken]);
+      if (!execution.rows[0]) throw new Error("Execution effect capability is not current");
+      const repository = jsonObject(jsonObject(execution.rows[0].data, "event data").repository, "event repository");
+      if (repository.id !== command.repositoryId || typeof repository.fullName !== "string"
+        || repository.fullName.toLowerCase() !== command.repositoryFullName.toLowerCase()) throw new Error("Effect repository does not match execution origin");
+      const existing = await client.query<{ id: string; request_hash: string; state: string }>(
+        "SELECT id,request_hash,state FROM agentbay_github_pull_request_effects WHERE tenant_id=$1 AND execution_id=$2 AND state IN ('REGISTERED','REPORTED','CONFIRMED') FOR UPDATE",
+        [command.tenantId, command.executionId],
+      );
+      if (existing.rows[0]) {
+        if (existing.rows[0].request_hash !== command.requestHash) throw new IdempotencyConflictError();
+        await client.query("COMMIT");
+        return { created: false, id: existing.rows[0].id, state: existing.rows[0].state };
+      }
+      const id = randomUUID();
+      await client.query(`INSERT INTO agentbay_github_pull_request_effects
+        (id,tenant_id,execution_id,repository_id,repository_full_name,request_hash,fence_hash,pull_request_title,head_ref,base_ref,state,created_at,attempted_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'REGISTERED',$11,$11)`,
+      [id, command.tenantId, command.executionId, String(command.repositoryId), command.repositoryFullName, command.requestHash, hashCanonicalJson(command.fencingToken),
+        command.pullRequestTitle, command.headRef, command.baseRef, new Date(command.registeredAt)]);
+      await client.query("COMMIT");
+      return { created: true, id, state: "REGISTERED" };
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+
+  async reportGitHubPullRequestEffect(command: {
+    effectId: string; executionId: string; fencingToken: string; githubPullRequestId: string;
+    pullRequestNumber: number; pullRequestUrl: string; reportedAt: string; tenantId: string;
+  }): Promise<{ id: string; state: string }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const effect = await client.query<{ fence_hash: string; github_pull_request_id: string | null; pull_request_number: number | null; pull_request_url: string | null; repository_full_name: string; state: string }>(`SELECT effect.*
+        FROM agentbay_github_pull_request_effects effect
+        WHERE effect.tenant_id=$1 AND effect.id=$2 AND effect.execution_id=$3 FOR UPDATE`,
+      [command.tenantId, command.effectId, command.executionId]);
+      const row = effect.rows[0];
+      if (!row || row.fence_hash !== hashCanonicalJson(command.fencingToken)) throw new Error("Execution effect capability is invalid");
+      validateGitHubPullRequestUrl(command.pullRequestUrl, row.repository_full_name, command.pullRequestNumber);
+      if (row.state !== "REGISTERED") {
+        if (row.github_pull_request_id !== command.githubPullRequestId || row.pull_request_number !== command.pullRequestNumber || row.pull_request_url !== command.pullRequestUrl) throw new IdempotencyConflictError();
+        await client.query("COMMIT");
+        if (row.state === "REPORTED") await this.reconcileGitHubPullRequestEffects(command.tenantId, { repositoryId: undefined, githubPullRequestId: command.githubPullRequestId, pullRequestNumber: command.pullRequestNumber });
+        return { id: command.effectId, state: row.state };
+      }
+      await client.query(`UPDATE agentbay_github_pull_request_effects SET state='REPORTED',github_pull_request_id=$3,
+        pull_request_number=$4,pull_request_url=$5,attempted_at=$6 WHERE tenant_id=$1 AND id=$2`,
+      [command.tenantId, command.effectId, command.githubPullRequestId, command.pullRequestNumber, command.pullRequestUrl, new Date(command.reportedAt)]);
+      await client.query("COMMIT");
+      await this.reconcileGitHubPullRequestEffects(command.tenantId, { repositoryId: undefined, githubPullRequestId: command.githubPullRequestId, pullRequestNumber: command.pullRequestNumber });
+      return { id: command.effectId, state: "REPORTED" };
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+
+  async reconcileGitHubPullRequestEffects(tenantId: string, identity?: { repositoryId: number | undefined; githubPullRequestId: string; pullRequestNumber: number }): Promise<void> {
+    const candidates = await this.pool.query<{ base_ref: string; execution_id: string; github_pull_request_id: string | null; head_ref: string; id: string; pull_request_number: number | null; pull_request_title: string; repository_full_name: string; repository_id: string; state: string }>(
+      `SELECT id,execution_id,repository_id,repository_full_name,pull_request_title,head_ref,base_ref,state,github_pull_request_id,pull_request_number
+       FROM agentbay_github_pull_request_effects WHERE tenant_id=$1 AND (
+         (state='REPORTED' AND ($2::text IS NULL OR github_pull_request_id=$2) AND ($3::integer IS NULL OR pull_request_number=$3) AND ($4::text IS NULL OR repository_id=$4))
+         OR (state='REGISTERED' AND $4::text IS NOT NULL AND repository_id=$4)
+       ) ORDER BY created_at,id`,
+      [tenantId, identity?.githubPullRequestId ?? null, identity?.pullRequestNumber ?? null, identity?.repositoryId === undefined ? null : String(identity.repositoryId)],
+    );
+    const matches: Array<{ candidate: typeof candidates.rows[number]; event: { id: string; pr_id: string; pr_number: number } }> = [];
+    for (const candidate of candidates.rows) {
+      const expectedPullRequestID = candidate.github_pull_request_id ?? identity?.githubPullRequestId;
+      const expectedPullRequestNumber = candidate.pull_request_number ?? identity?.pullRequestNumber;
+      if (!expectedPullRequestID || !expectedPullRequestNumber) continue;
+      const event = await this.pool.query<{ id: string; pr_id: string; pr_number: number }>(`SELECT id,data->'pullRequest'->>'id' AS pr_id,(data->'pullRequest'->>'number')::integer AS pr_number
+        FROM agentbay_events WHERE tenant_id=$1 AND type='com.github.pull_request.opened' AND data->'repository'->>'id'=$2
+          AND data->'pullRequest'->>'id'=$3 AND (data->'pullRequest'->>'number')::integer=$4
+          AND data->'pullRequest'->>'title'=$5 AND data->'pullRequest'->'head'->>'ref'=$6 AND data->'pullRequest'->'base'->>'ref'=$7
+        ORDER BY ingested_at,id LIMIT 1`,
+      [tenantId, candidate.repository_id, expectedPullRequestID, expectedPullRequestNumber, candidate.pull_request_title, candidate.head_ref, candidate.base_ref]);
+      if (!event.rows[0]) continue;
+      matches.push({ candidate, event: event.rows[0] });
+    }
+    const registeredMatches = matches.filter(({ candidate }) => candidate.state === "REGISTERED");
+    for (const { candidate, event } of matches) {
+      if (candidate.state === "REGISTERED" && registeredMatches.length !== 1) continue;
+      const pullRequestNumber = candidate.pull_request_number ?? event.pr_number;
+      const githubPullRequestID = candidate.github_pull_request_id ?? event.pr_id;
+      const pullRequestURL = `https://github.com/${candidate.repository_full_name}/pull/${pullRequestNumber}`;
+      const supplied = await this.pool.query<{ value: JsonPrimitive }>(`SELECT value FROM agentbay_execution_wake_context_values
+        WHERE tenant_id=$1 AND execution_id=$2 AND authority_type='github.pull-request-effect' AND authority_id=$3 AND name='pullRequestNumber'`,
+      [tenantId, candidate.execution_id, candidate.id]);
+      if (!supplied.rows[0]) {
+        await this.bindExecutionWakeContextValue({ authorityId: candidate.id, authorityType: "github.pull-request-effect", boundAt: new Date().toISOString(),
+          executionId: candidate.execution_id, slot: "primaryPullRequestNumber", tenantId, value: pullRequestNumber, waitName: "developer-pr-lifecycle" });
+      } else if (supplied.rows[0].value !== pullRequestNumber) throw new IdempotencyConflictError();
+      await this.pool.query(`UPDATE agentbay_github_pull_request_effects SET state='CONFIRMED',github_pull_request_id=$4,pull_request_number=$5,pull_request_url=$6,
+        opened_event_id=$3,confirmed_at=clock_timestamp() WHERE tenant_id=$1 AND id=$2 AND state IN ('REGISTERED','REPORTED')`,
+      [tenantId, candidate.id, event.id, githubPullRequestID, pullRequestNumber, pullRequestURL]);
+    }
+  }
+
   private async activateContextAndOffers(
     client: pg.PoolClient,
     tenantId: string,
@@ -2446,6 +2555,20 @@ function resolveCorrelation(
 
 function wakeContextLock(tenantId: string, name: string, correlation: Record<string, JsonPrimitive>): string {
   return `wake-context:${tenantId}:${name}:${hashCanonicalJson(correlation)}`;
+}
+
+function jsonObject(value: unknown, name: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`${name} must be an object`);
+  return value as Record<string, unknown>;
+}
+
+function validateGitHubPullRequestUrl(value: string, repositoryFullName: string, pullRequestNumber: number): void {
+  let url: URL;
+  try { url = new URL(value); } catch { throw new Error("GitHub pull request URL is invalid"); }
+  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "github.com" || url.username || url.password || url.search || url.hash
+    || url.pathname.toLowerCase() !== `/${repositoryFullName}/pull/${pullRequestNumber}`.toLowerCase()) {
+    throw new Error("GitHub pull request URL does not match the registered repository and number");
+  }
 }
 
 async function acquireWakeContextLocks(client: pg.PoolClient, command: AdmissionCommand, rows: BindingProfileRow[]): Promise<void> {

@@ -72,6 +72,18 @@ spec:
                 - 192.168.0.0/16
                 - 169.254.0.0/16
       {{- end }}
+      {{- if $t.networkPolicy.egress.allowControlPlane }}
+      - to:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: {{ $root.Release.Namespace }}
+            podSelector:
+              matchLabels:
+                {{- include "agentbay.selectorLabels" $root | nindent 16 }}
+        ports:
+          - protocol: TCP
+            port: {{ $root.Values.orchestrator.port }}
+      {{- end }}
       {{- if and $gatewayEnabled $root.Values.aiGatewayAuthz.networkPolicy.egress.enabled }}
       - to:
           - namespaceSelector:

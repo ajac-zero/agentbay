@@ -198,6 +198,61 @@ describe("GitHub token broker", () => {
     await expect(completed).resolves.toBeUndefined();
     expect(upstreamAborted).toBe(false);
   });
+
+  it("registers and reports create_pull_request before exposing success", async () => {
+    const callbacks: Array<{ url: string; body: any; authorization: string | undefined }> = [];
+    const control = await listen(http.createServer(async (request, response) => {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      callbacks.push({ url: request.url!, body: JSON.parse(Buffer.concat(chunks).toString()), authorization: request.headers.authorization });
+      response.writeHead(200, { "content-type": "application/json" }).end(callbacks.length === 1 ? '{"created":true,"id":"effect-1","state":"REGISTERED"}' : '{"id":"effect-1","state":"REPORTED"}');
+    }));
+    running.push(control);
+    const upstream = await listen(http.createServer((_request, response) => response.writeHead(200, { "content-type": "text/event-stream" }).end(`event: message\ndata: ${JSON.stringify({
+      jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: '{"id":"9001","url":"https://github.com/acme/repo/pull/42"}' }] },
+    })}\n\n`)));
+    running.push(upstream);
+    const broker = await startBroker({ upstream: `http://127.0.0.1:${upstream.port}/`, host: "127.0.0.1", port: 0, repositoryId: 7,
+      effect: { endpoint: `http://127.0.0.1:${control.port}/`, executionId: "execution-1", token: "fence" } }, { getToken: async () => "ghs", invalidate: () => {} });
+    running.push(broker);
+    const response = await fetch(`http://127.0.0.1:${(broker.server.address() as AddressInfo).port}/`, { method: "POST", body: JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "create_pull_request", arguments: { owner: "acme", repo: "repo", title: "PR", head: "feature", base: "main" } },
+    }) });
+    expect(response.status).toBe(200);
+    expect(callbacks).toEqual([
+      expect.objectContaining({ url: "/internal/v1/github/pull-request-effects", authorization: "Bearer fence", body: expect.objectContaining({ executionId: "execution-1", repositoryId: 7, repositoryFullName: "acme/repo" }) }),
+      expect.objectContaining({ url: "/internal/v1/github/pull-request-effects/effect-1/report", body: expect.objectContaining({ githubPullRequestId: "9001", pullRequestNumber: 42 }) }),
+    ]);
+  });
+
+  it("parses an SSE create_pull_request result and refuses duplicate mutation registration", async () => {
+    let upstreamCalls = 0;
+    const control = await listen(http.createServer((_request, response) => response.writeHead(200, { "content-type": "application/json" }).end('{"created":false,"id":"effect-1","state":"REGISTERED"}')));
+    running.push(control);
+    const upstream = await listen(http.createServer((_request, response) => { upstreamCalls += 1; response.writeHead(200).end(); }));
+    running.push(upstream);
+    const broker = await startBroker({ upstream: `http://127.0.0.1:${upstream.port}/`, host: "127.0.0.1", port: 0, repositoryId: 7,
+      effect: { endpoint: `http://127.0.0.1:${control.port}/`, executionId: "execution-1", token: "fence" } }, { getToken: async () => "ghs", invalidate: () => {} });
+    running.push(broker);
+    const response = await fetch(`http://127.0.0.1:${(broker.server.address() as AddressInfo).port}/`, { method: "POST", body: JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "create_pull_request", arguments: { owner: "acme", repo: "repo", title: "PR", head: "feature", base: "main" } },
+    }) });
+    expect(response.status).toBe(502);
+    expect(upstreamCalls).toBe(0);
+  });
+
+  it("rejects JSON-RPC batches instead of bypassing effect interception", async () => {
+    let upstreamCalls = 0;
+    const upstream = await listen(http.createServer((_request, response) => { upstreamCalls += 1; response.writeHead(200).end(); }));
+    running.push(upstream);
+    const broker = await startBroker({ upstream: `http://127.0.0.1:${upstream.port}/`, host: "127.0.0.1", port: 0 }, { getToken: async () => "ghs", invalidate: () => {} });
+    running.push(broker);
+    const response = await fetch(`http://127.0.0.1:${(broker.server.address() as AddressInfo).port}/`, { method: "POST", body: JSON.stringify([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "create_pull_request", arguments: {} } },
+    ]) });
+    expect(response.status).toBe(502);
+    expect(upstreamCalls).toBe(0);
+  });
 });
 
 async function listen(server: http.Server): Promise<{ server: http.Server; port: number; close: () => Promise<void> }> {

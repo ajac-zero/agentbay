@@ -107,6 +107,56 @@ async function pipeResponse(upstream, response, signal, unbounded) {
   if (!response.destroyed) response.end();
 }
 
+function createPullRequestArguments(body) {
+  let message;
+  try { message = JSON.parse(body.toString("utf8")); } catch { return undefined; }
+  if (Array.isArray(message)) throw new Error("JSON_RPC_BATCH_NOT_SUPPORTED");
+  if (message?.method !== "tools/call" || message?.params?.name !== "create_pull_request") return undefined;
+  if (message.jsonrpc !== "2.0" || !(typeof message.id === "string" || typeof message.id === "number")) throw new Error("INVALID_CREATE_PULL_REQUEST");
+  const args = message.params.arguments;
+  if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("INVALID_CREATE_PULL_REQUEST");
+  for (const field of ["owner", "repo", "title", "head", "base"]) if (typeof args[field] !== "string" || args[field].length === 0) throw new Error("INVALID_CREATE_PULL_REQUEST");
+  return { args, id: message.id };
+}
+
+async function effectRequest(config, path, body) {
+  if (!config.effect) throw new Error("EFFECT_CAPABILITY_MISSING");
+  const response = await fetch(new URL(path, config.effect.endpoint), {
+    method: "POST", headers: { authorization: `Bearer ${config.effect.token}`, "content-type": "application/json" }, body: JSON.stringify(body), redirect: "manual",
+  });
+  if (!response.ok) throw new Error("EFFECT_REQUEST_REJECTED");
+  return response.json();
+}
+
+async function responseBytes(upstream) {
+  const bytes = Buffer.from(await upstream.arrayBuffer());
+  if (bytes.length > MAX_RESPONSE_BYTES) throw new Error("RESPONSE_TOO_LARGE");
+  return bytes;
+}
+
+function pullRequestIdentity(bytes, owner, repo, requestId) {
+  let textBody = bytes.toString("utf8");
+  if (textBody.trimStart().startsWith("event:") || textBody.trimStart().startsWith("data:")) {
+    const data = textBody.split(/\r?\n/).filter((line) => line.startsWith("data:"));
+    if (data.length !== 1) throw new Error("INVALID_CREATE_PULL_REQUEST_RESULT");
+    textBody = data[0].slice(5).trim();
+  }
+  let envelope;
+  try { envelope = JSON.parse(textBody); } catch { throw new Error("INVALID_CREATE_PULL_REQUEST_RESULT"); }
+  if (envelope.jsonrpc !== "2.0" || envelope.id !== requestId || envelope.error || envelope.result?.isError === true || !Array.isArray(envelope.result?.content)) throw new Error("INVALID_CREATE_PULL_REQUEST_RESULT");
+  const text = envelope.result.content.length === 1 && envelope.result.content[0]?.type === "text" ? envelope.result.content[0].text : undefined;
+  let result;
+  try { result = JSON.parse(text); } catch { throw new Error("INVALID_CREATE_PULL_REQUEST_RESULT"); }
+  if (typeof result?.id !== "string" || !/^[1-9][0-9]*$/.test(result.id) || typeof result.url !== "string") throw new Error("INVALID_CREATE_PULL_REQUEST_RESULT");
+  const url = new URL(result.url);
+  const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/([1-9][0-9]*)$/);
+  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "github.com" || url.username || url.password || url.search || url.hash
+    || !match || match[1].toLowerCase() !== owner.toLowerCase() || match[2].toLowerCase() !== repo.toLowerCase()) throw new Error("INVALID_CREATE_PULL_REQUEST_RESULT");
+  const number = Number(match[3]);
+  if (!Number.isSafeInteger(number)) throw new Error("INVALID_CREATE_PULL_REQUEST_RESULT");
+  return { githubPullRequestId: result.id, pullRequestNumber: number, pullRequestUrl: result.url };
+}
+
 export function startBroker(config, provider) {
   const server = http.createServer(async (request, response) => {
     const controller = new AbortController();
@@ -131,7 +181,27 @@ export function startBroker(config, provider) {
         return;
       }
       const body = await readRequest(request);
+      const createCall = request.method === "POST" ? createPullRequestArguments(body) : undefined;
+      const createArguments = createCall?.args;
+      let effect;
+      if (createArguments) {
+        effect = await effectRequest(config, "/internal/v1/github/pull-request-effects", {
+          executionId: config.effect.executionId, repositoryId: config.repositoryId, repositoryFullName: `${createArguments.owner}/${createArguments.repo}`, request: createArguments,
+        });
+        if (effect.created !== true) throw new Error("PULL_REQUEST_EFFECT_ALREADY_REGISTERED");
+      }
       const upstream = await forward(request, body, config, provider, controller.signal);
+      if (createArguments) {
+        const bytes = await responseBytes(upstream);
+        if (!upstream.ok) {
+          response.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type") ?? "application/json" }).end(bytes);
+          return;
+        }
+        const identity = pullRequestIdentity(bytes, createArguments.owner, createArguments.repo, createCall.id);
+        await effectRequest(config, `/internal/v1/github/pull-request-effects/${effect.id}/report`, { executionId: config.effect.executionId, ...identity });
+        response.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type") ?? "application/json" }).end(bytes);
+        return;
+      }
       const unbounded = request.method === "GET" && upstream.headers.get("content-type")?.startsWith("text/event-stream") === true;
       await pipeResponse(upstream, response, controller.signal, unbounded);
     } catch (error) {

@@ -76,6 +76,7 @@ export type ExecutionAttemptProvisioningInput = {
   workspace: ResolvedWorkspace;
   timeoutAt: Date;
   ttlSecondsAfterFinished: number;
+  controlPlaneUrl?: string;
 };
 
 export type ExecutionAttemptIdentity = Pick<ExecutionAttemptProvisioningInput, "executionId" | "attempt">;

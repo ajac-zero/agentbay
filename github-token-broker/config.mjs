@@ -74,12 +74,23 @@ export function parseStartupConfig(env = process.env) {
     upstream: upstream.toString(),
     host,
     port: port(env.AGENTBAY_GITHUB_BROKER_PORT ?? "8083", "AGENTBAY_GITHUB_BROKER_PORT"),
+    effect: env.AGENTBAY_EFFECT_ENDPOINT ? Object.freeze({
+      endpoint: effectEndpoint(required(env, "AGENTBAY_EFFECT_ENDPOINT")),
+      executionId: required(env, "AGENTBAY_EXECUTION_ID"),
+      token: required(env, "AGENTBAY_EFFECT_TOKEN"),
+    }) : undefined,
     credentialPaths: Object.freeze({
       appId: path(env, "AGENTBAY_GITHUB_APP_ID_FILE", DEFAULT_CREDENTIAL_PATHS.appId),
       installationId: path(env, "AGENTBAY_GITHUB_INSTALLATION_ID_FILE", DEFAULT_CREDENTIAL_PATHS.installationId),
       privateKey: path(env, "AGENTBAY_GITHUB_PRIVATE_KEY_FILE", DEFAULT_CREDENTIAL_PATHS.privateKey),
     }),
   });
+}
+
+function effectEndpoint(value) {
+  const url = new URL(value);
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("Invalid AGENTBAY_EFFECT_ENDPOINT");
+  return url.toString();
 }
 
 export async function readGitHubAppCredentials(paths, readFile = nodeReadFile) {

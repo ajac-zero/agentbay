@@ -196,6 +196,7 @@ function pullRequestPayload(overrides: { title?: string } = {}) {
     },
     sender: actor,
     pull_request: {
+      id: 700,
       number: 17,
       title: overrides.title ?? "Update widgets",
       body: "Please review this fork update",

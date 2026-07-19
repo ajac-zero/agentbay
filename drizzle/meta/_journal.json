@@ -64,6 +64,13 @@
       "when": 1784478183622,
       "tag": "0008_red_stature",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1784480066653,
+      "tag": "0009_tiresome_metal_master",
+      "breakpoints": true
     }
   ]
 }

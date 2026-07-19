@@ -277,6 +277,13 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
         value: canonicalJson({ schemaVersion: 1, tenantId: input.tenantId, refs }),
       });
     }
+    if (input.controlPlaneUrl && input.connections.some(({ sidecar }) => sidecar === "github-token-broker")) {
+      env.push(
+        { containerName: "github-token-broker", name: "AGENTBAY_EFFECT_ENDPOINT", value: input.controlPlaneUrl },
+        { containerName: "github-token-broker", name: "AGENTBAY_EXECUTION_ID", value: input.executionId },
+        { containerName: "github-token-broker", name: "AGENTBAY_EFFECT_TOKEN", value: input.fencingToken },
+      );
+    }
 
     const connectionAnnotations = authorizationAnnotations(input);
 
