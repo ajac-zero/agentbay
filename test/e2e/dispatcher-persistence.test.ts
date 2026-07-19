@@ -154,7 +154,7 @@ describe("dispatcher persistence", () => {
 
   it("rejects malformed persisted workspaces when claiming without committing the claim", async () => {
     const executionId = await queueExecution();
-    await pool.query("update agentbay_executions set workspace = '{}'::jsonb where id = $1", [executionId]);
+    await pool.query("update agentbay_execution_inputs set workspace = '{}'::jsonb where execution_id = $1 and sequence = 1", [executionId]);
 
     await expect(store.claimNextQueuedExecution({ leaseOwner: "dispatcher-corrupt", leaseDurationMs: 60_000 }))
       .rejects.toBeInstanceOf(PersistedExecutionCorruptionError);
@@ -164,7 +164,7 @@ describe("dispatcher persistence", () => {
       [executionId],
     )).rows[0]).toEqual({ count: 0 });
 
-    await pool.query("update agentbay_executions set workspace = $1 where id = $2", [{ type: "empty" }, executionId]);
+    await pool.query("update agentbay_execution_inputs set workspace = $1 where execution_id = $2 and sequence = 1", [{ type: "empty" }, executionId]);
     expect(await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-cleanup", leaseDurationMs: 60_000 }))
       .toMatchObject({ executionId });
   });

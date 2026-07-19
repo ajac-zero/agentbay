@@ -65,6 +65,7 @@ import { normalizedCloudEventSchema, type NormalizedCloudEvent } from "../execut
 import type { ClaimedRevisionResolution, RevisionAwareAdmissionCommand, RevisionResolutionStore } from "../revision/types.js";
 import { matchesBinding } from "../control/admission.js";
 import { resolvedWorkspaceSchema } from "../workspace/schema.js";
+import { resolveWorkspace } from "../workspace/resolver.js";
 import * as schema from "./schema.js";
 import {
   agentProfileVersions,
@@ -590,9 +591,9 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         ($5,$2,$3,3,'PLANNED','QUEUED','event-admission','execution queued',$6)`,
       [randomUUID(), command.tenantId, executionId, randomUUID(), randomUUID(), now]);
       await client.query(`INSERT INTO agentbay_execution_inputs
-        (tenant_id, execution_id, sequence, kind, event_id, input, created_at)
-        VALUES ($1,$2,1,'INITIAL',$3,$4::jsonb,$5)`,
-      [command.tenantId, executionId, command.internalEventId, JSON.stringify(planned.input), now]);
+        (tenant_id, execution_id, sequence, kind, event_id, input, workspace, created_at)
+        VALUES ($1,$2,1,'INITIAL',$3,$4::jsonb,$5::jsonb,$6)`,
+      [command.tenantId, executionId, command.internalEventId, JSON.stringify(planned.input), JSON.stringify(planned.workspace), now]);
       await client.query(`INSERT INTO agentbay_outbox
         (id, tenant_id, topic, aggregate_type, aggregate_id, payload, available_at, created_at)
         VALUES ($1,$2,'execution.requested','execution',$3,$4::jsonb,$5,$5)`,
@@ -634,8 +635,12 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     const results: AdmissionWakeResult[] = [];
     const ordered = [...selected.values()].sort((left, right) => left.executionId.localeCompare(right.executionId) || left.waitId.localeCompare(right.waitId));
     for (const item of ordered) {
-      const executionResult = await client.query<{ current_input_sequence: number; state: string }>(
-        "SELECT state, current_input_sequence FROM agentbay_executions WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+      const executionResult = await client.query<{ current_input_sequence: number; state: string; workspace: unknown }>(
+        `SELECT execution.state, execution.current_input_sequence, current_input.workspace
+          FROM agentbay_executions AS execution
+          JOIN agentbay_execution_inputs AS current_input
+            ON current_input.execution_id = execution.id AND current_input.sequence = execution.current_input_sequence
+          WHERE execution.tenant_id = $1 AND execution.id = $2 FOR UPDATE OF execution`,
         [command.tenantId, item.executionId],
       );
       if (executionResult.rows[0]?.state !== "WAITING") continue;
@@ -657,10 +662,13 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       if (continuation) {
         if (wakeAction.type !== "continue") throw new Error("Wake action changed during admission");
         const input = renderPromptInput(wakeAction.prompt, command.event);
+        const workspace = wakeAction.workspace
+          ? resolveWorkspace(wakeAction.workspace, command.event.data)
+          : persistedWorkspace(item.executionId, executionResult.rows[0]!.workspace);
         await client.query(`INSERT INTO agentbay_execution_inputs
-          (tenant_id, execution_id, sequence, kind, event_id, input, created_at)
-          VALUES ($1,$2,$3,'WAKE',$4,$5::jsonb,$6)`,
-        [command.tenantId, item.executionId, inputSequence, command.internalEventId, JSON.stringify(input), now]);
+          (tenant_id, execution_id, sequence, kind, event_id, input, workspace, created_at)
+          VALUES ($1,$2,$3,'WAKE',$4,$5::jsonb,$6::jsonb,$7)`,
+        [command.tenantId, item.executionId, inputSequence, command.internalEventId, JSON.stringify(input), JSON.stringify(workspace), now]);
       }
       await client.query(`UPDATE agentbay_executions SET state = $3::text, updated_at = $4::timestamptz, available_at = $4::timestamptz,
           current_input_sequence = COALESCE($5::integer, current_input_sequence), completed_at = CASE WHEN $3::text = 'COMPLETED' THEN $4::timestamptz ELSE NULL END,
@@ -873,7 +881,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
             RETURNING execution_id
           )
           SELECT execution.id, execution.tenant_id, execution.state AS execution_state,
-                  execution.event_id, current_input.input, execution.workspace, execution.resolved_policy,
+                  execution.event_id, current_input.input, current_input.workspace, execution.resolved_policy,
                  execution.created_at, execution.timeout_at,
                   profile.id AS profile_version_id, profile.profile_id, profile.version,
                   profile.definition AS definition,
@@ -968,7 +976,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
             RETURNING execution.*
           )
           SELECT execution.id, execution.tenant_id, execution.state AS execution_state,
-                  execution.event_id, current_input.input, execution.workspace, execution.resolved_policy,
+                  execution.event_id, current_input.input, current_input.workspace, execution.resolved_policy,
                  execution.created_at, execution.timeout_at,
                  profile.id AS profile_version_id, profile.profile_id, profile.version,
                  profile.definition AS definition,
@@ -2114,7 +2122,8 @@ function revisionResolutionFromRow(row: RevisionResolutionRow): ClaimedRevisionR
   };
 }
 
-const EXECUTION_SELECT = `SELECT execution.*, current_input.input AS input, binding.binding_id, binding.version AS binding_version,
+const EXECUTION_SELECT = `SELECT execution.*, current_input.input AS input, current_input.workspace AS workspace,
+  binding.binding_id, binding.version AS binding_version,
   profile.profile_id, profile.version AS profile_version
   FROM agentbay_executions AS execution
   JOIN agentbay_execution_inputs AS current_input

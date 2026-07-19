@@ -56,7 +56,7 @@ export const wakeBindingDefinitionSchema = z
       correlation: z.array(z.object({ name: simpleIdSchema, path: jsonPointerSchema }).strict()).min(1).max(16)
         .refine((items) => new Set(items.map((item) => item.name)).size === items.length, "correlation names must be unique"),
       action: z.discriminatedUnion("type", [
-        z.object({ type: z.literal("continue"), prompt: promptSchema }).strict(),
+        z.object({ type: z.literal("continue"), prompt: promptSchema, workspace: bindingWorkspaceSchema.optional() }).strict(),
         z.object({ type: z.literal("complete") }).strict(),
       ]),
     }).strict(),
