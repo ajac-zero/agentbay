@@ -1,0 +1,115 @@
+import { randomUUID } from "node:crypto";
+import pg from "pg";
+import { GenericContainer, type StartedTestContainer, Wait } from "testcontainers";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { hashCanonicalJson, type JsonValue } from "../../src/json.js";
+import { createPostgresRuntimeStore, type PostgresRuntimeStore } from "../../src/runtime/postgres.js";
+
+const { Pool } = pg;
+
+describe("supplied wake context persistence", () => {
+  let container: StartedTestContainer;
+  let store: PostgresRuntimeStore;
+  let pool: pg.Pool;
+
+  beforeAll(async () => {
+    container = await new GenericContainer("postgres:17-alpine")
+      .withEnvironment({ POSTGRES_DB: "agentbay", POSTGRES_PASSWORD: "agentbay-password", POSTGRES_USER: "agentbay" })
+      .withExposedPorts(5432).withWaitStrategy(Wait.forLogMessage("database system is ready to accept connections", 2)).start();
+    const connectionString = `postgres://agentbay:agentbay-password@${container.getHost()}:${container.getMappedPort(5432)}/agentbay`;
+    store = await createPostgresRuntimeStore({ connectionString, runMigrations: true, ssl: false, sslRejectUnauthorized: false });
+    pool = new Pool({ connectionString });
+    await store.createTrigger({ config: { schemaVersion: 1 }, createdAt: new Date().toISOString(), disabledAt: null, enabled: true, id: "events", tenantId: "default", type: "cloudevents.http" });
+    await store.publishProfileVersion({
+      id: randomUUID(), profileId: "developer", tenantId: "default", version: 1, createdAt: new Date().toISOString(),
+      definition: { schemaVersion: 1, runtime: { type: "opencode", agent: "developer", opencodeConfig: { agent: { developer: {} } } }, sandbox: { templateName: "developer", warmPool: "none" }, connections: [], permissions: { onRequest: "fail" }, timeoutSeconds: 3600 },
+    });
+  }, 120_000);
+
+  afterAll(async () => { await pool?.end(); await store?.close(); await container?.stop(); });
+
+  it("activates a pending-context wait after trusted slot binding", async () => {
+    const executionId = await createDeveloper();
+    const claimed = await runDeveloperToCompletion(executionId);
+    expect((await pool.query("select state from agentbay_event_waits where execution_id=$1", [executionId])).rows[0]).toEqual({ state: "PENDING_CONTEXT" });
+
+    await expect(store.bindExecutionWakeContextValue({
+      authorityId: "effect-1", authorityType: "github.pull-request-effect", boundAt: new Date().toISOString(),
+      executionId, slot: "primaryPullRequestNumber", tenantId: "default", value: 42, waitName: "developer-pr-lifecycle",
+    })).resolves.toEqual({ correlation: { repositoryId: 7, pullRequestNumber: 42 }, ready: true });
+    expect((await pool.query("select state, correlation from agentbay_event_waits where execution_id=$1", [executionId])).rows[0]).toEqual({ state: "ACTIVE", correlation: { repositoryId: 7, pullRequestNumber: 42 } });
+    await expect(store.bindExecutionWakeContextValue({
+      authorityId: "effect-1", authorityType: "github.pull-request-effect", boundAt: new Date().toISOString(),
+      executionId, slot: "primaryPullRequestNumber", tenantId: "default", value: 42, waitName: "developer-pr-lifecycle",
+    })).resolves.toMatchObject({ ready: true });
+    await expect(store.bindExecutionWakeContextValue({
+      authorityId: "effect-2", authorityType: "github.pull-request-effect", boundAt: new Date().toISOString(),
+      executionId, slot: "primaryPullRequestNumber", tenantId: "default", value: 43, waitName: "developer-pr-lifecycle",
+    })).rejects.toThrow();
+    expect(claimed.executionId).toBe(executionId);
+  });
+
+  it("reconciles a review offer admitted before the PR slot is bound", async () => {
+    const executionId = await createDeveloper();
+    await publishReviewBinding();
+    const review = admissionCommand("work.review", {
+      repository: { id: 7 }, pullRequest: { number: 51, head: { sha: "b".repeat(40), repository: { cloneUrl: "https://github.com/acme/repo.git" } } },
+    });
+    const admitted = await store.admitEvent(review);
+    expect(admitted.pendingWakes).toEqual([]);
+    expect((await pool.query("select count(*)::int as count from agentbay_event_wake_offers where event_id=$1", [review.internalEventId])).rows[0]).toEqual({ count: 1 });
+
+    await store.bindExecutionWakeContextValue({
+      authorityId: "effect-51", authorityType: "github.pull-request-effect", boundAt: new Date().toISOString(),
+      executionId, slot: "primaryPullRequestNumber", tenantId: "default", value: 51, waitName: "developer-pr-lifecycle",
+    });
+    expect((await pool.query("select count(*)::int as count from agentbay_execution_pending_wakes where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 1 });
+    await runDeveloperToCompletion(executionId);
+    expect(await store.getExecution("default", executionId)).toMatchObject({ state: "QUEUED", workspace: { revision: { commit: "b".repeat(40) } } });
+  });
+
+  async function createDeveloper(): Promise<string> {
+    const id = randomUUID();
+    await store.publishBindingVersion({
+      bindingId: `developer-${id}`, createdAt: new Date().toISOString(), disabledAt: null, enabled: true, id: randomUUID(), profile: { id: "developer", version: 1 }, tenantId: "default", triggerId: "events", version: 1,
+      definition: {
+        schemaVersion: 1, eventTypes: ["work.start"], filter: { all: [{ path: "/key", op: "eq", value: id }] }, prompt: { literal: "Develop.", includeEvent: "data" }, workspace: { type: "empty" },
+        afterTurn: { disposition: "wait", wait: { name: "developer-pr-lifecycle", correlation: [
+          { name: "repositoryId", source: "event", path: "/repository/id" },
+          { name: "pullRequestNumber", source: "supplied", slot: "primaryPullRequestNumber" },
+        ], deadlineSeconds: 600, admitWhileBusy: true } },
+      },
+    });
+    return (await store.admitEvent(admissionCommand("work.start", { key: id, repository: { id: 7 } }))).executions[0]!.id;
+  }
+
+  async function publishReviewBinding(): Promise<void> {
+    const id = randomUUID();
+    await store.publishBindingVersion({
+      bindingId: `review-${id}`, createdAt: new Date().toISOString(), disabledAt: null, enabled: true, id: randomUUID(), profile: { id: "developer", version: 1 }, tenantId: "default", triggerId: "events", version: 1,
+      definition: { schemaVersion: 1, disposition: "wake", eventTypes: ["work.review"], filter: { all: [] }, wake: {
+        waitName: "developer-pr-lifecycle", delivery: "active-or-coalesced", correlation: [
+          { name: "repositoryId", path: "/repository/id" }, { name: "pullRequestNumber", path: "/pullRequest/number" },
+        ], action: { type: "continue", prompt: { literal: "Address review.", includeEvent: "data" }, workspace: {
+          type: "git", repository: { url: { path: "/pullRequest/head/repository/cloneUrl" } }, revision: { commit: { path: "/pullRequest/head/sha" } },
+        } },
+      } },
+    });
+  }
+
+  async function runDeveloperToCompletion(executionId: string) {
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: `worker-${randomUUID()}`, leaseDurationMs: 60_000 });
+    if (!claimed || claimed.executionId !== executionId) throw new Error("Expected developer claim");
+    await store.transitionLeasedExecution({ actor: claimed.lease.leaseOwner, attempt: claimed.lease.attempt, executionId,
+      expectedAttemptState: "LEASED", expectedExecutionState: "PROVISIONING", fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner, reason: "ready", targetAttemptState: "RUNNING", targetExecutionState: "RUNNING", tenantId: "default" });
+    await store.completeLeasedExecutionTurn({ actor: claimed.lease.leaseOwner, attempt: claimed.lease.attempt, executionId,
+      fencingToken: claimed.lease.fencingToken, leaseOwner: claimed.lease.leaseOwner, reason: "done", result: null, tenantId: "default" });
+    return claimed;
+  }
+
+  function admissionCommand(type: string, data: JsonValue) {
+    const event = { specversion: "1.0" as const, id: randomUUID(), source: "https://example.test/events", type, datacontenttype: "application/json", data };
+    return { admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId: "events", event }), admittedAt: new Date().toISOString(), event, internalEventId: randomUUID(), sourceDeduplicationKey: randomUUID(), tenantId: "default", triggerId: "events" };
+  }
+});

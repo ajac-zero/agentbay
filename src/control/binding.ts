@@ -15,16 +15,28 @@ export const filterClauseSchema = z.discriminatedUnion("op", [
   z.object({ path: jsonPointerSchema, op: z.literal("exists"), value: z.boolean() }).strict(),
 ]);
 
+const waitCorrelationSchema = z.union([
+  z.object({ name: simpleIdSchema, source: z.literal("event").optional(), path: jsonPointerSchema }).strict(),
+  z.object({ name: simpleIdSchema, source: z.literal("supplied"), slot: simpleIdSchema }).strict(),
+]);
+
 export const afterTurnSchema = z.object({
   disposition: z.literal("wait"),
   wait: z.object({
     name: simpleIdSchema,
-    correlation: z.array(z.object({ name: simpleIdSchema, path: jsonPointerSchema }).strict()).min(1).max(16)
-      .refine((items) => new Set(items.map((item) => item.name)).size === items.length, "correlation names must be unique"),
+    correlation: z.array(waitCorrelationSchema).min(1).max(16)
+      .refine((items) => new Set(items.map((item) => item.name)).size === items.length, "correlation names must be unique")
+      .refine((items) => new Set(items.filter((item) => item.source === "supplied").map((item) => item.slot)).size === items.filter((item) => item.source === "supplied").length, "supplied slots must be unique"),
     deadlineSeconds: z.number().int().min(1).max(30 * 24 * 60 * 60),
     admitWhileBusy: z.boolean().optional(),
   }).strict(),
-}).strict();
+}).strict().superRefine((value, context) => {
+  const supplied = value.wait.correlation.filter((item) => "slot" in item);
+  if (supplied.length > 1) context.addIssue({ code: "custom", message: "at most one supplied correlation slot is supported", path: ["wait", "correlation"] });
+  if (supplied.length > 0 && value.wait.admitWhileBusy !== true) {
+    context.addIssue({ code: "custom", message: "supplied correlation requires admitWhileBusy", path: ["wait", "admitWhileBusy"] });
+  }
+});
 
 const eventMatchSchema = {
   schemaVersion: z.literal(1),
