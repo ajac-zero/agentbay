@@ -29,7 +29,6 @@ describe("paired dispatcher transitions", () => {
     ["QUEUED", "PROVISIONING", "PENDING", "LEASED"],
     ["PROVISIONING", "RUNNING", "LEASED", "RUNNING"],
     ["PROVISIONING", "FAILED", "LEASED", "FAILED"],
-    ["RUNNING", "SUCCEEDED", "RUNNING", "SUCCEEDED"],
     ["RUNNING", "FAILED", "RUNNING", "FAILED"],
   ] as const)("allows %s/%s -> %s/%s", (executionFrom, executionTo, attemptFrom, attemptTo) => {
     expect(isValidDispatcherExecutionTransition({
@@ -43,6 +42,7 @@ describe("paired dispatcher transitions", () => {
     ["PROVISIONING", "RUNNING", "LEASED", "FAILED"],
     ["PROVISIONING", "FAILED", "LEASED", "RUNNING"],
     ["RUNNING", "SUCCEEDED", "RUNNING", "FAILED"],
+    ["RUNNING", "SUCCEEDED", "RUNNING", "SUCCEEDED"],
     ["RUNNING", "FAILED", "LEASED", "FAILED"],
   ] as const)("rejects %s/%s -> %s/%s", (executionFrom, executionTo, attemptFrom, attemptTo) => {
     expect(isValidDispatcherExecutionTransition({

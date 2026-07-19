@@ -22,6 +22,9 @@ import type {
   RequestedCancellationCleanup,
   TransitionLeasedExecutionCommand,
   TransitionLeasedExecutionResult,
+  CompleteLeasedExecutionTurnCommand,
+  CompleteLeasedExecutionTurnResult,
+  ExpiredEventWait,
 } from "../dispatch/types.js";
 import type {
   EventAdmissionStore,
@@ -57,7 +60,10 @@ import {
 import { bindingDefinitionSchema, publishedBindingVersionSchema, BindingVersionAlreadyExistsError, type BindingStore, type PublishedBindingVersion } from "../control/binding.js";
 import { triggerSchema, TriggerAlreadyExistsError, TriggerNotFoundError, type Trigger, type TriggerStore } from "../control/trigger.js";
 import { agentProfileDefinitionSchema } from "../execution/api-schema.js";
-import { hashCanonicalJson, type JsonValue } from "../json.js";
+import { hashCanonicalJson, resolveJsonPointer, type JsonPrimitive, type JsonValue } from "../json.js";
+import { normalizedCloudEventSchema, type NormalizedCloudEvent } from "../execution/events.js";
+import type { ClaimedRevisionResolution, RevisionAwareAdmissionCommand, RevisionResolutionStore } from "../revision/types.js";
+import { matchesBinding } from "../control/admission.js";
 import { resolvedWorkspaceSchema } from "../workspace/schema.js";
 import * as schema from "./schema.js";
 import {
@@ -126,7 +132,7 @@ export async function migratePostgresRuntimeStore(options: PostgresRuntimeStoreO
   }
 }
 
-export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, BindingStore, ConnectionStore, EventAdmissionStore, OutboxStore, DispatcherExecutionStore {
+export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, BindingStore, ConnectionStore, EventAdmissionStore, OutboxStore, DispatcherExecutionStore, RevisionResolutionStore {
   constructor(
     private readonly pool: pg.Pool,
     private readonly db: RuntimeDatabase,
@@ -327,6 +333,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
             prompt: definition.prompt,
             schemaVersion: definition.schemaVersion,
             workspace: definition.workspace,
+            afterTurn: definition.afterTurn,
           }), definition.eventTypes, publishedAt],
       });
       if (inserted.rowCount !== 1) throw new BindingVersionAlreadyExistsError(binding.bindingId, binding.version);
@@ -362,7 +369,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     return result.rows.map(bindingFromRow);
   }
 
-  async admitEvent(command: AdmissionCommand): Promise<AdmissionResult> {
+  async admitEvent(command: AdmissionCommand | RevisionAwareAdmissionCommand): Promise<AdmissionResult> {
     const admissionHash = hashCanonicalJson({ schemaVersion: 1, triggerId: command.triggerId, event: command.event } as JsonValue);
     if (command.admissionHash !== admissionHash) throw new IdempotencyConflictError();
 
@@ -396,6 +403,13 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         WHERE binding.tenant_id = $1 AND binding.trigger_id = $2 AND binding.enabled AND $3 = ANY(binding.event_types)
         ORDER BY binding.binding_id, binding.version, binding.id FOR SHARE OF binding, profile`,
       [command.tenantId, command.triggerId, command.event.type]);
+      const revisionResolution = "revisionResolution" in command ? command.revisionResolution : undefined;
+      const requiresResolution = revisionResolution !== undefined && candidates.rows.some((row) => {
+        const binding = bindingFromRow(row);
+        return matchesBinding(binding, command.event)
+          && binding.definition.workspace.type === "git"
+          && binding.definition.workspace.revision.commit.path === "/repository/defaultBranchRevision/commit";
+      });
       const extensions = eventExtensions(command.event);
       await client.query(`INSERT INTO agentbay_events
         (id, tenant_id, trigger_id, event_id, source, source_deduplication_key, admission_hash, type, subject, event_time,
@@ -406,38 +420,17 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         command.event.time ? new Date(command.event.time) : null, command.event.datacontenttype ?? "application/json",
         command.event.dataschema ?? null, JSON.stringify(command.event.data), JSON.stringify(extensions), null, new Date(command.admittedAt),
       ]);
-
-      const created: Execution[] = [];
-      for (const row of candidates.rows) {
-        const binding = bindingFromRow(row);
-        const planned = planExecution(binding, command);
-        if (!planned) continue;
-        const now = new Date(command.admittedAt);
-        const executionId = randomUUID();
-        const execution = await client.query<ExecutionJoinedRow>({
-          text: `INSERT INTO agentbay_executions
-            (id, tenant_id, event_id, binding_version_id, profile_version_id, idempotency_key, request_hash, input,
-             workspace, resolved_policy, state, timeout_at, created_at, updated_at, available_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,'QUEUED',$11,$12,$12,$12)
-            RETURNING *, $13::text AS binding_id, $14::integer AS binding_version,
-              $15::text AS profile_id, $16::integer AS profile_version`,
-          values: [executionId, command.tenantId, command.internalEventId, row.id, row.profile_version_id,
-            planned.id, command.admissionHash, JSON.stringify(planned.input), JSON.stringify(planned.workspace),
-            JSON.stringify(row.profile_definition), new Date(now.getTime() + profileTimeoutSeconds(row.profile_definition) * 1_000), now,
-            row.binding_id, row.version, planned.profile.id, planned.profile.version],
-        });
-        await client.query(`INSERT INTO agentbay_execution_transitions
-          (id, tenant_id, execution_id, sequence, from_state, to_state, actor, reason, created_at) VALUES
-          ($1,$2,$3,1,NULL,'RECEIVED','event-admission','event admitted',$6),
-          ($4,$2,$3,2,'RECEIVED','PLANNED','event-admission','binding and profile resolved',$6),
-          ($5,$2,$3,3,'PLANNED','QUEUED','event-admission','execution queued',$6)`,
-        [randomUUID(), command.tenantId, executionId, randomUUID(), randomUUID(), now]);
-        await client.query(`INSERT INTO agentbay_outbox
-          (id, tenant_id, topic, aggregate_type, aggregate_id, payload, available_at, created_at)
-          VALUES ($1,$2,'execution.requested','execution',$3,$4::jsonb,$5,$5)`,
-        [randomUUID(), command.tenantId, executionId, JSON.stringify({ schemaVersion: 1, tenantId: command.tenantId, executionId }), now]);
-        created.push(executionRecordFromJoined(execution.rows[0]!));
+      if (requiresResolution) {
+        await client.query(`INSERT INTO agentbay_event_revision_resolutions
+          (event_id, tenant_id, provider, installation_id, repository_id, repository_full_name, clone_url, branch,
+           state, available_at, created_at, updated_at)
+          VALUES ($1,$2,'github',$3,$4,$5,$6,$7,'PENDING',$8,$8,$8)`, [
+          command.internalEventId, command.tenantId, String(revisionResolution.installationId),
+          String(revisionResolution.repositoryId), revisionResolution.repositoryFullName, revisionResolution.cloneUrl,
+          revisionResolution.branch, new Date(command.admittedAt),
+        ]);
       }
+      const created = requiresResolution ? [] : await this.createExecutions(client, command, candidates.rows);
       await client.query("COMMIT");
       return {
         event: {
@@ -460,6 +453,145 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     } finally {
       client.release();
     }
+  }
+
+  async claimRevisionResolution(input: { leaseOwner: string; leaseDurationMs: number }): Promise<ClaimedRevisionResolution | undefined> {
+    const leaseToken = randomUUID();
+    const result = await this.pool.query<RevisionResolutionRow>(`WITH candidate AS (
+      SELECT event_id, tenant_id FROM agentbay_event_revision_resolutions
+      WHERE ((state IN ('PENDING','RETRY_WAIT') AND available_at <= now()) OR (state = 'LEASED' AND lease_expires_at <= now()))
+      ORDER BY available_at, created_at, event_id FOR UPDATE SKIP LOCKED LIMIT 1
+    ) UPDATE agentbay_event_revision_resolutions AS resolution
+      SET state = 'LEASED', lease_owner = $1, lease_token = $2,
+          lease_expires_at = now() + ($3 * interval '1 millisecond'), attempt = attempt + 1, updated_at = now()
+      FROM candidate WHERE resolution.event_id = candidate.event_id AND resolution.tenant_id = candidate.tenant_id
+      RETURNING resolution.*`, [input.leaseOwner, leaseToken, input.leaseDurationMs]);
+    const row = result.rows[0];
+    return row ? revisionResolutionFromRow(row) : undefined;
+  }
+
+  async completeRevisionResolution(input: {
+    eventId: string; tenantId: string; leaseOwner: string; leaseToken: string; commit: string; resolvedAt: string;
+  }): Promise<AdmissionResult | undefined> {
+    if (!/^[0-9a-f]{40}$/.test(input.commit)) throw new Error("Resolved revision must be a lowercase full commit SHA");
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const eventIdentity = await client.query<{ trigger_id: string }>(
+        "SELECT trigger_id FROM agentbay_events WHERE id = $1 AND tenant_id = $2",
+        [input.eventId, input.tenantId],
+      );
+      if (!eventIdentity.rows[0]) throw new Error("Revision resolution event disappeared");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        triggerControlLock(input.tenantId, eventIdentity.rows[0].trigger_id),
+      ]);
+      const resolutionResult = await client.query<RevisionResolutionRow>(`SELECT * FROM agentbay_event_revision_resolutions
+        WHERE event_id = $1 AND tenant_id = $2 AND state = 'LEASED' AND lease_owner = $3 AND lease_token = $4
+          AND lease_expires_at > now() FOR UPDATE`, [input.eventId, input.tenantId, input.leaseOwner, input.leaseToken]);
+      const resolution = resolutionResult.rows[0];
+      if (!resolution) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const eventResult = await client.query<EventRow>("SELECT * FROM agentbay_events WHERE id = $1 AND tenant_id = $2 FOR UPDATE", [input.eventId, input.tenantId]);
+      const eventRow = eventResult.rows[0];
+      if (!eventRow) throw new Error("Revision resolution event disappeared");
+      const candidates = await client.query<BindingProfileRow>(`SELECT binding.*, profile.definition AS profile_definition,
+          profile.profile_id, profile.version AS profile_version
+        FROM agentbay_binding_versions AS binding
+        JOIN agentbay_agent_profile_versions AS profile ON profile.id = binding.profile_version_id AND profile.tenant_id = binding.tenant_id
+        WHERE binding.tenant_id = $1 AND binding.trigger_id = $2 AND binding.enabled AND $3 = ANY(binding.event_types)
+        ORDER BY binding.binding_id, binding.version, binding.id FOR SHARE OF binding, profile`,
+      [input.tenantId, eventRow.trigger_id, eventRow.type]);
+      const event = eventFromRow(eventRow);
+      const data = event.data as Record<string, JsonValue>;
+      const repository = data.repository;
+      if (repository === null || typeof repository !== "object" || Array.isArray(repository)) throw new Error("Persisted GitHub repository data is invalid");
+      const enrichedEvent = normalizedCloudEventSchema.parse({
+        ...event,
+        data: {
+          ...data,
+          repository: {
+            ...repository,
+            defaultBranchRevision: {
+              type: "commit",
+              commit: input.commit,
+              ref: `refs/heads/${resolution.branch}`,
+              resolvedAt: input.resolvedAt,
+              source: "github-api",
+            },
+          },
+        },
+      });
+      const command: AdmissionCommand = {
+        tenantId: input.tenantId,
+        triggerId: eventRow.trigger_id,
+        internalEventId: input.eventId,
+        event: enrichedEvent,
+        sourceDeduplicationKey: eventRow.source_deduplication_key,
+        admissionHash: eventRow.admission_hash,
+        admittedAt: input.resolvedAt,
+      };
+      const created = await this.createExecutions(client, command, candidates.rows);
+      await client.query(`UPDATE agentbay_event_revision_resolutions SET state = 'SUCCEEDED', commit = $3,
+        resolved_at = $4, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = $4
+        WHERE event_id = $1 AND tenant_id = $2`, [input.eventId, input.tenantId, input.commit, new Date(input.resolvedAt)]);
+      await client.query("COMMIT");
+      return { event: eventSummary(eventRow), executions: created, replayed: false };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async failRevisionResolution(input: {
+    eventId: string; tenantId: string; leaseOwner: string; leaseToken: string; error: string;
+    failedAt: string; retryAt: string; maxAttempts: number;
+  }): Promise<boolean> {
+    const result = await this.pool.query(`UPDATE agentbay_event_revision_resolutions SET
+      state = CASE WHEN attempt >= $7 THEN 'DEAD_LETTERED' ELSE 'RETRY_WAIT' END,
+      available_at = $6, last_error = $5, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = $4
+      WHERE event_id = $1 AND tenant_id = $2 AND state = 'LEASED' AND lease_owner = $3 AND lease_token = $8
+        AND lease_expires_at > $4`, [input.eventId, input.tenantId, input.leaseOwner, new Date(input.failedAt),
+      input.error, new Date(input.retryAt), input.maxAttempts, input.leaseToken]);
+    return result.rowCount === 1;
+  }
+
+  private async createExecutions(client: pg.PoolClient, command: AdmissionCommand, rows: BindingProfileRow[]): Promise<Execution[]> {
+    const created: Execution[] = [];
+    for (const row of rows) {
+      const binding = bindingFromRow(row);
+      const planned = planExecution(binding, command);
+      if (!planned) continue;
+      const now = new Date(command.admittedAt);
+      const executionId = randomUUID();
+      const execution = await client.query<ExecutionJoinedRow>({
+        text: `INSERT INTO agentbay_executions
+          (id, tenant_id, event_id, binding_version_id, profile_version_id, idempotency_key, request_hash, input,
+           workspace, resolved_policy, state, timeout_at, created_at, updated_at, available_at)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,'QUEUED',$11,$12,$12,$12)
+          RETURNING *, $13::text AS binding_id, $14::integer AS binding_version,
+            $15::text AS profile_id, $16::integer AS profile_version`,
+        values: [executionId, command.tenantId, command.internalEventId, row.id, row.profile_version_id,
+          planned.id, command.admissionHash, JSON.stringify(planned.input), JSON.stringify(planned.workspace),
+          JSON.stringify(row.profile_definition), new Date(now.getTime() + profileTimeoutSeconds(row.profile_definition) * 1_000), now,
+          row.binding_id, row.version, planned.profile.id, planned.profile.version],
+      });
+      await client.query(`INSERT INTO agentbay_execution_transitions
+        (id, tenant_id, execution_id, sequence, from_state, to_state, actor, reason, created_at) VALUES
+        ($1,$2,$3,1,NULL,'RECEIVED','event-admission','event admitted',$6),
+        ($4,$2,$3,2,'RECEIVED','PLANNED','event-admission','binding and profile resolved',$6),
+        ($5,$2,$3,3,'PLANNED','QUEUED','event-admission','execution queued',$6)`,
+      [randomUUID(), command.tenantId, executionId, randomUUID(), randomUUID(), now]);
+      await client.query(`INSERT INTO agentbay_outbox
+        (id, tenant_id, topic, aggregate_type, aggregate_id, payload, available_at, created_at)
+        VALUES ($1,$2,'execution.requested','execution',$3,$4::jsonb,$5,$5)`,
+      [randomUUID(), command.tenantId, executionId, JSON.stringify({ schemaVersion: 1, tenantId: command.tenantId, executionId }), now]);
+      created.push(executionRecordFromJoined(execution.rows[0]!));
+    }
+    return created;
   }
 
   async getExecution(tenantId: string, executionId: string): Promise<Execution | undefined> {
@@ -490,10 +622,15 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         FROM agentbay_execution_transitions
         WHERE tenant_id = $1 AND execution_id = $2
         ORDER BY sequence`, [tenantId, executionId]);
+      const waitsResult = await client.query<EventWaitRow>(`
+        SELECT id, attempt, name, state, correlation, deadline_at, activated_at, ended_at
+        FROM agentbay_event_waits WHERE tenant_id = $1 AND execution_id = $2
+        ORDER BY activated_at, id`, [tenantId, executionId]);
       const detail = {
         ...executionRecordFromJoined(row),
         attempts: attemptsResult.rows.map((attempt) => executionAttemptFromRow(executionId, attempt)),
         transitions: transitionsResult.rows.map((transition) => executionTransitionFromRow(executionId, transition)),
+        waits: waitsResult.rows.map((wait) => eventWaitFromRow(executionId, wait)),
       };
       await client.query("COMMIT");
       return detail;
@@ -533,13 +670,19 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         await client.query("COMMIT");
         return { id: execution.id, outcome: "REQUESTED", state: "CANCEL_REQUESTED" };
       }
-      if (execution.state !== "QUEUED" && execution.state !== "RETRY_WAIT" && execution.state !== "AWAITING_APPROVAL"
+      if (execution.state !== "QUEUED" && execution.state !== "RETRY_WAIT" && execution.state !== "AWAITING_APPROVAL" && execution.state !== "WAITING"
         && execution.state !== "PROVISIONING" && execution.state !== "RUNNING") {
         throw new ExecutionCancellationConflictError(command.executionId);
       }
 
       const immediate = execution.state === "QUEUED" || execution.state === "RETRY_WAIT"
-        || execution.state === "AWAITING_APPROVAL";
+        || execution.state === "AWAITING_APPROVAL" || execution.state === "WAITING";
+      const cancellationAt = (await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
+      if (execution.state === "WAITING") {
+        const wait = await client.query("SELECT id FROM agentbay_event_waits WHERE tenant_id = $1 AND execution_id = $2 AND state = 'ACTIVE' FOR UPDATE", [command.tenantId, command.executionId]);
+        if (wait.rowCount !== 1) throw new PersistedExecutionCorruptionError(command.executionId, "active wait");
+        await client.query("UPDATE agentbay_event_waits SET state = 'CANCELLED', ended_at = $3 WHERE tenant_id = $1 AND execution_id = $2 AND state = 'ACTIVE'", [command.tenantId, command.executionId, cancellationAt]);
+      }
       const transitionIds = immediate ? [command.transitionId, randomUUID()] : [command.transitionId];
       await client.query({
         text: `WITH cancellation_clock AS (SELECT $3::timestamptz AS requested_at),
@@ -560,7 +703,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           FROM updated_execution, cancellation_clock,
             unnest($9::text[], $10::text[], $11::text[]) WITH ORDINALITY
               AS transition(id, from_state, to_state, ordinality)`,
-        values: [command.executionId, command.tenantId, requestedAt, immediate ? "CANCELLED" : "CANCEL_REQUESTED",
+        values: [command.executionId, command.tenantId, cancellationAt, immediate ? "CANCELLED" : "CANCEL_REQUESTED",
           immediate, execution.state, command.actor, command.reason, transitionIds,
           immediate ? [execution.state, "CANCEL_REQUESTED"] : [execution.state],
           immediate ? ["CANCEL_REQUESTED", "CANCELLED"] : ["CANCEL_REQUESTED"]],
@@ -1371,6 +1514,124 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     }
   }
 
+  async completeLeasedExecutionTurn(command: CompleteLeasedExecutionTurnCommand): Promise<CompleteLeasedExecutionTurnResult> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const executionResult = await client.query<{ binding_version_id: string; event_id: string; state: string; timeout_at: Date }>(
+        "SELECT binding_version_id, event_id, state, timeout_at FROM agentbay_executions WHERE id = $1 AND tenant_id = $2 FOR UPDATE",
+        [command.executionId, command.tenantId],
+      );
+      const execution = executionResult.rows[0];
+      if (!execution) { await client.query("ROLLBACK"); return { applied: false, reason: "NOT_FOUND" }; }
+      if (execution.state !== "RUNNING") { await client.query("ROLLBACK"); return { applied: false, reason: "STATE_MISMATCH" }; }
+      const attemptResult = await client.query<{ state: string; lease_expires_at: Date }>(`SELECT state, lease_expires_at
+        FROM agentbay_execution_attempts WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
+          AND fencing_token = $4 AND lease_owner = $5 FOR UPDATE`,
+      [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner]);
+      const attempt = attemptResult.rows[0];
+      if (!attempt) {
+        const exists = await client.query<{ exists: boolean }>("SELECT EXISTS (SELECT 1 FROM agentbay_execution_attempts WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3) AS exists", [command.executionId, command.tenantId, command.attempt]);
+        await client.query("ROLLBACK");
+        return { applied: false, reason: exists.rows[0]?.exists ? "LEASE_MISMATCH" : "NOT_FOUND" };
+      }
+      if (attempt.state !== "RUNNING") { await client.query("ROLLBACK"); return { applied: false, reason: "STATE_MISMATCH" }; }
+      const now = (await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
+      if (attempt.lease_expires_at <= now) { await client.query("ROLLBACK"); return { applied: false, reason: "LEASE_EXPIRED" }; }
+
+      const bindingResult = await client.query<BindingRow>(BINDING_SELECT + " WHERE binding.tenant_id = $1 AND binding.id = $2", [command.tenantId, execution.binding_version_id]);
+      const binding = bindingResult.rows[0] ? bindingFromRow(bindingResult.rows[0]) : undefined;
+      if (!binding) throw new PersistedExecutionCorruptionError(command.executionId, "binding version");
+      const policy = binding.definition.afterTurn;
+      let wait: { id: string; name: string; correlation: Record<string, JsonPrimitive>; deadline: Date } | undefined;
+      let executionState: "SUCCEEDED" | "WAITING" | "TIMED_OUT" = "SUCCEEDED";
+      if (policy) {
+        if (execution.timeout_at <= now) executionState = "TIMED_OUT";
+        else {
+          const eventData = (await client.query<{ data: JsonValue }>("SELECT data FROM agentbay_events WHERE id = $1 AND tenant_id = $2", [execution.event_id, command.tenantId])).rows[0]?.data;
+          if (eventData === undefined) throw new PersistedExecutionCorruptionError(command.executionId, "event data");
+          const correlation: Record<string, JsonPrimitive> = {};
+          for (const item of policy.wait.correlation) {
+            const resolved = resolveJsonPointer(eventData, item.path);
+            if (!resolved.found || (resolved.value !== null && typeof resolved.value === "object")) {
+              throw new PersistedExecutionCorruptionError(command.executionId, `wait correlation ${item.name}`);
+            }
+            if (Buffer.byteLength(JSON.stringify(resolved.value), "utf8") > 1_024) {
+              throw new PersistedExecutionCorruptionError(command.executionId, `wait correlation ${item.name}`);
+            }
+            correlation[item.name] = resolved.value;
+          }
+          wait = {
+            id: randomUUID(), name: policy.wait.name, correlation,
+            deadline: new Date(now.getTime() + policy.wait.deadlineSeconds * 1_000),
+          };
+          if (wait.deadline <= now) executionState = "TIMED_OUT";
+          else executionState = "WAITING";
+        }
+      }
+
+      await client.query(`UPDATE agentbay_execution_attempts SET state = 'SUCCEEDED', finished_at = $6,
+        lease_owner = NULL, lease_expires_at = NULL WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
+        AND fencing_token = $4 AND lease_owner = $5 AND state = 'RUNNING'`,
+      [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, now]);
+      await client.query(`UPDATE agentbay_executions SET state = $3::text, result = $4::jsonb, updated_at = $5::timestamptz,
+        timeout_at = CASE WHEN $3::text = 'WAITING' THEN $6::timestamptz ELSE timeout_at END,
+        completed_at = CASE WHEN $3::text IN ('TIMED_OUT','FAILED','CANCELLED','COMPLETED','DEAD_LETTERED') THEN $5::timestamptz ELSE NULL END
+        WHERE id = $1 AND tenant_id = $2 AND state = 'RUNNING'`,
+      [command.executionId, command.tenantId, executionState, JSON.stringify(command.result), now, wait?.deadline ?? execution.timeout_at]);
+      if (executionState === "WAITING" && wait) {
+        await client.query(`INSERT INTO agentbay_event_waits
+          (id, tenant_id, execution_id, attempt, name, state, correlation, deadline_at, activated_at)
+          VALUES ($1,$2,$3,$4,$5,'ACTIVE',$6::jsonb,$7,$8)`,
+        [wait.id, command.tenantId, command.executionId, command.attempt, wait.name, JSON.stringify(wait.correlation), wait.deadline, now]);
+      }
+      await client.query(`INSERT INTO agentbay_execution_transitions
+        (id, tenant_id, execution_id, attempt, sequence, from_state, to_state, actor, reason, created_at)
+        VALUES ($1,$2,$3,$4,(SELECT COALESCE(MAX(sequence),0)+1 FROM agentbay_execution_transitions WHERE tenant_id=$2 AND execution_id=$3),
+          'RUNNING',$5,$6,$7,$8)`, [randomUUID(), command.tenantId, command.executionId, command.attempt, executionState, command.actor, command.reason, now]);
+      await client.query("COMMIT");
+      return { applied: true, attemptState: "SUCCEEDED", executionState, ...(executionState === "WAITING" && wait ? { eventWaitId: wait.id } : {}) };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async expireDueEventWaits(input: { limit: number }): Promise<ExpiredEventWait[]> {
+    assertPositiveInteger(input.limit, "Event wait expiration limit");
+    const client = await this.pool.connect();
+    const expired: ExpiredEventWait[] = [];
+    try {
+      await client.query("BEGIN");
+      const candidates = await client.query<{ id: string; tenant_id: string }>(`SELECT execution.id, execution.tenant_id
+        FROM agentbay_executions AS execution
+        JOIN agentbay_event_waits AS wait ON wait.execution_id = execution.id AND wait.tenant_id = execution.tenant_id
+        WHERE execution.state = 'WAITING' AND wait.state = 'ACTIVE' AND wait.deadline_at <= clock_timestamp()
+        ORDER BY wait.deadline_at, execution.id FOR UPDATE OF execution SKIP LOCKED LIMIT $1`, [input.limit]);
+      for (const candidate of candidates.rows) {
+        const waitResult = await client.query<{ id: string; deadline_at: Date }>(`SELECT id, deadline_at FROM agentbay_event_waits
+          WHERE tenant_id = $1 AND execution_id = $2 AND state = 'ACTIVE' FOR UPDATE`, [candidate.tenant_id, candidate.id]);
+        const wait = waitResult.rows[0];
+        if (!wait) continue;
+        const now = (await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
+        if (wait.deadline_at > now) continue;
+        await client.query("UPDATE agentbay_event_waits SET state = 'EXPIRED', ended_at = $3 WHERE tenant_id = $1 AND id = $2 AND state = 'ACTIVE'", [candidate.tenant_id, wait.id, now]);
+        await client.query("UPDATE agentbay_executions SET state = 'TIMED_OUT', completed_at = $3, updated_at = $3 WHERE tenant_id = $1 AND id = $2 AND state = 'WAITING'", [candidate.tenant_id, candidate.id, now]);
+        await client.query(`INSERT INTO agentbay_execution_transitions
+          (id, tenant_id, execution_id, attempt, sequence, from_state, to_state, actor, reason, created_at)
+          VALUES ($1,$2,$3,NULL,(SELECT COALESCE(MAX(sequence),0)+1 FROM agentbay_execution_transitions WHERE tenant_id=$2 AND execution_id=$3),
+            'WAITING','TIMED_OUT','execution-maintenance','event wait deadline elapsed',$4)`,
+        [randomUUID(), candidate.tenant_id, candidate.id, now]);
+        expired.push({ eventWaitId: wait.id, executionId: candidate.id, tenantId: candidate.tenant_id, expiredAt: now });
+      }
+      await client.query("COMMIT");
+      return expired;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+
 }
 
 type AgentProfileVersionRow = InferSelectModel<typeof agentProfileVersions>;
@@ -1409,14 +1670,35 @@ type BindingRow = {
 type BindingProfileRow = BindingRow & { profile_definition: Record<string, unknown> };
 type EventRow = {
   admission_hash: string;
+  data: unknown;
+  data_content_type: string;
+  data_schema: string | null;
   event_id: string;
+  event_time: Date | null;
+  extensions: Record<string, JsonValue>;
   id: string;
   ingested_at: Date;
   source: string;
   source_deduplication_key: string;
+  subject: string | null;
   tenant_id: string;
   trigger_id: string;
   type: string;
+};
+type RevisionResolutionRow = {
+  attempt: number;
+  branch: string;
+  clone_url: string;
+  event_id: string;
+  installation_id: string;
+  lease_expires_at: Date | null;
+  lease_owner: string | null;
+  lease_token: string | null;
+  provider: string;
+  repository_full_name: string;
+  repository_id: string;
+  state: string;
+  tenant_id: string;
 };
 
 type TriggerSqlRow = {
@@ -1465,6 +1747,16 @@ type ExecutionTransitionRow = {
   sequence: number;
   to_state: string;
   trace_context: Record<string, string>;
+};
+type EventWaitRow = {
+  activated_at: Date;
+  attempt: number;
+  correlation: Record<string, JsonPrimitive>;
+  deadline_at: Date;
+  ended_at: Date | null;
+  id: string;
+  name: string;
+  state: string;
 };
 
 type ClaimedExecutionRow = {
@@ -1626,6 +1918,7 @@ function triggerFromRow(row: TriggerSqlRow): Trigger {
 function bindingFromRow(row: BindingRow): PublishedBindingVersion {
   const persisted = row.definition as Record<string, unknown>;
   const definition = bindingDefinitionSchema.parse({
+    afterTurn: persisted.afterTurn,
     filter: persisted.filter,
     prompt: persisted.prompt,
     schemaVersion: persisted.schemaVersion,
@@ -1665,6 +1958,45 @@ function eventSummary(row: EventRow): AdmissionResult["event"] {
     tenantId: row.tenant_id,
     triggerId: row.trigger_id,
     type: row.type,
+  };
+}
+
+function eventFromRow(row: EventRow): NormalizedCloudEvent {
+  return normalizedCloudEventSchema.parse({
+    specversion: "1.0",
+    id: row.event_id,
+    source: row.source,
+    type: row.type,
+    ...(row.subject ? { subject: row.subject } : {}),
+    ...(row.event_time ? { time: row.event_time.toISOString() } : {}),
+    datacontenttype: row.data_content_type,
+    ...(row.data_schema ? { dataschema: row.data_schema } : {}),
+    data: row.data,
+    ...row.extensions,
+  });
+}
+
+function revisionResolutionFromRow(row: RevisionResolutionRow): ClaimedRevisionResolution {
+  if (row.provider !== "github" || row.state !== "LEASED" || !row.lease_owner || !row.lease_token || !row.lease_expires_at) {
+    throw new Error(`Revision resolution ${row.event_id} has invalid lease state`);
+  }
+  const installationId = Number(row.installation_id);
+  const repositoryId = Number(row.repository_id);
+  if (!Number.isSafeInteger(installationId) || installationId < 1 || !Number.isSafeInteger(repositoryId) || repositoryId < 1) {
+    throw new Error(`Revision resolution ${row.event_id} has invalid GitHub IDs`);
+  }
+  return {
+    attempt: row.attempt,
+    branch: row.branch,
+    cloneUrl: row.clone_url,
+    eventId: row.event_id,
+    installationId,
+    leaseOwner: row.lease_owner,
+    leaseToken: row.lease_token,
+    provider: "github",
+    repositoryFullName: row.repository_full_name,
+    repositoryId,
+    tenantId: row.tenant_id,
   };
 }
 
@@ -1724,6 +2056,24 @@ function executionTransitionFromRow(executionId: string, row: ExecutionTransitio
     sequence: row.sequence,
     toState: row.to_state,
     traceContext: row.trace_context,
+  };
+}
+
+function eventWaitFromRow(executionId: string, row: EventWaitRow): import("../execution/types.js").ExecutionEventWait {
+  if (!(["ACTIVE", "CANCELLED", "EXPIRED", "CONSUMED"] as const).includes(row.state as any)
+    || row.correlation === null || typeof row.correlation !== "object" || Array.isArray(row.correlation)
+    || Object.values(row.correlation).some((value) => value !== null && typeof value === "object")) {
+    throw new PersistedExecutionCorruptionError(executionId, "event wait");
+  }
+  return {
+    activatedAt: row.activated_at.toISOString(),
+    attempt: row.attempt,
+    correlation: row.correlation,
+    deadlineAt: row.deadline_at.toISOString(),
+    endedAt: row.ended_at?.toISOString() ?? null,
+    id: row.id,
+    name: row.name,
+    state: row.state as import("../execution/types.js").EventWaitState,
   };
 }
 

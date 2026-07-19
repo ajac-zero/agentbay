@@ -83,7 +83,7 @@ export const triggers = pgTable("agentbay_triggers", {
 export const bindingVersions = pgTable("agentbay_binding_versions", {
   bindingID: text("binding_id").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  definition: jsonb("definition").$type<Pick<BindingDefinition, "schemaVersion" | "filter" | "prompt" | "workspace">>().notNull(),
+  definition: jsonb("definition").$type<Omit<BindingDefinition, "eventTypes">>().notNull(),
   disabledAt: timestamp("disabled_at", { withTimezone: true }),
   enabled: boolean("enabled").notNull().default(true),
   eventTypes: text("event_types").array().notNull(),
@@ -151,6 +151,44 @@ export const events = pgTable("agentbay_events", {
   index("agentbay_events_tenant_type_ingested_idx").on(table.tenantID, table.type, table.ingestedAt),
 ]);
 
+export const eventRevisionResolutions = pgTable("agentbay_event_revision_resolutions", {
+  attempt: integer("attempt").notNull().default(0),
+  availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+  branch: text("branch").notNull(),
+  cloneUrl: text("clone_url").notNull(),
+  commit: text("commit"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  eventID: text("event_id").notNull(),
+  installationID: text("installation_id").notNull(),
+  lastError: text("last_error"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  leaseOwner: text("lease_owner"),
+  leaseToken: text("lease_token"),
+  provider: text("provider").notNull(),
+  repositoryFullName: text("repository_full_name").notNull(),
+  repositoryID: text("repository_id").notNull(),
+  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  state: text("state").notNull().default("PENDING"),
+  tenantID: text("tenant_id").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.eventID, table.tenantID] }),
+  check("agentbay_event_revision_resolutions_attempt_nonnegative", sql`${table.attempt} >= 0`),
+  check("agentbay_event_revision_resolutions_provider_github", sql`${table.provider} = 'github'`),
+  check("agentbay_event_revision_resolutions_state_valid", sql`${table.state} IN ('PENDING', 'LEASED', 'RETRY_WAIT', 'SUCCEEDED', 'DEAD_LETTERED')`),
+  check("agentbay_event_revision_resolutions_commit_valid", sql`${table.commit} IS NULL OR ${table.commit} ~ '^[0-9a-f]{40}$'`),
+  check("agentbay_event_revision_resolutions_lease_consistent", sql`(${table.leaseOwner} IS NULL AND ${table.leaseToken} IS NULL AND ${table.leaseExpiresAt} IS NULL) OR (${table.leaseOwner} IS NOT NULL AND ${table.leaseToken} IS NOT NULL AND ${table.leaseExpiresAt} IS NOT NULL AND ${table.state} = 'LEASED')`),
+  foreignKey({
+    columns: [table.eventID, table.tenantID],
+    foreignColumns: [events.id, events.tenantID],
+    name: "agentbay_event_revision_resolutions_event_tenant_fk",
+  }),
+  uniqueIndex("agentbay_event_revision_resolutions_lease_token_unique").on(table.leaseToken).where(sql`${table.leaseToken} IS NOT NULL`),
+  index("agentbay_event_revision_resolutions_claim_idx")
+    .on(table.availableAt, table.createdAt, table.eventID)
+    .where(sql`${table.state} IN ('PENDING', 'RETRY_WAIT', 'LEASED')`),
+]);
+
 export const executions = pgTable("agentbay_executions", {
   availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
   bindingVersionID: text("binding_version_id").notNull(),
@@ -170,7 +208,7 @@ export const executions = pgTable("agentbay_executions", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   workspace: jsonb("workspace").$type<import("../workspace/types.js").ResolvedWorkspace>().notNull().default({ type: "empty" }),
 }, (table) => [
-  check("agentbay_executions_state_valid", sql`${table.state} IN ('RECEIVED', 'PLANNED', 'QUEUED', 'PROVISIONING', 'RUNNING', 'SUCCEEDED', 'DELIVERING', 'COMPLETED', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'CANCEL_REQUESTED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')`),
+  check("agentbay_executions_state_valid", sql`${table.state} IN ('RECEIVED', 'PLANNED', 'QUEUED', 'PROVISIONING', 'RUNNING', 'WAITING', 'SUCCEEDED', 'DELIVERING', 'COMPLETED', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'CANCEL_REQUESTED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')`),
   foreignKey({
     columns: [table.bindingVersionID, table.tenantID],
     foreignColumns: [bindingVersions.id, bindingVersions.tenantID],
@@ -236,6 +274,40 @@ export const executionAttempts = pgTable("agentbay_execution_attempts", {
     .where(sql`${table.state} IN ('LEASED', 'RUNNING')`),
 ]);
 
+export const eventWaits = pgTable("agentbay_event_waits", {
+  activatedAt: timestamp("activated_at", { withTimezone: true }).notNull(),
+  attempt: integer("attempt").notNull(),
+  correlation: jsonb("correlation").$type<Record<string, import("../json.js").JsonPrimitive>>().notNull(),
+  deadlineAt: timestamp("deadline_at", { withTimezone: true }).notNull(),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
+  executionID: text("execution_id").notNull(),
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  state: text("state").notNull().default("ACTIVE"),
+  tenantID: text("tenant_id").notNull(),
+}, (table) => [
+  check("agentbay_event_waits_attempt_positive", sql`${table.attempt} > 0`),
+  check("agentbay_event_waits_correlation_object", sql`jsonb_typeof(${table.correlation}) = 'object'`),
+  check("agentbay_event_waits_correlation_bounded", sql`octet_length(${table.correlation}::text) <= 32768`),
+  check("agentbay_event_waits_deadline_after_activation", sql`${table.deadlineAt} > ${table.activatedAt}`),
+  check("agentbay_event_waits_end_after_activation", sql`${table.endedAt} IS NULL OR ${table.endedAt} >= ${table.activatedAt}`),
+  check("agentbay_event_waits_state_valid", sql`${table.state} IN ('ACTIVE', 'CANCELLED', 'EXPIRED', 'CONSUMED')`),
+  check("agentbay_event_waits_lifecycle_consistent", sql`(${table.state} = 'ACTIVE') = (${table.endedAt} IS NULL)`),
+  foreignKey({
+    columns: [table.executionID, table.tenantID],
+    foreignColumns: [executions.id, executions.tenantID],
+    name: "agentbay_event_waits_execution_tenant_fk",
+  }),
+  foreignKey({
+    columns: [table.executionID, table.attempt],
+    foreignColumns: [executionAttempts.executionID, executionAttempts.attempt],
+    name: "agentbay_event_waits_attempt_fk",
+  }),
+  uniqueIndex("agentbay_event_waits_one_active_execution_unique").on(table.tenantID, table.executionID).where(sql`${table.state} = 'ACTIVE'`),
+  index("agentbay_event_waits_deadline_idx").on(table.deadlineAt, table.executionID).where(sql`${table.state} = 'ACTIVE'`),
+  index("agentbay_event_waits_name_idx").on(table.tenantID, table.name).where(sql`${table.state} = 'ACTIVE'`),
+]);
+
 export const executionTransitions = pgTable("agentbay_execution_transitions", {
   actor: text("actor").notNull(),
   attempt: integer("attempt"),
@@ -251,8 +323,8 @@ export const executionTransitions = pgTable("agentbay_execution_transitions", {
 }, (table) => [
   check("agentbay_execution_transitions_attempt_positive", sql`${table.attempt} IS NULL OR ${table.attempt} > 0`),
   check("agentbay_execution_transitions_sequence_positive", sql`${table.sequence} > 0`),
-  check("agentbay_execution_transitions_to_state_valid", sql`${table.toState} IN ('RECEIVED', 'PLANNED', 'QUEUED', 'PROVISIONING', 'RUNNING', 'SUCCEEDED', 'DELIVERING', 'COMPLETED', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'CANCEL_REQUESTED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')`),
-  check("agentbay_execution_transitions_from_state_valid", sql`${table.fromState} IS NULL OR ${table.fromState} IN ('RECEIVED', 'PLANNED', 'QUEUED', 'PROVISIONING', 'RUNNING', 'SUCCEEDED', 'DELIVERING', 'COMPLETED', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'CANCEL_REQUESTED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')`),
+  check("agentbay_execution_transitions_to_state_valid", sql`${table.toState} IN ('RECEIVED', 'PLANNED', 'QUEUED', 'PROVISIONING', 'RUNNING', 'WAITING', 'SUCCEEDED', 'DELIVERING', 'COMPLETED', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'CANCEL_REQUESTED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')`),
+  check("agentbay_execution_transitions_from_state_valid", sql`${table.fromState} IS NULL OR ${table.fromState} IN ('RECEIVED', 'PLANNED', 'QUEUED', 'PROVISIONING', 'RUNNING', 'WAITING', 'SUCCEEDED', 'DELIVERING', 'COMPLETED', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'CANCEL_REQUESTED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')`),
   foreignKey({
     columns: [table.executionID, table.tenantID],
     foreignColumns: [executions.id, executions.tenantID],

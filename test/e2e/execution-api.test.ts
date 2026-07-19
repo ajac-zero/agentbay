@@ -216,11 +216,21 @@ describe("public API", () => {
       createdAt: execution.updatedAt,
       traceContext: { traceparent: "trace" },
     });
+    execution.waits.push({
+      activatedAt: execution.updatedAt,
+      attempt: 1,
+      correlation: { workItem: 42 },
+      deadlineAt: new Date(Date.parse(execution.updatedAt) + 60_000).toISOString(),
+      endedAt: null,
+      id: "wait-1",
+      name: "work-item-lifecycle",
+      state: "ACTIVE",
+    });
     store.executions.set("default:detailed", execution);
 
     const response = await request(testApp(store), "GET", "/v1/executions/detailed");
 
-    expect(response).toMatchObject({ status: 200, body: { attempts: [{ attempt: 1, state: "RUNNING" }], transitions: [{ id: "transition-1", toState: "RUNNING" }] } });
+    expect(response).toMatchObject({ status: 200, body: { attempts: [{ attempt: 1, state: "RUNNING" }], transitions: [{ id: "transition-1", toState: "RUNNING" }], waits: [{ id: "wait-1", correlation: { workItem: 42 } }] } });
     expect(JSON.stringify(response.body)).not.toMatch(/fencingToken|leaseOwner/);
   });
 
@@ -350,7 +360,7 @@ class FakeControlStore implements ControlApiStore {
     if (previous) { if (previous.hash !== command.admissionHash) throw new IdempotencyConflictError(); return { ...previous.result, replayed: true }; }
     if (!this.triggers.get(`${command.tenantId}:${command.triggerId}`)?.enabled) throw new TriggerNotFoundError(command.triggerId);
     const result = planAdmission(command, await this.listBindingCandidates(command.tenantId, command.triggerId, command.event.type));
-    for (const execution of result.executions) this.executions.set(`${execution.tenantId}:${execution.id}`, { ...execution, attempts: [], transitions: [] });
+    for (const execution of result.executions) this.executions.set(`${execution.tenantId}:${execution.id}`, { ...execution, attempts: [], transitions: [], waits: [] });
     this.admissions.set(key, { hash: command.admissionHash, result });
     return result;
   }
@@ -364,8 +374,8 @@ async function publishDependencies(app: ReturnType<typeof createOpenApiApp>) {
 function bindingBody() { return { version: 1, triggerId: "github", profile: { id: "coder", version: 1 }, definition: { schemaVersion: 1, eventTypes: ["issue.opened"], filter: { all: [{ path: "/action", op: "eq", value: "opened" }] }, prompt: { literal: "Handle issue", includeEvent: "data" }, workspace: { type: "empty" } } }; }
 function gitBindingBody() { return { ...bindingBody(), definition: { ...bindingBody().definition, workspace: { type: "git", repository: { url: { path: "/repository" } }, revision: { commit: { path: "/revision" } } } } }; }
 function cloudEvent(type: string, data: object) { return { specversion: "1.0", id: type === "push" ? "evt-2" : "evt-1", source: "https://github.example/hooks", type, data }; }
-function fakeExecution(id: string, state: ExecutionDetail["state"]): ExecutionDetail { const now = new Date().toISOString(); return { id, tenantId: "default", state, binding: { id: "binding", version: 1 }, profile: { id: "profile", version: 1 }, input: { text: "test" }, workspace: { type: "empty" }, eventId: "event", createdAt: now, updatedAt: now, result: null, attempts: [], transitions: [] }; }
+function fakeExecution(id: string, state: ExecutionDetail["state"]): ExecutionDetail { const now = new Date().toISOString(); return { id, tenantId: "default", state, binding: { id: "binding", version: 1 }, profile: { id: "profile", version: 1 }, input: { text: "test" }, workspace: { type: "empty" }, eventId: "event", createdAt: now, updatedAt: now, result: null, attempts: [], transitions: [], waits: [] }; }
 function profileDefinition(agent: string) { return { schemaVersion: 1 as const, runtime: { agent, opencodeConfig: { agent: { [agent]: { prompt: "Test" } } }, type: "opencode" as const }, sandbox: { templateName: "opencode" }, permissions: { onRequest: "fail" as const }, timeoutSeconds: 3600 }; }
 function testApp(store: ControlApiStore = new FakeControlStore(), readEnvironmentVariable?: (name: string) => string | undefined) { const app = createOpenApiApp(); mountControlApi(app, testConfig(), store, readEnvironmentVariable); return app; }
 async function request(app: ReturnType<typeof createOpenApiApp>, method: string, path: string, body?: unknown, headers: Record<string, string> = {}) { const response = await app.request(path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: { authorization: "Bearer test-token", ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers } }); const text = await response.text(); const contentType = response.headers.get("content-type"); return { body: text && contentType?.includes("json") ? JSON.parse(text) as unknown : text || undefined, headers: response.headers, status: response.status }; }
-function testConfig(): Config { return { adminToken: "test-token", dispatcherEnabled: false, dispatcherIdlePollMs: 500, dispatcherLeaseDurationMs: 60_000, dispatcherRenewIntervalMs: 20_000, dispatcherWorkerId: "test-worker", executionMaintenanceBatchSize: 100, executionMaintenanceEnabled: true, executionMaintenanceIntervalMs: 5_000, executionMaxAttempts: 3, executionRetryDelayMs: 30_000, claimReadyTimeoutMs: 5_000, kubeNamespace: "unused", opencodeDirectory: "/workspace", opencodePort: 4096, port: 3000, sandboxClaimApiVersion: "v1alpha1" }; }
+function testConfig(): Config { return { adminToken: "test-token", dispatcherEnabled: false, dispatcherIdlePollMs: 500, dispatcherLeaseDurationMs: 60_000, dispatcherRenewIntervalMs: 20_000, dispatcherWorkerId: "test-worker", executionMaintenanceBatchSize: 100, executionMaintenanceEnabled: true, executionMaintenanceIntervalMs: 5_000, executionMaxAttempts: 3, executionRetryDelayMs: 30_000, revisionResolverEnabled: false, revisionResolverIdlePollMs: 500, revisionResolverLeaseDurationMs: 60_000, revisionResolverMaxAttempts: 5, revisionResolverRequestTimeoutMs: 30_000, revisionResolverRetryDelayMs: 30_000, revisionResolverWorkerId: "test-worker", claimReadyTimeoutMs: 5_000, kubeNamespace: "unused", opencodeDirectory: "/workspace", opencodePort: 4096, port: 3000, sandboxClaimApiVersion: "v1alpha1" }; }

@@ -77,6 +77,63 @@ describe("parseExecutionAttemptProfile", () => {
       connections: [{ id: "github", sidecar: "github-api" }],
     }))).toThrow();
   });
+
+  it("requires a fixed deny-by-default official GitHub MCP config for the token broker", () => {
+    const base = validDefinition();
+    expect(() => parseExecutionAttemptProfile(claimedExecution({
+      ...base,
+      connections: [{ id: "github", sidecar: "github-token-broker" }],
+    }))).toThrow(/github-token-broker/);
+
+    expect(parseExecutionAttemptProfile(claimedExecution({
+      ...base,
+      runtime: {
+        type: "opencode",
+        agent: "coder",
+        opencodeConfig: {
+          mcp: { github: { type: "remote", url: "http://127.0.0.1:8083/", enabled: true, oauth: false } },
+          permission: { "github_*": "deny" },
+          agent: { coder: { permission: { github_issue_read: "allow" } } },
+        },
+      },
+      connections: [{ id: "github", sidecar: "github-token-broker" }],
+    }))).toBeDefined();
+
+    for (const invalidPermission of [
+      { "github_issue_*": "allow" },
+      { github_not_a_real_tool: "allow" },
+      { "github_*": "allow", github_issue_read: "allow" },
+      { github_issue_read: "deny" },
+    ]) {
+      expect(() => parseExecutionAttemptProfile(claimedExecution({
+        ...base,
+        runtime: {
+          type: "opencode",
+          agent: "coder",
+          opencodeConfig: {
+            mcp: { github: { type: "remote", url: "http://127.0.0.1:8083/", enabled: true, oauth: false } },
+            permission: { "github_*": "deny" },
+            agent: { coder: { permission: invalidPermission } },
+          },
+        },
+        connections: [{ id: "github", sidecar: "github-token-broker" }],
+      }))).toThrow(/github-token-broker/);
+    }
+
+    expect(() => parseExecutionAttemptProfile(claimedExecution({
+      ...base,
+      runtime: {
+        type: "opencode",
+        agent: "coder",
+        opencodeConfig: {
+          mcp: { github: { type: "remote", url: "http://127.0.0.1:8083/", enabled: true, oauth: false } },
+          permission: { "github_*": "deny", github_push_files: "allow" },
+          agent: { coder: { permission: { github_issue_read: "allow" } } },
+        },
+      },
+      connections: [{ id: "github", sidecar: "github-token-broker" }],
+    }))).toThrow(/github-token-broker/);
+  });
 });
 
 function validDefinition() {

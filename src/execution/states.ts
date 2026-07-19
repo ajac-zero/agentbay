@@ -4,6 +4,7 @@ export const EXECUTION_STATES = [
   "QUEUED",
   "PROVISIONING",
   "RUNNING",
+  "WAITING",
   "SUCCEEDED",
   "DELIVERING",
   "COMPLETED",
@@ -43,6 +44,7 @@ const transitions: Readonly<Record<ExecutionState, ReadonlySet<ExecutionState>>>
   PROVISIONING: new Set(["RUNNING", "CANCEL_REQUESTED", "RETRY_WAIT", "TIMED_OUT", "FAILED", "DEAD_LETTERED"]),
   RUNNING: new Set([
     "SUCCEEDED",
+    "WAITING",
     "AWAITING_APPROVAL",
     "CANCEL_REQUESTED",
     "RETRY_WAIT",
@@ -51,6 +53,7 @@ const transitions: Readonly<Record<ExecutionState, ReadonlySet<ExecutionState>>>
     "DEAD_LETTERED",
   ]),
   SUCCEEDED: new Set(["DELIVERING", "COMPLETED", "FAILED", "DEAD_LETTERED"]),
+  WAITING: new Set(["QUEUED", "CANCEL_REQUESTED", "TIMED_OUT", "FAILED"]),
   DELIVERING: new Set(["COMPLETED", "RETRY_WAIT", "FAILED", "DEAD_LETTERED"]),
   RETRY_WAIT: new Set(["QUEUED", "CANCEL_REQUESTED", "TIMED_OUT", "FAILED", "DEAD_LETTERED"]),
   AWAITING_APPROVAL: new Set(["QUEUED", "RUNNING", "CANCEL_REQUESTED", "TIMED_OUT", "FAILED"]),

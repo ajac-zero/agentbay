@@ -250,19 +250,10 @@ describe("dispatcher persistence", () => {
       opencodeSessionId: "session-1",
     })).resolves.toEqual({ applied: true, executionState: "RUNNING", attemptState: "RUNNING" });
 
-    await expect(store.transitionLeasedExecution({
-      executionId,
-      tenantId: "default",
-      attempt: lease.attempt,
-      fencingToken: lease.fencingToken,
-      leaseOwner: lease.leaseOwner,
-      expectedExecutionState: "RUNNING",
-      expectedAttemptState: "RUNNING",
-      targetExecutionState: "SUCCEEDED",
-      targetAttemptState: "SUCCEEDED",
-      actor: "dispatcher-a",
-      reason: "agent completed",
-      result: { output: "ok" },
+    await expect(store.completeLeasedExecutionTurn({
+      executionId, tenantId: "default", attempt: lease.attempt,
+      fencingToken: lease.fencingToken, leaseOwner: lease.leaseOwner,
+      actor: "dispatcher-a", reason: "agent completed", result: { output: "ok" },
     })).resolves.toEqual({ applied: true, executionState: "SUCCEEDED", attemptState: "SUCCEEDED" });
 
     const persisted = await executionSnapshot(executionId);
@@ -838,6 +829,119 @@ describe("dispatcher persistence", () => {
     });
   });
 
+  it("activates, exposes, and immediately cancels a policy-driven wait", async () => {
+    const bindingId = `waiting-${randomUUID()}`;
+    const eventType = `dev.agentbay.wait.${randomUUID()}`;
+    const createdAt = new Date().toISOString();
+    await store.publishBindingVersion({
+      bindingId, createdAt, disabledAt: null, enabled: true, id: randomUUID(), profile: { id: profileId, version: 1 },
+      tenantId: "default", triggerId: "dispatcher-test", version: 1,
+      definition: {
+        schemaVersion: 1, eventTypes: [eventType], filter: { all: [] },
+        prompt: { includeEvent: "none", literal: "Run and wait" }, workspace: { type: "empty" },
+        afterTurn: {
+          disposition: "wait",
+          wait: {
+            name: "work-item-lifecycle",
+            correlation: [{ name: "repositoryId", path: "/repository/id" }, { name: "workItem", path: "/issue/number" }],
+            deadlineSeconds: 600,
+          },
+        },
+      },
+    });
+    expect((await store.getBindingVersion("default", bindingId, 1))?.definition.afterTurn).toEqual({
+      disposition: "wait",
+      wait: {
+        name: "work-item-lifecycle",
+        correlation: [{ name: "repositoryId", path: "/repository/id" }, { name: "workItem", path: "/issue/number" }],
+        deadlineSeconds: 600,
+      },
+    });
+    const event = {
+      data: { repository: { id: 123 }, issue: { number: 42 } }, datacontenttype: "application/json",
+      id: randomUUID(), source: "/test/wait", specversion: "1.0" as const, type: eventType,
+    };
+    const admitted = await store.admitEvent({
+      admittedAt: createdAt, admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId: "dispatcher-test", event }),
+      event, internalEventId: randomUUID(), sourceDeduplicationKey: randomUUID(), tenantId: "default", triggerId: "dispatcher-test",
+    });
+    const executionId = admitted.executions[0]!.id;
+    const claimed = await startRunningExecution(executionId, "wait-worker", { workloadName: "wait-workload", opencodeSessionId: "wait-session" });
+    const completion = await store.completeLeasedExecutionTurn({
+      actor: "wait-worker", attempt: claimed.lease.attempt, executionId, fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner, reason: "turn completed", result: { output: "PR opened" }, tenantId: "default",
+    });
+    expect(completion).toMatchObject({ applied: true, attemptState: "SUCCEEDED", executionState: "WAITING", eventWaitId: expect.any(String) });
+    const waitingDetail = await store.getExecutionDetail("default", executionId);
+    expect(waitingDetail).toMatchObject({
+      state: "WAITING",
+      attempts: [{ attempt: 1, state: "SUCCEEDED", leaseExpiresAt: null }],
+      waits: [{
+        attempt: 1, name: "work-item-lifecycle", state: "ACTIVE",
+        correlation: { repositoryId: 123, workItem: 42 }, endedAt: null,
+      }],
+    });
+    expect(waitingDetail?.transitions).toEqual(expect.arrayContaining([expect.objectContaining({ fromState: "RUNNING", toState: "WAITING", attempt: 1 })]));
+
+    await expect(store.requestExecutionCancellation({
+      actor: "test", executionId, reason: "stop waiting", requestedAt: "2020-01-01T00:00:00.000Z", tenantId: "default", transitionId: randomUUID(),
+    })).resolves.toMatchObject({ outcome: "CANCELLED", state: "CANCELLED" });
+    expect(await store.getExecutionDetail("default", executionId)).toMatchObject({
+      state: "CANCELLED", waits: [{ state: "CANCELLED", endedAt: expect.any(String) }],
+    });
+  });
+
+  it("expires due waits and rejects stale turn completion fences", async () => {
+    const executionId = await queueExecution();
+    const claimed = await startRunningExecution(executionId, "ordinary-worker");
+    await expect(store.completeLeasedExecutionTurn({
+      actor: "stale", attempt: claimed.lease.attempt, executionId, fencingToken: "wrong",
+      leaseOwner: claimed.lease.leaseOwner, reason: "turn completed", result: null, tenantId: "default",
+    })).resolves.toEqual({ applied: false, reason: "LEASE_MISMATCH" });
+    await expect(store.completeLeasedExecutionTurn({
+      actor: "ordinary-worker", attempt: claimed.lease.attempt, executionId, fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner, reason: "turn completed", result: { ok: true }, tenantId: "default",
+    })).resolves.toEqual({ applied: true, attemptState: "SUCCEEDED", executionState: "SUCCEEDED" });
+    expect((await store.getExecutionDetail("default", executionId))?.waits).toEqual([]);
+
+    const waiting = await createWaitingExecution(store, profileId);
+    await pool.query("UPDATE agentbay_event_waits SET activated_at = clock_timestamp() - interval '2 seconds', deadline_at = clock_timestamp() - interval '1 second' WHERE execution_id = $1", [waiting]);
+    const expired = await store.expireDueEventWaits({ limit: 10 });
+    expect(expired).toEqual([expect.objectContaining({ executionId: waiting, eventWaitId: expect.any(String) })]);
+    const expiredDetail = await store.getExecutionDetail("default", waiting);
+    expect(expiredDetail).toMatchObject({ state: "TIMED_OUT", waits: [{ state: "EXPIRED", endedAt: expect.any(String) }] });
+    expect(expiredDetail?.transitions).toEqual(expect.arrayContaining([expect.objectContaining({ fromState: "WAITING", toState: "TIMED_OUT", attempt: null })]));
+  });
+
+  it("rolls back turn completion when configured correlation is not a bounded primitive", async () => {
+    const token = randomUUID();
+    const eventType = `dev.agentbay.invalid-wait.${token}`;
+    const createdAt = new Date().toISOString();
+    await store.publishBindingVersion({
+      bindingId: `invalid-wait-${token}`, createdAt, disabledAt: null, enabled: true, id: randomUUID(),
+      profile: { id: profileId, version: 1 }, tenantId: "default", triggerId: "dispatcher-test", version: 1,
+      definition: {
+        schemaVersion: 1, eventTypes: [eventType], filter: { all: [] }, prompt: { includeEvent: "none", literal: "Wait" },
+        workspace: { type: "empty" },
+        afterTurn: { disposition: "wait", wait: { name: "invalid", correlation: [{ name: "key", path: "/nested" }], deadlineSeconds: 600 } },
+      },
+    });
+    const event = { data: { nested: { value: token } }, datacontenttype: "application/json", id: token, source: "/test/wait", specversion: "1.0" as const, type: eventType };
+    const admitted = await store.admitEvent({
+      admittedAt: createdAt, admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId: "dispatcher-test", event }),
+      event, internalEventId: randomUUID(), sourceDeduplicationKey: token, tenantId: "default", triggerId: "dispatcher-test",
+    });
+    const executionId = admitted.executions[0]!.id;
+    const claimed = await startRunningExecution(executionId, `worker-${token}`);
+    await expect(store.completeLeasedExecutionTurn({
+      actor: `worker-${token}`, attempt: claimed.lease.attempt, executionId, fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner, reason: "turn completed", result: null, tenantId: "default",
+    })).rejects.toBeInstanceOf(PersistedExecutionCorruptionError);
+    expect(await store.getExecutionDetail("default", executionId)).toMatchObject({
+      state: "RUNNING", attempts: [{ state: "RUNNING" }], waits: [],
+    });
+  });
+
   async function queueExecution(): Promise<string> {
     const createdAt = new Date().toISOString();
     const sequence = ++eventSequence;
@@ -862,6 +966,34 @@ describe("dispatcher persistence", () => {
     const execution = result.executions[0];
     if (!execution) throw new Error("Expected event to queue an execution");
     return execution.id;
+  }
+
+  async function createWaitingExecution(store: PostgresRuntimeStore, profileId: string): Promise<string> {
+    const token = randomUUID();
+    const eventType = `dev.agentbay.expiring-wait.${token}`;
+    const createdAt = new Date().toISOString();
+    await store.publishBindingVersion({
+      bindingId: `expiring-${token}`, createdAt, disabledAt: null, enabled: true, id: randomUUID(),
+      profile: { id: profileId, version: 1 }, tenantId: "default", triggerId: "dispatcher-test", version: 1,
+      definition: {
+        schemaVersion: 1, eventTypes: [eventType], filter: { all: [] }, prompt: { includeEvent: "none", literal: "Wait" },
+        workspace: { type: "empty" },
+        afterTurn: { disposition: "wait", wait: { name: "expiring", correlation: [{ name: "key", path: "/key" }], deadlineSeconds: 600 } },
+      },
+    });
+    const event = { data: { key: token }, datacontenttype: "application/json", id: token, source: "/test/wait", specversion: "1.0" as const, type: eventType };
+    const admitted = await store.admitEvent({
+      admittedAt: createdAt, admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId: "dispatcher-test", event }),
+      event, internalEventId: randomUUID(), sourceDeduplicationKey: token, tenantId: "default", triggerId: "dispatcher-test",
+    });
+    const executionId = admitted.executions[0]!.id;
+    const claimed = await startRunningExecution(executionId, `worker-${token}`);
+    const completion = await store.completeLeasedExecutionTurn({
+      actor: `worker-${token}`, attempt: claimed.lease.attempt, executionId, fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner, reason: "turn completed", result: null, tenantId: "default",
+    });
+    if (!completion.applied || completion.executionState !== "WAITING") throw new Error("Expected waiting execution");
+    return executionId;
   }
 
   async function startRunningExecution(

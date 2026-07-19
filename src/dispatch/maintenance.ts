@@ -12,6 +12,7 @@ export type ExecutionMaintenanceOptions = {
   store: Pick<
     DispatcherExecutionStore,
     | "finalizeRequestedExecutionCancellation"
+    | "expireDueEventWaits"
     | "listRequestedCancellationCleanups"
     | "promoteDueExecutionRetries"
     | "recoverExpiredExecutionLeases"
@@ -43,6 +44,15 @@ export async function runExecutionMaintenanceLoop(options: ExecutionMaintenanceO
       if (finalized > 0) log.info("requested execution cancellations finalized", { count: finalized });
     } catch (error) {
       log.error("requested execution cancellation listing failed", { err: toErrCtx(error) });
+    }
+
+    if (options.signal.aborted) break;
+
+    try {
+      const expired = await options.store.expireDueEventWaits({ limit: options.batchSize });
+      if (expired.length > 0) log.info("due event waits expired", { count: expired.length });
+    } catch (error) {
+      log.error("event wait expiration failed", { err: toErrCtx(error) });
     }
 
     if (options.signal.aborted) break;

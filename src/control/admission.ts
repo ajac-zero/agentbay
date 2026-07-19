@@ -15,7 +15,16 @@ function primitiveEquals(left: JsonValue, right: JsonPrimitive): boolean {
 export function matchesFilterClause(data: JsonValue, clause: FilterClause): boolean {
   const resolution = resolveJsonPointer(data, clause.path);
   if (clause.op === "exists") return resolution.found === clause.value;
-  if (!resolution.found || (resolution.value !== null && typeof resolution.value === "object")) return false;
+  if (!resolution.found) return false;
+  if (clause.op === "contains" || clause.op === "containsAny") {
+    if (!Array.isArray(resolution.value)) return false;
+    const primitives = resolution.value.filter((value): value is JsonPrimitive => value === null || typeof value !== "object");
+    if (primitives.length !== resolution.value.length) return false;
+    return clause.op === "contains"
+      ? primitives.some((value) => primitiveEquals(value, clause.value))
+      : clause.values.some((expected) => primitives.some((value) => primitiveEquals(value, expected)));
+  }
+  if (resolution.value !== null && typeof resolution.value === "object") return false;
   if (clause.op === "eq") return primitiveEquals(resolution.value, clause.value);
   return clause.values.some((value) => primitiveEquals(resolution.value, value));
 }

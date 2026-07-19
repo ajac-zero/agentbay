@@ -27,7 +27,39 @@ describe("GitHub webhook API", () => {
       event: { id: "delivery-1", type: "com.github.issues.opened" },
       admittedAt: expect.any(String),
       internalEventId: expect.any(String),
+      revisionResolution: {
+        provider: "github",
+        installationId: 10,
+        repositoryId: 20,
+        repositoryFullName: "acme/widgets",
+        cloneUrl: "https://github.com/acme/widgets.git",
+        branch: "main",
+      },
     });
+  });
+
+  it("admits issue comments as normalized events", async () => {
+    const store = new FakeStore();
+    const payload = issuePayload();
+    const response = await webhook(testApp(store), {
+      ...payload,
+      action: "created",
+      comment: {
+        id: 30,
+        body: "Continue",
+        user: payload.sender,
+        created_at: "2026-07-18T10:01:00Z",
+        updated_at: "2026-07-18T10:01:00Z",
+      },
+    }, { event: "issue_comment" });
+
+    expect(response.status).toBe(202);
+    expect(store.lastAdmission?.event).toMatchObject({
+      type: "com.github.issue_comment.created",
+      subject: "issues/7",
+      data: { comment: { id: 30, body: "Continue" } },
+    });
+    expect(store.lastAdmission).not.toHaveProperty("revisionResolution");
   });
 
   it("replays the same delivery, conflicts on changed normalized payload, and permits disabled replay", async () => {

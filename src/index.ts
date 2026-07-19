@@ -9,6 +9,8 @@ import { createOpenApiApp, mountHealthRoute, mountOpenApiDocs } from "./openapi.
 import { createRuntimeStore } from "./runtime/store.js";
 import { createKubeConfig } from "./sandbox/client.js";
 import { SandboxClaimExecutionAttemptProvisioner } from "./sandbox/provisioner.js";
+import { GitHubAppRevisionResolver } from "./revision/github.js";
+import { RevisionResolutionWorker } from "./revision/worker.js";
 
 const config = loadConfig();
 const runtimeStore = await createRuntimeStore();
@@ -17,6 +19,25 @@ const provisioner = config.executionMaintenanceEnabled || config.dispatcherEnabl
   : undefined;
 const dispatcherController = new AbortController();
 const maintenanceController = new AbortController();
+const revisionController = new AbortController();
+const revisionTask = config.revisionResolverEnabled
+  ? new RevisionResolutionWorker({
+      store: runtimeStore,
+      resolver: new GitHubAppRevisionResolver({
+        appIdFile: config.githubAppIdFile!,
+        privateKeyFile: config.githubAppPrivateKeyFile!,
+      }),
+      workerId: config.revisionResolverWorkerId,
+      leaseDurationMs: config.revisionResolverLeaseDurationMs,
+      idlePollMs: config.revisionResolverIdlePollMs,
+      retryDelayMs: config.revisionResolverRetryDelayMs,
+      maxAttempts: config.revisionResolverMaxAttempts,
+      requestTimeoutMs: config.revisionResolverRequestTimeoutMs,
+    }).run(revisionController.signal)
+  : Promise.resolve();
+const revisionResolver = revisionTask.catch((error: unknown) => {
+  logger.error("revision resolution worker stopped unexpectedly", { error });
+});
 const maintenanceTask = config.executionMaintenanceEnabled
   ? runExecutionMaintenanceLoop({
       batchSize: config.executionMaintenanceBatchSize,
@@ -73,9 +94,10 @@ async function performShutdown(signal: string): Promise<void> {
   logger.info("shutdown received", { signal });
   maintenanceController.abort();
   dispatcherController.abort();
+  revisionController.abort();
   const serverClosed = new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   await serverClosed;
-  await Promise.all([maintenance, dispatcher]);
+  await Promise.all([maintenance, dispatcher, revisionResolver]);
   await runtimeStore.close();
 }
 

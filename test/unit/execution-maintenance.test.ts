@@ -20,6 +20,7 @@ describe("execution maintenance", () => {
       const store = {
         listRequestedCancellationCleanups: vi.fn().mockResolvedValue([]),
         finalizeRequestedExecutionCancellation: vi.fn().mockResolvedValue(undefined),
+        expireDueEventWaits: vi.fn().mockResolvedValue([]),
         recoverExpiredExecutionLeases: vi.fn().mockResolvedValue([]),
         promoteDueExecutionRetries: vi.fn().mockImplementation(async () => {
           controller.abort();
@@ -42,6 +43,7 @@ describe("execution maintenance", () => {
         maxAttempts: 3,
         retryDelayMs: 30_000,
       });
+      expect(store.expireDueEventWaits).toHaveBeenCalledWith({ limit: 25 });
       expect(store.promoteDueExecutionRetries).toHaveBeenCalledWith({ limit: 25 });
       expect(store.listRequestedCancellationCleanups.mock.invocationCallOrder[0]).toBeLessThan(
         store.recoverExpiredExecutionLeases.mock.invocationCallOrder[0]!,
@@ -63,6 +65,7 @@ describe("execution maintenance", () => {
       const store = {
         listRequestedCancellationCleanups: vi.fn().mockResolvedValue([]),
         finalizeRequestedExecutionCancellation: vi.fn().mockResolvedValue(undefined),
+        expireDueEventWaits: vi.fn().mockResolvedValue([]),
         recoverExpiredExecutionLeases: vi.fn().mockReturnValueOnce(firstRecovery).mockResolvedValue([]),
         promoteDueExecutionRetries: vi.fn().mockResolvedValue([]),
       };
@@ -111,6 +114,7 @@ describe("execution maintenance", () => {
     const store = {
       listRequestedCancellationCleanups: vi.fn().mockResolvedValue([failed, cleaned]),
       finalizeRequestedExecutionCancellation: vi.fn().mockResolvedValue({ ...cleaned, finalizedAt: new Date() }),
+      expireDueEventWaits: vi.fn().mockResolvedValue([]),
       recoverExpiredExecutionLeases: vi.fn().mockResolvedValue([]),
       promoteDueExecutionRetries: vi.fn().mockImplementation(async () => {
         controller.abort();
@@ -148,6 +152,7 @@ describe("execution maintenance", () => {
     const store = {
       listRequestedCancellationCleanups: vi.fn().mockRejectedValue(new Error("database unavailable")),
       finalizeRequestedExecutionCancellation: vi.fn(),
+      expireDueEventWaits: vi.fn().mockResolvedValue([]),
       recoverExpiredExecutionLeases: vi.fn().mockResolvedValue([]),
       promoteDueExecutionRetries: vi.fn().mockImplementation(async () => {
         controller.abort();

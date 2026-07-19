@@ -231,14 +231,17 @@ export class DispatcherWorker {
       heartbeat.assertOwned();
       if (!running) await markRunning(runnerResult.sessionId);
       heartbeat.assertOwned();
-      await this.#transitionOrLose(execution, {
-        expectedAttemptState: "RUNNING",
-        expectedExecutionState: "RUNNING",
-        reason: "execution completed",
+      const completion = await this.#options.store.completeLeasedExecutionTurn({
+        actor: this.#options.workerId,
+        attempt: execution.lease.attempt,
+        executionId: execution.executionId,
+        fencingToken: execution.lease.fencingToken,
+        leaseOwner: execution.lease.leaseOwner,
+        reason: "execution turn completed",
         result: boundedResult(runnerResult.result, this.#options.maxResultBytes),
-        targetAttemptState: "SUCCEEDED",
-        targetExecutionState: "SUCCEEDED",
+        tenantId: execution.tenantId,
       });
+      if (!completion.applied) await this.#handleRejectedTransition(execution, completion);
       terminal = true;
     } catch (error) {
       if (heartbeat.cancellationRequested || error instanceof ExecutionCancellationRequestedError) {

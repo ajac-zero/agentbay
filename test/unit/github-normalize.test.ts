@@ -36,7 +36,7 @@ const branch = (fullName: string, value: string) => ({
   repo: { ...repository(fullName), extra: true },
 });
 
-const input = (payload: unknown, event: "issues" | "pull_request" = "issues") => ({
+const input = (payload: unknown, event: "issues" | "issue_comment" | "pull_request" | "pull_request_review" | "pull_request_review_comment" = "issues") => ({
   event,
   deliveryId: "delivery-1",
   payloadSha256: "a".repeat(64),
@@ -122,6 +122,84 @@ describe("normalizeGitHubEvent", () => {
           base: { sha: "b".repeat(40), ref: "main", repository: { fullName: "acme/widgets" } },
         },
       },
+    });
+  });
+
+  it("normalizes issue comments with current labels for routing", () => {
+    const event = normalizeGitHubEvent(input({
+      ...common,
+      action: "created",
+      issue: { ...issue, labels: [{ name: "agentbay/state:ready" }, { name: "agentbay/difficulty:hard" }] },
+      comment: {
+        id: 91,
+        body: "Please continue",
+        user: actor(9, "maintainer"),
+        created_at: "2026-07-03T10:00:00Z",
+        updated_at: "2026-07-03T10:01:00Z",
+      },
+    }, "issue_comment"));
+
+    expect(event).toMatchObject({
+      type: "com.github.issue_comment.created",
+      subject: "issues/7",
+      data: {
+        issue: { labels: ["agentbay/difficulty:hard", "agentbay/state:ready"] },
+        comment: { id: 91, body: "Please continue", bodyTruncated: false, user: { login: "maintainer" } },
+      },
+    });
+  });
+
+  it("normalizes pull request reviews and review comments", () => {
+    const pullRequest = {
+      ...issue,
+      draft: false,
+      merged: false,
+      head: branch("contributor/widgets", "a".repeat(40)),
+      base: branch("acme/widgets", "b".repeat(40)),
+      requested_reviewers: [],
+      merged_at: null,
+    };
+    const review = normalizeGitHubEvent(input({
+      ...common,
+      action: "submitted",
+      pull_request: pullRequest,
+      review: {
+        id: 92,
+        body: "Needs changes",
+        user: actor(8, "reviewer"),
+        state: "CHANGES_REQUESTED",
+        commit_id: "a".repeat(40),
+        submitted_at: "2026-07-03T11:00:00Z",
+      },
+    }, "pull_request_review"));
+    expect(review).toMatchObject({
+      type: "com.github.pull_request_review.submitted",
+      subject: "pulls/7",
+      data: { review: { id: 92, state: "changes_requested", commitSha: "a".repeat(40) } },
+    });
+
+    const comment = normalizeGitHubEvent(input({
+      ...common,
+      action: "created",
+      pull_request: pullRequest,
+      comment: {
+        id: 93,
+        body: "Handle this edge case",
+        user: actor(8, "reviewer"),
+        path: "src/index.ts",
+        line: 12,
+        original_line: 10,
+        side: "RIGHT",
+        commit_id: "a".repeat(40),
+        in_reply_to_id: 90,
+        created_at: "2026-07-03T11:01:00Z",
+        updated_at: "2026-07-03T11:01:00Z",
+      },
+    }, "pull_request_review_comment"));
+    expect(comment).toMatchObject({
+      type: "com.github.pull_request_review_comment.created",
+      subject: "pulls/7",
+      data: { comment: { id: 93, path: "src/index.ts", line: 12, inReplyToId: 90, commitSha: "a".repeat(40) } },
     });
   });
 

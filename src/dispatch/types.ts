@@ -81,6 +81,28 @@ export type TransitionLeasedExecutionResult =
       reason: "NOT_FOUND" | "STATE_MISMATCH" | "LEASE_MISMATCH" | "LEASE_EXPIRED";
     };
 
+export type CompleteLeasedExecutionTurnCommand = {
+  executionId: string;
+  tenantId: string;
+  attempt: number;
+  fencingToken: string;
+  leaseOwner: string;
+  actor: string;
+  reason: string;
+  result: JsonValue;
+};
+
+export type CompleteLeasedExecutionTurnResult =
+  | { applied: true; attemptState: "SUCCEEDED"; executionState: "SUCCEEDED" | "WAITING" | "TIMED_OUT"; eventWaitId?: string }
+  | { applied: false; reason: "NOT_FOUND" | "STATE_MISMATCH" | "LEASE_MISMATCH" | "LEASE_EXPIRED" };
+
+export type ExpiredEventWait = {
+  eventWaitId: string;
+  executionId: string;
+  tenantId: string;
+  expiredAt: Date;
+};
+
 export type RecoveredExecutionLease = {
   executionId: string;
   tenantId: string;

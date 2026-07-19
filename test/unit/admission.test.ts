@@ -54,6 +54,10 @@ describe("binding matcher", () => {
     expect(matchesFilterClause(event.data, { path: "/count", op: "eq", value: "2" })).toBe(false);
     expect(matchesFilterClause(event.data, { path: "/active", op: "exists", value: true })).toBe(true);
     expect(matchesFilterClause(event.data, { path: "/missing", op: "exists", value: false })).toBe(true);
+    expect(matchesFilterClause({ labels: ["difficulty:easy", "state:ready"] }, { path: "/labels", op: "contains", value: "state:ready" })).toBe(true);
+    expect(matchesFilterClause({ labels: ["difficulty:easy"] }, { path: "/labels", op: "containsAny", values: ["difficulty:medium", "difficulty:easy"] })).toBe(true);
+    expect(matchesFilterClause({ labels: ["difficulty:easy"] }, { path: "/labels", op: "contains", value: "state:ready" })).toBe(false);
+    expect(matchesFilterClause({ labels: [{ name: "state:ready" }] }, { path: "/labels", op: "contains", value: "state:ready" })).toBe(false);
   });
 });
 

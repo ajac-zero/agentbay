@@ -79,6 +79,9 @@ describe("binding schemas", () => {
       }).success,
     ).toBe(true);
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: [{ path: "/active", op: "exists" }] } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: [{ path: "/labels", op: "contains", value: "ready" }] } }).success).toBe(true);
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: [{ path: "/labels", op: "containsAny", values: ["easy", "hard"] }] } }).success).toBe(true);
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: [{ path: "/labels", op: "containsAny", values: [] }] } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: Array(17).fill({ path: "", op: "exists", value: true }) } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: [{ path: "/bad~2path", op: "exists", value: true }] } }).success).toBe(false);
   });
@@ -103,5 +106,22 @@ describe("binding schemas", () => {
         revision: { commit: { path: "/after" } },
       },
     }).success).toBe(false);
+  });
+
+  it("accepts bounded policy-driven after-turn waits", () => {
+    const afterTurn = {
+      disposition: "wait",
+      wait: {
+        name: "developer-pr-lifecycle",
+        correlation: [{ name: "repositoryId", path: "/repository/id" }, { name: "issue", path: "/issue/number" }],
+        deadlineSeconds: 604_800,
+      },
+    } as const;
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, afterTurn }).success).toBe(true);
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, afterTurn: { ...afterTurn, disposition: "agent-decides" } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, afterTurn: { ...afterTurn, wait: { ...afterTurn.wait, correlation: [] } } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, afterTurn: { ...afterTurn, wait: { ...afterTurn.wait, correlation: [{ name: "x", path: "/x" }, { name: "x", path: "/y" }] } } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, afterTurn: { ...afterTurn, wait: { ...afterTurn.wait, deadlineSeconds: 0 } } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, afterTurn: { ...afterTurn, wait: { ...afterTurn.wait, extra: true } } }).success).toBe(false);
   });
 });

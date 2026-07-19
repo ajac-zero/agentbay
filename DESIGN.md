@@ -49,7 +49,10 @@ Agentbay is not:
 11. **Observability is part of the product.** Queue time, provisioning, model use, tool calls, outputs, and delivery are visible per execution.
 12. **Scale is controlled, not accidental.** Queue depth does not translate directly into unbounded Pod creation.
 13. **Execution creation is binding-only.** Connectors and callers admit normalized events; enabled immutable binding versions are the sole mechanism that creates executions. There is no direct execution-submission path.
-14. **Delegation is event-driven.** An agent delegates by using ordinary tools or MCP servers to cause an externally observable effect that a connector normalizes as a new event. Another binding may consume that event; Agentbay does not require a special delegation MCP server or tool.
+14. **Delegation is event-driven.** An agent delegates by using ordinary tools or MCP servers to cause an externally observable effect that a connector normalizes as a new event. Another binding may consume that event; Agentbay does not require a source-specific delegation MCP server or tool.
+15. **Ingress data is policy-neutral.** Connectors authenticate deliveries and project bounded source data into events. Core matching, correlation, creation, and wake behavior operate on arbitrary event data and do not encode issues, pull requests, labels, comments, reviews, or other vendor concepts.
+16. **Waiting is durable; hibernation is optional.** Postgres owns event waits and continuation state. Suspending a Kubernetes sandbox may reduce resource use while waiting, but must never be the only record of what can wake an execution.
+17. **Workflow policy is configuration.** Repository-specific routing, labels, roles, model selection, and review loops belong in immutable profiles and bindings. Reference factories live under `examples/`; they are not hard-coded control-plane behavior.
 
 ## 3. Domain Model
 
@@ -119,6 +122,12 @@ Deliveries are durable records with retry and dead-letter behavior separate from
 
 The ownership and policy boundary for profiles, connections, triggers, bindings, executions, quotas, and costs. Even if the first release is single-tenant, all durable records should carry `tenant_id` so multi-tenancy does not require redesigning identity and scheduling.
 
+### 3.11 EventWait
+
+A durable, bounded subscription registered by an execution that has reached a safe continuation boundary. It records exact event types, generic correlation and filter predicates over normalized event data, one-shot or repeated consumption policy, deadline, and continuation input policy. A matching event may wake an existing execution instead of, or in addition to, creating new executions.
+
+Event waits are core records and contain no connector-specific fields. A GitHub configuration may correlate on a repository and pull-request number; a Linear configuration may correlate on a team and issue identifier; both compile to the same bounded event predicates.
+
 ## 4. V1 Configuration Example
 
 The implemented V1 API publishes each resource separately. The following documents show the request bodies; route parameters supply profile and binding IDs.
@@ -141,7 +150,7 @@ definition:
     warmPool: none
   connections:
     - id: github-production
-      sidecar: github-mcp
+      sidecar: github-token-broker
   permissions:
     onRequest: fail
   timeoutSeconds: 1800
@@ -185,6 +194,37 @@ definition:
 ```
 
 The profile and binding references are exact versions; V1 has no `latest` selector. Binding prompts are literal, not templates. When `includeEvent` is `data` or `envelope`, Agentbay appends canonical JSON between untrusted-event delimiters. V1 supports empty workspaces and public HTTPS Git workspaces selected from event `data` by RFC 6901 pointers. Git revisions must be full immutable 40-character SHA-1 commit object IDs, and repository DNS must resolve exclusively to public IPv4 addresses. Admission persists the canonical repository URL and commit on the execution; retries never resolve selectors or mutable refs again.
+
+GitHub issue deliveries require trusted pre-admission enrichment because they
+contain the default branch name but not its commit. If an enabled,
+filter-matching binding selects
+`/repository/defaultBranchRevision/commit`, ingress atomically persists the
+unaltered normalized event and one `EventRevisionResolution` request, then
+returns without creating executions. A fenced worker performs GitHub network I/O
+outside database transactions using a selected-repository installation token
+with `contents:read`. It validates repository ID, full name, canonical clone
+URL, and default branch before resolving the branch ref. Completion atomically
+persists the lowercase full SHA, marks the request succeeded, and creates the
+matching executions from a trusted event projection. The original event data
+and admission hash are never rewritten.
+
+Resolution requests move through `PENDING`, `LEASED`, `RETRY_WAIT`, `SUCCEEDED`,
+or `DEAD_LETTERED`. Lease tokens fence stale workers; expired leases are
+claimable, and bounded attempts prevent permanent provider failures from
+looping forever. Exact delivery replay returns the persisted event and its
+current execution set without creating another request. Bindings are selected
+at successful resolution time, and the recorded commit means the branch head at
+resolution time. Agentbay does not attempt event-time ref reconstruction.
+Execution timeouts begin at successful resolution, not webhook ingestion.
+
+An immutable binding may define an `afterTurn` wait policy. Successful agent
+turns never choose this disposition themselves. The fenced completion
+transaction loads the execution's exact binding version, resolves bounded
+primitive correlation values from the trusted originating event, marks the
+attempt `SUCCEEDED`, inserts one active `EventWait`, and moves the execution
+directly from `RUNNING` to `WAITING`. The wait policy's deadline becomes the
+workflow deadline while waiting; active compute attempts remain bounded by the
+deadline under which they were claimed. Waiting executions have no active lease.
 
 ## 5. High-Level Architecture
 
@@ -273,11 +313,21 @@ Admission performs the following transaction boundary:
 
 Connectors must not launch workloads directly.
 
-The execution-creation invariant is strict: a connector or caller submits a normalized event to an enabled trigger, and admission evaluates enabled immutable binding versions. The transaction may persist zero or more executions, one for each matching binding version. No other API, connector, agent tool, or internal caller creates executions.
+The execution-creation invariant is strict: a connector or caller submits a normalized event to an enabled trigger, and admission evaluates enabled immutable binding versions. The transaction may persist zero or more executions, one for each matching create binding version, and may wake zero or more executions through matching wake bindings and active waits. No connector, source-specific agent tool, or internal caller creates or wakes executions outside this admission transaction.
+
+The target admission transaction atomically persists the event, resolves replays, creates binding-selected executions, claims one-shot matching waits, appends wake events to their executions, queues continuations, and writes outbox records. Replay returns the original create and wake results without rematching current configuration.
 
 ### 6.2 Binding matching
 
-The matcher selects enabled binding versions by tenant, trigger, and exact event-type equality, then evaluates every V1 filter clause against event `data`. A filter contains at most 16 conjunctive clauses. Each clause uses an RFC 6901 JSON Pointer and one of `eq` with a JSON primitive, `in` with one to 32 JSON primitives, or `exists` with a boolean. Missing paths and object or array values cannot satisfy `eq` or `in`. This deliberately bounded language is deterministic and does not execute code.
+The matcher selects enabled binding versions by tenant, trigger, and exact event-type equality, then evaluates every filter clause against event `data`. V1 supports at most 16 conjunctive clauses using RFC 6901 JSON Pointers and `eq`, `in`, `exists`, `contains`, or `containsAny`. Array predicates match only bounded arrays of JSON primitives, so configuration can route on projected collections such as labels without introducing connector-specific matching code. The language remains deterministic, size-bounded, non-recursive, and incapable of executing code.
+
+Bindings have a configured disposition:
+
+- **create:** create a new execution from an exact profile version, as implemented by V1.
+- **wake:** consume a matching active wait and queue a continuation of its execution.
+- **create-and-wake:** allow both behaviors when repository policy explicitly requires them.
+
+Wake bindings additionally define generic correlation projections from event data and the waiting execution's durable context. They cannot name a Kubernetes workload or OpenCode session and cannot bypass an execution's registered wait policy.
 
 The match result records the binding version used. Later edits do not change already planned work.
 
@@ -448,6 +498,13 @@ differs from the base repository. Public Git workspace bindings therefore use
 `/pullRequest/head/repository/cloneUrl` and `/pullRequest/head/sha`, not mutable
 refs or top-level convenience fields.
 
+The GitHub connector roadmap also normalizes `issue_comment`,
+`pull_request_review`, and `pull_request_review_comment` deliveries. These
+events project bounded comment or review data, sender, repository, issue or pull
+request identity, and exact commit identity where GitHub supplies it. They are
+ordinary normalized events: only bindings decide whether they begin work, wake
+waiting work, or are ignored.
+
 Rules for event data:
 
 - Preserve vendor payloads by reference when they are needed for audit or future processing.
@@ -529,7 +586,7 @@ Build connectors in this order:
 
 1. `webhook.generic` trigger and destination
 2. `schedule.cron` trigger
-3. `github.app.webhook` trigger, normalizing issue and pull-request deliveries
+3. `github.app.webhook` trigger, normalizing issue, pull-request, comment, and review deliveries
 4. GitHub Check and comment destinations
 5. `grafana.alert` trigger and incident-note destination
 6. `chat.message` trigger and message destination
@@ -597,6 +654,7 @@ Control and failure states include:
 
 ```text
 RETRY_WAIT
+WAITING
 AWAITING_APPROVAL
 CANCEL_REQUESTED
 CANCELLED
@@ -692,6 +750,14 @@ submitting another prompt. An idle session succeeds only with a persisted
 user/assistant exchange. Attempts lost before those checkpoints remain
 non-adoptable and follow normal failed-attempt retry semantics.
 
+### 10.6 Durable waits and continuations
+
+An immutable binding policy may declare an after-turn wait boundary. After the current prompt has completed and externally committed work has been checkpointed, Agentbay persists an `EventWait`, records correlation context, and moves the execution to `WAITING`. The agent does not select this disposition. This is distinct from crash recovery: a continuation may submit a new prompt because the preceding prompt completed at a configured lifecycle boundary; crash adoption never guesses whether a prompt should be replayed.
+
+When a normalized event matches a wake binding and an active wait, admission atomically consumes the one-shot wait, appends the event to execution history, and moves the execution back to `QUEUED`. The next attempt either resumes a retained runtime or starts from a durable summary or workspace checkpoint according to profile policy. Wait deadlines produce a configured timeout continuation or `TIMED_OUT`; cancellation removes active waits atomically.
+
+Wait correlation is data-driven and source-independent. The core stores bounded values and predicates, not GitHub issue numbers or review-thread identifiers. Multiple matching deliveries are handled with durable idempotency, one-shot claims, and configured coalescing rather than process-local subscriptions.
+
 ## 11. Execution Plane
 
 ### 11.1 Dispatcher
@@ -737,66 +803,43 @@ Sandbox templates may include authenticated API, proxy, or MCP sidecars that exp
 
 Agentbay injects resolved, non-secret metadata through one canonical `AGENTBAY_CONNECTIONS` envelope per selected sidecar. Its JSON representation is `{"refs":["github-production"],"schemaVersion":1,"tenantId":"default"}`; `refs` contains only that sidecar's sorted connection IDs. The envelope is the complete authorized set for that sidecar and attempt; consumers must not merge it with ambient defaults. Credentials remain outside the envelope. A static compatibility deployment references an operator-managed Kubernetes Secret as a volume mounted only into the selected sidecar. OpenCode and the workspace materializer receive no credential mount, and Agentbay neither reads Secret values nor receives Kubernetes RBAC for Secrets.
 
-The initial concrete connection sidecar is a localhost-only remote MCP server
-for one selected github.com repository. OpenCode connects to
-`http://127.0.0.1:8082/mcp` with MCP OAuth disabled. The sidecar reads a GitHub
-App ID, installation ID, and private key from three mounted Secret files, checks
-the complete `AGENTBAY_CONNECTIONS` grant, and exchanges App credentials for a
-short-lived installation token internally. The token and private key never
-cross the MCP boundary or enter OpenCode. Its bounded tool slice exposes
-`issue_comment`, `branch_create`, `contents_put`, and `pull_request_create`. The
-App is installed on one selected repository with repository **Issues: write**,
-**Contents: write**, and **Pull requests: write**, and without **Workflows**
-permission. The sidecar fixes its upstream to github.com, validates every
-owner/repository argument against its configured repository, and has no
-workflow mutation policy. It has no `/workspace` mount: OpenCode passes bounded
-complete file content through MCP rather than giving the sidecar checkout access.
-It implements MCP 2025-11-25 for compatibility with the OpenCode 1.14.50
-runtime pinned by `opencode-sandbox.Dockerfile`.
+The GitHub integration uses GitHub's official `github-mcp-server`, pinned to an
+immutable release image digest, rather than an Agentbay-specific GitHub MCP
+implementation. The official server runs in stateless HTTP mode on loopback and
+registers an explicit operator-owned `--tools` allow-list. OpenCode connects to
+it through an Agentbay GitHub token broker on `http://127.0.0.1:8083/` with MCP
+OAuth disabled. The broker is an HTTP credential proxy, not an MCP server: it
+defines no tools and does not interpret MCP messages.
 
-Pull-request creation is an explicit, non-transactional sequence:
+The broker is the selected profile connection sidecar. It validates the complete
+`AGENTBAY_CONNECTIONS` grant, reads a GitHub App ID, installation ID, and private
+key from a sidecar-only Secret mount, and mints short-lived installation tokens
+restricted to one configured repository and an exact permission set. It verifies
+GitHub's returned repository and permissions before caching a token, refreshes
+before expiry, and injects the current token into each request forwarded to the
+official server. The private key and installation token never enter OpenCode,
+its configuration, workspace, prompts, or tool results. The official MCP
+container receives neither the App Secret nor the Agentbay grant.
 
-1. `branch_create` creates a branch at an exact base commit SHA.
-2. Serial `contents_put` calls provide the full file content and the optimistic
-   expected blob SHA, or `null` when creating a file.
-3. `pull_request_create` opens the pull request after all writes succeed.
+Effective GitHub capability is the intersection of three controls:
 
-Each `contents_put` creates one commit for one file and accepts at most 256 KiB.
-The sidecar blocks `.github/workflows`, cross-repository access, workflow
-mutation, pull-request merge, batch commits, and generic GitHub API access. A
-failure can leave the branch with only some commits.
+1. GitHub App installation repository selection and permissions.
+2. Official server registration-time `--tools`, `--exclude-tools`, and optional
+   read-only or lockdown policy.
+3. OpenCode deny-by-default `github_*` permissions with exact per-agent allows.
 
-All four write tools require a caller-derived stable idempotency key for each
-logical write. Reusing a key concurrently for different input within one
-sidecar process returns `IDEMPOTENCY_CONFLICT`. Branch and content operations use
-natural durable desired state in GitHub: a branch name at the requested commit
-and a path containing the requested blob, with the expected blob SHA retained
-as an optimistic precondition. Comments and pull requests carry authenticated
-markers in GitHub. These mechanisms support reconciliation after a process
-restart, but cross-process exclusion remains best effort rather than exactly
-once.
+OpenCode permissions reduce the selected agent's exposed tools but are not the
+sole security boundary. Containers in a Pod share loopback, so software-factory
+roles must use separate SandboxTemplates with exact server-side allow-lists. Tool
+names and the official image digest are versioned deployment inputs and must be
+tested when upgrading `github-mcp-server`.
 
-No write tool blindly retries a mutation whose outcome is ambiguous. After a
-timeout, transport failure, 401, 5xx response, or another response that may
-follow an applied mutation, it reads GitHub and reports success only if the
-desired state is present. Otherwise it preserves the ambiguous failure for a
-later reconciliation attempt. Reads may refresh the installation token and
-retry once on 401. A mutation 401 instead triggers that one token refresh and
-read-only reconciliation; the mutation is not resubmitted. Existing state that
-is incompatible with the requested branch, content precondition, pull request,
-or marker returns `STATE_CONFLICT` and is never overwritten implicitly.
-
-Marker replay is best-effort at-least-once recovery, not a uniqueness guarantee.
-For pull requests, the sidecar searches up to the newest 1,000 pull requests for
-an authenticated matching marker. A marker beyond that window is treated as
-absent and may result in a duplicate. It scans the newest 2,000 issue comments,
-with the same behavior outside that window. Overlapping sidecars or attempts can
-both fail to observe a marker before writing and therefore create duplicates
-even when they use the same stable key. The marker HMAC key is derived from the
-GitHub App private key. Rotating the private key therefore makes markers written
-with the old key unauthenticatable and may produce duplicates. Operators
-preserve the old key and sidecars through the replay window or accept duplicates
-during rotation.
+The broker never automatically replays a request after a 401, timeout, transport
+failure, or 5xx because an MCP request may contain a mutation whose outcome is
+ambiguous. A 401 invalidates the cached token for the next request and is returned
+to OpenCode. Idempotency and reconciliation remain properties of the official
+GitHub tool and caller workflow; Agentbay does not claim exactly-once GitHub
+mutations.
 
 These sidecars provide ordinary tool access to external systems; they are not a privileged execution-creation channel. If an agent uses a standard tool to create an issue, publish a message, enqueue work, or perform another external effect, the corresponding source connector may later normalize that effect into an event. An enabled binding can then create a delegated execution. No Agentbay-specific delegation MCP is required.
 
@@ -815,7 +858,21 @@ Cold-start improvements include:
 
 Warm pools are an optimization. Correctness and security cannot depend on reuse. Any reused sandbox must be reset and validated before receiving another tenant execution.
 
-### 11.5 Massive scale
+### 11.5 Suspension and hibernation
+
+Agent Sandbox `v0.5.2` provides PVC-based manual suspend/resume on the core `agents.x-k8s.io/v1beta1` `Sandbox` through `spec.operatingMode: Running | Suspended`. Suspension terminates the Pod while preserving PVC-backed state; it does not preserve process memory. Automatic inactivity suspension, resume on traffic, scale-to-zero policy, and deeper archival remain upstream roadmap work.
+
+`SandboxClaim` does not currently expose `operatingMode`; it identifies the underlying Sandbox in status. Agentbay should retain the claim/template boundary and experimentally validate patching the owned core Sandbox rather than moving profile authors to raw Sandbox objects. This requires explicit RBAC, ownership checks, readiness handling, and compatibility tests against the pinned upstream release. Agentbay should migrate its integration and examples toward `v1beta1`; upstream marks `v1alpha1` deprecated.
+
+For a durable wait, profile policy chooses one resource strategy:
+
+- `release`: delete the sandbox and continue later from durable context.
+- `retain`: keep the sandbox running for a short wait.
+- `suspend`: suspend a PVC-backed sandbox and resume it before continuation.
+
+Postgres remains authoritative in every mode. A suspended Sandbox without an active durable wait is an orphan; an active wait without a Sandbox remains valid and can continue through reconstruction.
+
+### 11.6 Massive scale
 
 Queue depth is absorbed independently from execution concurrency. Capacity control occurs at multiple levels:
 
@@ -950,6 +1007,7 @@ Postgres stores:
 - Triggers, bindings, and destinations
 - Events and deduplication records
 - Executions, attempts, leases, and state transitions
+- Event waits, correlations, continuation inputs, and deadlines
 - Permission requests and approvals
 - Result delivery records
 - Transactional outbox entries
@@ -992,6 +1050,7 @@ Every external side effect has a reconciler:
 - **Execution reconciler:** detects expired leases and schedules recovery.
 - **Kubernetes reconciler:** compares active attempts to workloads and removes or repairs orphans.
 - **Timeout reconciler:** requests cancellation for overdue executions.
+- **Wait reconciler:** expires overdue waits and reconciles retained or suspended sandbox policy.
 - **Delivery reconciler:** retries due result deliveries and dead-letters exhausted work.
 - **Retention reconciler:** deletes expired payloads, logs, artifacts, and workspaces.
 
@@ -1011,6 +1070,7 @@ Every execution is a traceable product object. The UI and API expose:
 - Tool calls and permission decisions
 - Logs, patches, reports, and other artifacts
 - Retries, cancellation, timeout, and recovery history
+- Active waits, correlations, wake events, and continuation history
 - Destination delivery state and external links
 
 OpenTelemetry propagates `tenant_id`, `event_id`, `execution_id`, `attempt_id`, `binding_id`, `profile_version`, and `delivery_id` across ingress, database, bus, Kubernetes, OpenCode, and destinations.
@@ -1022,6 +1082,7 @@ Required platform metrics include:
 - Binding match count
 - Queue age and depth by tenant/priority
 - Execution state counts and duration histograms
+- Active wait count, wait age, and wake latency
 - Provisioning latency and failure rate
 - Active sandbox count and capacity saturation
 - OpenCode error and disconnect rate
@@ -1127,7 +1188,20 @@ Later, one global control plane may route to multiple execution clusters. Each c
 
 **Exit criterion:** A firing alert can trigger bounded diagnosis and publish results to multiple operational systems.
 
-### Phase 4: Scale, policy, and tenancy
+### Phase 4: Event-driven software factories
+
+- GitHub comment and review ingress
+- Generic bounded array predicates for label and tag routing
+- Create, wake, and create-and-wake binding dispositions
+- Durable event waits, correlation, continuation input, and deadlines
+- Configurable release, retain, or suspend wait policy
+- Agent Sandbox `v1beta1` migration and PVC-based suspend/resume validation
+- Profile-specific MCP tool allow-lists rather than source-specific core tools
+- A complete `examples/github-software-factory` configuration with triage, label-selected developer profiles, review, and reciprocal continuation loops
+
+**Exit criterion:** Repository configuration can route an issue through triage, label-selected development, pull-request review, and event-driven developer/reviewer continuations without GitHub workflow concepts in Agentbay core.
+
+### Phase 5: Scale, policy, and tenancy
 
 - Tenant-aware RBAC and quotas
 - Priority and fairness scheduling
@@ -1145,7 +1219,7 @@ Later, one global control plane may route to multiple execution clusters. Each c
 These decisions should be resolved by implementation evidence rather than hidden assumptions:
 
 1. **Initial durable bus:** NATS JetStream versus the deployment environment's managed queue.
-2. **Future filter language:** Whether needs beyond V1's bounded RFC 6901 primitive clauses justify a larger declarative language.
+2. **Future filter language:** Whether bounded primitive and array predicates remain sufficient or justify a larger declarative language.
 3. **Profile document format:** API-native JSON only or a first-class YAML authoring and GitOps workflow.
 4. **Execution result schema:** Minimum common structure that remains useful across code, operations, and general agents.
 5. **OpenCode recovery:** Which failures can reconnect to a session versus requiring a new attempt.
@@ -1153,7 +1227,8 @@ These decisions should be resolved by implementation evidence rather than hidden
 7. **Multi-cluster protocol:** Push from control plane or pull from a cluster-local execution gateway.
 8. **Policy implementation:** Built-in validation, CEL, OPA, or a combination.
 9. **Artifact log format:** Plain objects, OpenTelemetry logs, or a queryable log backend plus archival storage.
-10. **Conversation semantics:** Whether related chat messages create separate executions, append events to one execution, or start an explicit long-running workflow.
+10. **Wait declaration protocol:** Whether agents return a structured lifecycle result or use a generic Agentbay lifecycle MCP to register a durable wait.
+11. **Sandbox suspension control:** Whether Agentbay may safely patch a claim-owned core Sandbox until `SandboxClaim` exposes operating mode directly.
 
 ## 22. Glossary
 
@@ -1165,6 +1240,7 @@ These decisions should be resolved by implementation evidence rather than hidden
 | **Connector** | Pluggable source or destination integration around the stable event/execution core. |
 | **Destination** | Configuration for publishing an execution result to an external system. |
 | **Event** | Immutable normalized input represented by a CloudEvents envelope. |
+| **EventWait** | Durable, bounded subscription that allows a matching admitted event to continue an existing execution. |
 | **Execution** | Durable record and scheduling unit for one agent invocation. |
 | **Attempt** | One leased runtime attempt to complete an execution. |
 | **Result** | Source-independent structured outcome of an execution. |

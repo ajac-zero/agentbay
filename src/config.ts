@@ -19,6 +19,15 @@ export type Config = {
   executionMaintenanceIntervalMs: number;
   executionMaxAttempts: number;
   executionRetryDelayMs: number;
+  revisionResolverEnabled: boolean;
+  revisionResolverIdlePollMs: number;
+  revisionResolverLeaseDurationMs: number;
+  revisionResolverMaxAttempts: number;
+  revisionResolverRequestTimeoutMs: number;
+  revisionResolverRetryDelayMs: number;
+  revisionResolverWorkerId: string;
+  githubAppIdFile?: string;
+  githubAppPrivateKeyFile?: string;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -35,6 +44,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     executionMaintenanceIntervalMs: readTimerDelay(env.AGENTBAY_EXECUTION_MAINTENANCE_INTERVAL_MS, 5_000),
     executionMaxAttempts: readPositiveInteger(env.AGENTBAY_EXECUTION_MAX_ATTEMPTS, 3),
     executionRetryDelayMs: readNonnegativeInteger(env.AGENTBAY_EXECUTION_RETRY_DELAY_MS, 30_000),
+    revisionResolverEnabled: readStrictBoolean(env.AGENTBAY_REVISION_RESOLVER_ENABLED, false),
+    revisionResolverIdlePollMs: readTimerDelay(env.AGENTBAY_REVISION_RESOLVER_IDLE_POLL_MS, 500),
+    revisionResolverLeaseDurationMs: readPositiveInteger(env.AGENTBAY_REVISION_RESOLVER_LEASE_DURATION_MS, 60_000),
+    revisionResolverMaxAttempts: readPositiveInteger(env.AGENTBAY_REVISION_RESOLVER_MAX_ATTEMPTS, 5),
+    revisionResolverRequestTimeoutMs: readTimerDelay(env.AGENTBAY_REVISION_RESOLVER_REQUEST_TIMEOUT_MS, 30_000),
+    revisionResolverRetryDelayMs: readNonnegativeInteger(env.AGENTBAY_REVISION_RESOLVER_RETRY_DELAY_MS, 30_000),
+    revisionResolverWorkerId: env.AGENTBAY_REVISION_RESOLVER_WORKER_ID ?? env.HOSTNAME ?? `agentbay-${process.pid}`,
+    githubAppIdFile: emptyToUndefined(env.AGENTBAY_GITHUB_APP_ID_FILE),
+    githubAppPrivateKeyFile: emptyToUndefined(env.AGENTBAY_GITHUB_PRIVATE_KEY_FILE),
     kubeNamespace: env.AGENTBAY_KUBE_NAMESPACE ?? env.POD_NAMESPACE ?? "agents",
     opencodeDirectory: env.AGENTBAY_OPENCODE_DIRECTORY ?? "/workspace",
     opencodePort: readNumber(env.AGENTBAY_OPENCODE_PORT, 4096),
@@ -43,6 +61,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   };
   if (config.dispatcherRenewIntervalMs >= config.dispatcherLeaseDurationMs) {
     throw new Error("AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS must be less than AGENTBAY_DISPATCHER_LEASE_DURATION_MS");
+  }
+  if (config.revisionResolverEnabled && (!config.githubAppIdFile || !config.githubAppPrivateKeyFile)) {
+    throw new Error("AGENTBAY_GITHUB_APP_ID_FILE and AGENTBAY_GITHUB_PRIVATE_KEY_FILE are required when revision resolution is enabled");
+  }
+  if (config.revisionResolverRequestTimeoutMs >= config.revisionResolverLeaseDurationMs) {
+    throw new Error("AGENTBAY_REVISION_RESOLVER_REQUEST_TIMEOUT_MS must be less than AGENTBAY_REVISION_RESOLVER_LEASE_DURATION_MS");
   }
   return config;
 }

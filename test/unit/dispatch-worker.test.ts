@@ -29,12 +29,8 @@ describe("DispatcherWorker", () => {
         targetExecutionState: "RUNNING",
         workloadName: "workload-1",
       },
-      {
-        expectedExecutionState: "RUNNING",
-        result: { text: "complete" },
-        targetExecutionState: "SUCCEEDED",
-      },
     ]);
+    expect(fixture.store.completeLeasedExecutionTurn).toHaveBeenCalledWith(expect.objectContaining({ result: { text: "complete" } }));
     expect(fixture.provisioner.release).toHaveBeenCalledWith(
       expect.objectContaining({ attempt: 1, executionId: "execution-1" }),
       expect.any(AbortSignal),
@@ -61,12 +57,8 @@ describe("DispatcherWorker", () => {
       expect.any(AbortSignal),
     );
     expect(fixture.runner.run).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session-existing" }));
-    expect(fixture.store.transitions).toMatchObject([{
-      expectedAttemptState: "RUNNING",
-      expectedExecutionState: "RUNNING",
-      targetAttemptState: "SUCCEEDED",
-      targetExecutionState: "SUCCEEDED",
-    }]);
+    expect(fixture.store.transitions).toEqual([]);
+    expect(fixture.store.completeLeasedExecutionTurn).toHaveBeenCalledOnce();
   });
 
   it("retries an ordinary provisioning failure", async () => {
@@ -276,16 +268,12 @@ describe("DispatcherWorker", () => {
 
   it("acknowledges cancellation when the success transition loses a state race", async () => {
     const fixture = workerFixture();
-    vi.mocked(fixture.store.transitionLeasedExecution).mockResolvedValueOnce({
-      applied: true,
-      attemptState: "RUNNING",
-      executionState: "RUNNING",
-    }).mockResolvedValueOnce({ applied: false, reason: "STATE_MISMATCH" });
+    vi.mocked(fixture.store.completeLeasedExecutionTurn).mockResolvedValueOnce({ applied: false, reason: "STATE_MISMATCH" });
 
     await fixture.worker.runOne();
 
     expect(fixture.store.acknowledgeLeasedExecutionCancellation).toHaveBeenCalledOnce();
-    expect(fixture.store.transitionLeasedExecution).toHaveBeenCalledTimes(2);
+    expect(fixture.store.transitionLeasedExecution).toHaveBeenCalledTimes(1);
     expect(fixture.provisioner.release).toHaveBeenCalledOnce();
     expect(vi.mocked(fixture.provisioner.release).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(fixture.store.acknowledgeLeasedExecutionCancellation).mock.invocationCallOrder[0]!,
@@ -320,6 +308,8 @@ function workerFixture(overrides: { renew?: ExecutionLeaseRenewalResult } = {}) 
     listRequestedCancellationCleanups: vi.fn().mockResolvedValue([]),
     finalizeRequestedExecutionCancellation: vi.fn().mockResolvedValue(undefined),
     renewExecutionLease: vi.fn().mockResolvedValue(overrides.renew ?? "RENEWED"),
+    completeLeasedExecutionTurn: vi.fn().mockResolvedValue({ applied: true as const, attemptState: "SUCCEEDED" as const, executionState: "SUCCEEDED" as const }),
+    expireDueEventWaits: vi.fn().mockResolvedValue([]),
     transitionLeasedExecution: vi.fn(async (command: TransitionLeasedExecutionCommand): Promise<TransitionLeasedExecutionResult> => {
       transitions.push(command);
       return {
