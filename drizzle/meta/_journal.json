@@ -57,6 +57,13 @@
       "when": 1784474987930,
       "tag": "0007_true_black_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784478183622,
+      "tag": "0008_red_stature",
+      "breakpoints": true
     }
   ]
 }

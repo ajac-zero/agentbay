@@ -89,7 +89,7 @@ export type ExecutionStateTransition = {
   traceContext: Record<string, string>;
 };
 
-export type EventWaitState = "ACTIVE" | "CANCELLED" | "EXPIRED" | "CONSUMED";
+export type EventWaitState = "PENDING_CONTEXT" | "ACTIVE" | "CANCELLED" | "EXPIRED" | "CONSUMED";
 
 export type ExecutionEventWait = {
   id: string;
