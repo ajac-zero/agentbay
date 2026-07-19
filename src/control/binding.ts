@@ -10,8 +10,20 @@ const primitiveSchema: z.ZodType<JsonPrimitive> = z.union([z.null(), z.boolean()
 export const filterClauseSchema = z.discriminatedUnion("op", [
   z.object({ path: jsonPointerSchema, op: z.literal("eq"), value: primitiveSchema }).strict(),
   z.object({ path: jsonPointerSchema, op: z.literal("in"), values: z.array(primitiveSchema).min(1).max(32) }).strict(),
+  z.object({ path: jsonPointerSchema, op: z.literal("contains"), value: primitiveSchema }).strict(),
+  z.object({ path: jsonPointerSchema, op: z.literal("containsAny"), values: z.array(primitiveSchema).min(1).max(32) }).strict(),
   z.object({ path: jsonPointerSchema, op: z.literal("exists"), value: z.boolean() }).strict(),
 ]);
+
+export const afterTurnSchema = z.object({
+  disposition: z.literal("wait"),
+  wait: z.object({
+    name: simpleIdSchema,
+    correlation: z.array(z.object({ name: simpleIdSchema, path: jsonPointerSchema }).strict()).min(1).max(16)
+      .refine((items) => new Set(items.map((item) => item.name)).size === items.length, "correlation names must be unique"),
+    deadlineSeconds: z.number().int().min(1).max(30 * 24 * 60 * 60),
+  }).strict(),
+}).strict();
 
 export const bindingDefinitionSchema = z
   .object({
@@ -25,6 +37,7 @@ export const bindingDefinitionSchema = z
       })
       .strict(),
     workspace: bindingWorkspaceSchema,
+    afterTurn: afterTurnSchema.optional(),
   })
   .strict();
 
@@ -45,6 +58,7 @@ export const publishedBindingVersionSchema = z
 
 export type VersionedRef = z.infer<typeof versionedRefSchema>;
 export type FilterClause = z.infer<typeof filterClauseSchema>;
+export type AfterTurnPolicy = z.infer<typeof afterTurnSchema>;
 export type BindingDefinition = z.infer<typeof bindingDefinitionSchema>;
 export type PublishedBindingVersion = z.infer<typeof publishedBindingVersionSchema>;
 

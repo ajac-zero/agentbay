@@ -7,8 +7,9 @@ import type { DispatcherExecutionStore } from "../dispatch/store.js";
 import type { TriggerStore } from "../control/trigger.js";
 import type { BindingStore } from "../control/binding.js";
 import type { ConnectionStore } from "../connection/index.js";
+import type { RevisionResolutionStore } from "../revision/types.js";
 
-export type RuntimeStore = ExecutionStore & TriggerStore & BindingStore & ConnectionStore & EventAdmissionStore & OutboxStore & DispatcherExecutionStore & {
+export type RuntimeStore = ExecutionStore & TriggerStore & BindingStore & ConnectionStore & EventAdmissionStore & OutboxStore & DispatcherExecutionStore & RevisionResolutionStore & {
   close: () => Promise<void>;
 };
 

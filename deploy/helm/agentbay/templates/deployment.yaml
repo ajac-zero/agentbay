@@ -79,10 +79,38 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: AGENTBAY_REVISION_RESOLVER_ENABLED
+              value: {{ .Values.orchestrator.revisionResolver.enabled | quote }}
+            - name: AGENTBAY_REVISION_RESOLVER_IDLE_POLL_MS
+              value: {{ .Values.orchestrator.revisionResolver.idlePollMs | quote }}
+            - name: AGENTBAY_REVISION_RESOLVER_LEASE_DURATION_MS
+              value: {{ .Values.orchestrator.revisionResolver.leaseDurationMs | quote }}
+            - name: AGENTBAY_REVISION_RESOLVER_RETRY_DELAY_MS
+              value: {{ .Values.orchestrator.revisionResolver.retryDelayMs | quote }}
+            - name: AGENTBAY_REVISION_RESOLVER_MAX_ATTEMPTS
+              value: {{ .Values.orchestrator.revisionResolver.maxAttempts | quote }}
+            - name: AGENTBAY_REVISION_RESOLVER_REQUEST_TIMEOUT_MS
+              value: {{ .Values.orchestrator.revisionResolver.requestTimeoutMs | quote }}
+            - name: AGENTBAY_REVISION_RESOLVER_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- if .Values.orchestrator.revisionResolver.enabled }}
+            - name: AGENTBAY_GITHUB_APP_ID_FILE
+              value: {{ printf "%s/app-id" .Values.orchestrator.revisionResolver.mountPath | quote }}
+            - name: AGENTBAY_GITHUB_PRIVATE_KEY_FILE
+              value: {{ printf "%s/private-key.pem" .Values.orchestrator.revisionResolver.mountPath | quote }}
+            {{- end }}
             {{- include "agentbay.databaseEnv" . | trim | nindent 12 }}
             {{- with .Values.orchestrator.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if .Values.orchestrator.revisionResolver.enabled }}
+          volumeMounts:
+            - name: github-app-revision-resolver
+              mountPath: {{ .Values.orchestrator.revisionResolver.mountPath | quote }}
+              readOnly: true
+          {{- end }}
           envFrom:
             {{- if $useChartSecret }}
             - secretRef:
@@ -104,6 +132,18 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- if .Values.orchestrator.revisionResolver.enabled }}
+      volumes:
+        - name: github-app-revision-resolver
+          secret:
+            secretName: {{ required "orchestrator.revisionResolver.credentialsSecret is required when revision resolution is enabled" .Values.orchestrator.revisionResolver.credentialsSecret | quote }}
+            defaultMode: 0440
+            items:
+              - key: app-id
+                path: app-id
+              - key: private-key.pem
+                path: private-key.pem
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

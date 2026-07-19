@@ -1,0 +1,123 @@
+# Helm values for revision resolution and the three role-isolated templates referenced by profiles.yaml.
+# Replace both illustrative images and repository/App settings before deployment.
+orchestrator:
+  revisionResolver:
+    enabled: true
+    idlePollMs: 500
+    leaseDurationMs: 60000
+    retryDelayMs: 30000
+    maxAttempts: 5
+    requestTimeoutMs: 30000
+    credentialsSecret: example-github-app-credentials
+    mountPath: /var/run/agentbay/github-app
+
+sandboxTemplates:
+  enabled: true
+  templates:
+    - &baseTemplate
+      name: opencode-developer-template
+      image: &sandboxImage
+        repository: ghcr.io/example/opencode-sandbox
+        tag: latest
+        pullPolicy: IfNotPresent
+      workspace: &workspace
+        type: emptyDir
+        size: 1Gi
+      networkPolicy: &networkPolicy
+        ingressFromOrchestrator: true
+        extraIngress: []
+        egress:
+          allowDNS: true
+          allowInternetExceptPrivate: true
+          extra: []
+      sidecars:
+        - &developerMcp
+          name: github-mcp
+          image: ghcr.io/github/github-mcp-server@sha256:2b0c48b070f61e9d3969269ead600f62d00fb237b60ac849ef3d166ee7de9ad3
+          args:
+            - http
+            - --listen-host=127.0.0.1
+            - --port=8082
+            - --tools=issue_read,get_file_contents,search_code,get_commit,list_commits,create_branch,push_files,create_pull_request,pull_request_read,actions_list,actions_get,get_job_logs
+          securityContext: &restricted
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile: { type: RuntimeDefault }
+        - &developerBroker
+          name: github-token-broker
+          image: ghcr.io/example/github-token-broker@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          env: &developerBrokerEnv
+            - { name: AGENTBAY_GITHUB_TENANT, value: default }
+            - { name: AGENTBAY_GITHUB_CONNECTION, value: github-production }
+            - { name: AGENTBAY_GITHUB_REPOSITORY_ID, value: "123456789" }
+            - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "contents:write,issues:read,pull_requests:write,actions:read" }
+          startupProbe: &brokerStartupProbe
+            exec:
+              command: [/nodejs/bin/node, -e, "fetch('http://127.0.0.1:8083/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 30
+          readinessProbe: &brokerReadinessProbe
+            exec:
+              command: [/nodejs/bin/node, -e, "fetch('http://127.0.0.1:8083/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe: &brokerLivenessProbe
+            exec:
+              command: [/nodejs/bin/node, -e, "fetch('http://127.0.0.1:8083/livez',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          securityContext: *restricted
+          volumeMounts: &credentialMount
+            - { name: github-app-credentials, mountPath: /var/run/agentbay/github-app, readOnly: true }
+      extraVolumes: &credentialVolume
+        - name: github-app-credentials
+          secret:
+            secretName: example-github-app-credentials
+            defaultMode: 0440
+    - <<: *baseTemplate
+      name: opencode-triager-template
+      image: *sandboxImage
+      workspace: *workspace
+      networkPolicy: *networkPolicy
+      sidecars:
+        - <<: *developerMcp
+          args:
+            - http
+            - --listen-host=127.0.0.1
+            - --port=8082
+            - --tools=search_issues,issue_read,issue_write,add_issue_comment,get_label,list_label
+        - <<: *developerBroker
+          env:
+            - { name: AGENTBAY_GITHUB_TENANT, value: default }
+            - { name: AGENTBAY_GITHUB_CONNECTION, value: github-production }
+            - { name: AGENTBAY_GITHUB_REPOSITORY_ID, value: "123456789" }
+            - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "issues:write" }
+          volumeMounts: *credentialMount
+      extraVolumes: *credentialVolume
+    - <<: *baseTemplate
+      name: opencode-reviewer-template
+      image: *sandboxImage
+      workspace: *workspace
+      networkPolicy: *networkPolicy
+      sidecars:
+        - <<: *developerMcp
+          args:
+            - http
+            - --listen-host=127.0.0.1
+            - --port=8082
+            - --tools=pull_request_read,get_file_contents,get_commit,pull_request_review_write,add_comment_to_pending_review,add_reply_to_pull_request_comment,actions_get,actions_list,get_job_logs
+        - <<: *developerBroker
+          env:
+            - { name: AGENTBAY_GITHUB_TENANT, value: default }
+            - { name: AGENTBAY_GITHUB_CONNECTION, value: github-production }
+            - { name: AGENTBAY_GITHUB_REPOSITORY_ID, value: "123456789" }
+            - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "contents:read,pull_requests:write,actions:read" }
+          volumeMounts: *credentialMount
+      extraVolumes: *credentialVolume

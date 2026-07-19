@@ -205,18 +205,19 @@ sandboxTemplates:
           allowInternetExceptPrivate: false
       sidecars:
         - name: github-mcp
-          image: example/github-mcp-sidecar@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          image: ghcr.io/github/github-mcp-server@sha256:2b0c48b070f61e9d3969269ead600f62d00fb237b60ac849ef3d166ee7de9ad3
+          args: [http, --listen-host=127.0.0.1, --port=8082, "--tools=issue_read,issue_write"]
+        - name: github-token-broker
+          image: example/github-token-broker@sha256:1111111111111111111111111111111111111111111111111111111111111111
           env:
             - name: AGENTBAY_GITHUB_TENANT
               value: default
             - name: AGENTBAY_GITHUB_CONNECTION
               value: github-production
-            - name: AGENTBAY_GITHUB_REPOSITORY_OWNER
-              value: example-org
-            - name: AGENTBAY_GITHUB_REPOSITORY_NAME
-              value: example-repository
             - name: AGENTBAY_GITHUB_REPOSITORY_ID
               value: "123456789"
+            - name: AGENTBAY_GITHUB_PERMISSIONS
+              value: issues:write
             - name: AGENTBAY_GITHUB_APP_ID_FILE
               value: /var/run/agentbay/github-app/app-id
             - name: AGENTBAY_GITHUB_INSTALLATION_ID_FILE
@@ -228,7 +229,7 @@ sandboxTemplates:
               command:
                 - /nodejs/bin/node
                 - -e
-                - fetch('http://127.0.0.1:8082/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+                - fetch('http://127.0.0.1:8083/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
             timeoutSeconds: 2
             failureThreshold: 30
           readinessProbe:
@@ -236,14 +237,14 @@ sandboxTemplates:
               command:
                 - /nodejs/bin/node
                 - -e
-                - fetch('http://127.0.0.1:8082/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+                - fetch('http://127.0.0.1:8083/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
             timeoutSeconds: 2
           livenessProbe:
             exec:
               command:
                 - /nodejs/bin/node
                 - -e
-                - fetch('http://127.0.0.1:8082/livez',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+                - fetch('http://127.0.0.1:8083/livez',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
             timeoutSeconds: 2
           securityContext:
             allowPrivilegeEscalation: false
@@ -283,21 +284,21 @@ test "$(grep -c 'mountPath: /var/run/agentbay/github-app' "$work_dir/connection-
 test "$(grep -c 'mountPath: /workspace' "$work_dir/connection-sidecar.yaml")" -eq 2
 test "$(grep -c 'secretName: example-github-app-credentials' "$work_dir/connection-sidecar.yaml")" -eq 1
 test "$(grep -c 'name: github-mcp' "$work_dir/connection-sidecar.yaml")" -eq 1
-grep -q 'example/github-mcp-sidecar@sha256:1111111111111111111111111111111111111111111111111111111111111111' "$work_dir/connection-sidecar.yaml"
+test "$(grep -c 'name: github-token-broker' "$work_dir/connection-sidecar.yaml")" -eq 1
+grep -q 'ghcr.io/github/github-mcp-server@sha256:2b0c48b070f61e9d3969269ead600f62d00fb237b60ac849ef3d166ee7de9ad3' "$work_dir/connection-sidecar.yaml"
+grep -q 'example/github-token-broker@sha256:1111111111111111111111111111111111111111111111111111111111111111' "$work_dir/connection-sidecar.yaml"
+grep -q -- '--tools=issue_read' "$work_dir/connection-sidecar.yaml"
 test "$(grep -c 'name: AGENTBAY_GITHUB_.*_FILE' "$work_dir/connection-sidecar.yaml")" -eq 3
 test "$(grep -c 'path: app-id\|path: installation-id\|path: private-key.pem' "$work_dir/connection-sidecar.yaml")" -eq 3
 grep -q 'name: AGENTBAY_GITHUB_TENANT' "$work_dir/connection-sidecar.yaml"
 grep -q 'name: AGENTBAY_GITHUB_CONNECTION' "$work_dir/connection-sidecar.yaml"
-grep -q 'name: AGENTBAY_GITHUB_REPOSITORY_OWNER' "$work_dir/connection-sidecar.yaml"
-grep -q 'name: AGENTBAY_GITHUB_REPOSITORY_NAME' "$work_dir/connection-sidecar.yaml"
 grep -q 'name: AGENTBAY_GITHUB_REPOSITORY_ID' "$work_dir/connection-sidecar.yaml"
-grep -q 'value: example-org' "$work_dir/connection-sidecar.yaml"
-grep -q 'value: example-repository' "$work_dir/connection-sidecar.yaml"
+grep -q 'name: AGENTBAY_GITHUB_PERMISSIONS' "$work_dir/connection-sidecar.yaml"
 grep -q 'value: "123456789"' "$work_dir/connection-sidecar.yaml"
 test "$(grep -c 'exec:' "$work_dir/connection-sidecar.yaml")" -eq 3
 test "$(grep -c -- '- /nodejs/bin/node' "$work_dir/connection-sidecar.yaml")" -eq 3
-test "$(grep -c 'http://127.0.0.1:8082/readyz' "$work_dir/connection-sidecar.yaml")" -eq 2
-test "$(grep -c 'http://127.0.0.1:8082/livez' "$work_dir/connection-sidecar.yaml")" -eq 1
+test "$(grep -c 'http://127.0.0.1:8083/readyz' "$work_dir/connection-sidecar.yaml")" -eq 2
+test "$(grep -c 'http://127.0.0.1:8083/livez' "$work_dir/connection-sidecar.yaml")" -eq 1
 if grep -q 'httpGet:' "$work_dir/connection-sidecar.yaml"; then
   echo "Loopback sidecar probe unexpectedly rendered as httpGet" >&2
   exit 1

@@ -16,7 +16,13 @@ import { sha256, verifyGitHubSignature } from "./signature.js";
 const TENANT_ID = "default";
 const MAX_BODY_BYTES = 128 * 1024;
 const DUMMY_WEBHOOK_SECRET = "agentbay-github-webhook-dummy-secret-v1";
-const supportedEvents = new Set<GitHubEventName>(["issues", "pull_request"]);
+const supportedEvents = new Set<GitHubEventName>([
+  "issues",
+  "issue_comment",
+  "pull_request",
+  "pull_request_review",
+  "pull_request_review_comment",
+]);
 
 export type GitHubWebhookApiStore = TriggerStore & EventAdmissionStore;
 
@@ -92,6 +98,7 @@ export function mountGitHubWebhookApi(
     }
     if (!event) return trigger.enabled ? context.body(null, 204) : context.json({ error: "Trigger not found" }, 404);
 
+    const revisionResolution = eventName === "issues" ? githubRevisionResolution(event.data) : undefined;
     await store.admitEvent({
       tenantId: TENANT_ID,
       triggerId: triggerID,
@@ -100,9 +107,31 @@ export function mountGitHubWebhookApi(
       sourceDeduplicationKey: sourceDeliveryIdempotencyKey(triggerID, delivery),
       admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId: triggerID, event } as JsonValue),
       admittedAt: new Date().toISOString(),
+      ...(revisionResolution ? { revisionResolution } : {}),
     });
     return context.body(null, 202);
   }), webhookValidationHook as never);
+}
+
+function githubRevisionResolution(data: JsonValue) {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return undefined;
+  const repository = data.repository;
+  const installationId = data.installationId;
+  if (repository === null || typeof repository !== "object" || Array.isArray(repository)
+    || typeof installationId !== "number" || !Number.isSafeInteger(installationId) || installationId < 1
+    || typeof repository.id !== "number" || !Number.isSafeInteger(repository.id) || repository.id < 1
+    || typeof repository.fullName !== "string" || typeof repository.cloneUrl !== "string"
+    || typeof repository.defaultBranch !== "string") {
+    return undefined;
+  }
+  return {
+    provider: "github" as const,
+    installationId,
+    repositoryId: repository.id,
+    repositoryFullName: repository.fullName,
+    cloneUrl: repository.cloneUrl,
+    branch: repository.defaultBranch,
+  };
 }
 
 const webhookValidationHook: Hook<unknown, any, any, any> = (result, context) => {

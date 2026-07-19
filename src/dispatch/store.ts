@@ -10,10 +10,17 @@ import type {
   RequestedCancellationCleanup,
   TransitionLeasedExecutionCommand,
   TransitionLeasedExecutionResult,
+  CompleteLeasedExecutionTurnCommand,
+  CompleteLeasedExecutionTurnResult,
+  ExpiredEventWait,
 } from "./types.js";
 import { isValidDispatcherExecutionTransition } from "./states.js";
 
 export interface DispatcherExecutionStore {
+  completeLeasedExecutionTurn(command: CompleteLeasedExecutionTurnCommand): Promise<CompleteLeasedExecutionTurnResult>;
+
+  expireDueEventWaits(input: { limit: number }): Promise<ExpiredEventWait[]>;
+
   claimNextQueuedExecution(input: {
     leaseOwner: string;
     leaseDurationMs: number;

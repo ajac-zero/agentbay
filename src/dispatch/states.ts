@@ -43,7 +43,6 @@ const dispatcherTransitionKeys: ReadonlySet<string> = new Set([
   transitionKey("PROVISIONING", "FAILED", "LEASED", "FAILED"),
   transitionKey("PROVISIONING", "RETRY_WAIT", "LEASED", "FAILED"),
   transitionKey("PROVISIONING", "TIMED_OUT", "LEASED", "TIMED_OUT"),
-  transitionKey("RUNNING", "SUCCEEDED", "RUNNING", "SUCCEEDED"),
   transitionKey("RUNNING", "FAILED", "RUNNING", "FAILED"),
   transitionKey("RUNNING", "RETRY_WAIT", "RUNNING", "FAILED"),
   transitionKey("RUNNING", "TIMED_OUT", "RUNNING", "TIMED_OUT"),

@@ -215,6 +215,17 @@ orchestrator:
     leaseDurationMs: 60000
     # -- Lease renewal interval; must be less than leaseDurationMs.
     renewIntervalMs: 20000
+  revisionResolver:
+    # -- Resolve GitHub issue default-branch revisions before binding admission.
+    enabled: false
+    idlePollMs: 500
+    leaseDurationMs: 60000
+    retryDelayMs: 30000
+    maxAttempts: 5
+    requestTimeoutMs: 30000
+    # -- Existing Secret containing `app-id` and `private-key.pem` keys.
+    credentialsSecret: ""
+    mountPath: /var/run/agentbay/github-app
   # -- Extra orchestrator env vars expressed as a Kubernetes `env` list. For
   # -- sensitive values, use `valueFrom.secretKeyRef`; for example, expose a
   # -- GitHub webhook secret here so it is available only to the orchestrator
@@ -411,13 +422,10 @@ sandboxTemplates:
       # -- authz/proxy sidecars that expose model, API, or MCP gateways on
       # -- localhost. Connection profiles may select only sidecars already
       # -- owned by this template and use cold sandboxes (`warmPool: none`).
-      # -- See the chart README for a production-hardened four-tool GitHub MCP
-      # -- sidecar example. Its selected-repository GitHub App needs Issues,
-      # -- Contents, and Pull requests write, with no Workflows permission. Pin
-      # -- sidecar images by digest and mount its credential volume only on that
-      # -- sidecar, never through `extraVolumeMounts`. Do not mount `workspace`
-      # -- or `/workspace` into the GitHub sidecar; OpenCode sends bounded full
-      # -- file content through MCP.
+      # -- See the chart README for the official GitHub MCP server plus Agentbay
+      # -- installation-token broker example. Pin both images by digest and mount
+      # -- the GitHub App credential volume only on the broker, never through
+      # -- `extraVolumeMounts` or into OpenCode/the official server.
       sidecars: []
       # -- Additional volumes appended to the sandbox Pod. Use with `sidecars`
       # -- for projected tokens, config, sidecar-specific state, or a static

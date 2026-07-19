@@ -156,7 +156,7 @@ A profile grants connections by mapping each connection ID to a
 sidecar that must already be owned by its immutable sandbox template:
 
 ```json
-"connections": [{ "id": "github-production", "sidecar": "github-mcp" }]
+"connections": [{ "id": "github-production", "sidecar": "github-token-broker" }]
 ```
 
 At dispatch, Agentbay resolves the records and injects one canonical, non-secret
@@ -210,6 +210,53 @@ fetches the exact commit without a shell, checks it out detached, and verifies
 `HEAD` before OpenCode starts. Git workspaces require a cold sandbox (`warmPool:
 none`); private repository credentials, submodules, Git LFS, and warm-pool Git
 materialization are not implemented yet.
+
+Bindings may declare a policy-controlled after-turn wait:
+
+```json
+"afterTurn": {
+  "disposition": "wait",
+  "wait": {
+    "name": "work-item-lifecycle",
+    "correlation": [
+      { "name": "repositoryId", "path": "/repository/id" },
+      { "name": "workItem", "path": "/issue/number" }
+    ],
+    "deadlineSeconds": 604800
+  }
+}
+```
+
+After a successful agent turn, the fenced completion transaction loads the
+execution's immutable binding, resolves the declared correlation values from the
+trusted originating event, marks the attempt `SUCCEEDED`, creates one active
+`EventWait`, and moves the execution from `RUNNING` to `WAITING`. The agent
+cannot choose or alter this disposition. Waiting has no active attempt lease;
+the current default resource behavior releases the SandboxClaim. Cancellation
+closes the active wait and immediately cancels the execution. Maintenance
+expires overdue waits as `TIMED_OUT`. Execution details expose complete wait
+history alongside attempts and transitions.
+
+Wake bindings and continuation submission are not implemented yet. Until they
+are, use `afterTurn` only when durable waiting and cancellation/expiry behavior
+is desired; no ingress can currently consume an active wait.
+
+GitHub issue events do not contain a default-branch commit. A developer binding
+can select `/repository/defaultBranchRevision/commit`. When such a binding
+matches, Agentbay commits the original normalized event and a durable resolution
+request, returns `202`, and creates no execution yet. The revision worker mints
+a short-lived installation token restricted to the event repository with
+`contents:read`, verifies repository ID, full name, clone URL, and default
+branch, resolves the branch to a full commit SHA, then persists the resolution
+and creates all matching executions atomically.
+
+Resolution uses fenced leases, retries transient failures, and dead-letters the
+request after the configured attempt limit. Exact webhook replays reuse the
+original event, pending request, or completed executions and never re-resolve a
+completed revision. The original webhook data and admission hash remain
+unchanged. Enabled bindings are selected when resolution completes. The SHA is
+the default-branch head at resolution time, not a reconstruction of the ref at
+webhook emission time.
 
 Callers, connectors, the CLI, and tests all invoke agents through generic
 normalized CloudEvent trigger ingress. `POST /v1/triggers/:triggerID/events`
@@ -265,13 +312,22 @@ App private key, installation token, or Git credential. V1 Git workspaces remain
 limited to public HTTPS repositories and do not use the webhook secret for
 cloning or GitHub API access.
 
+Enable issue revision resolution with
+`AGENTBAY_REVISION_RESOLVER_ENABLED=true` and mount the GitHub App ID and RSA
+private key as files referenced by `AGENTBAY_GITHUB_APP_ID_FILE` and
+`AGENTBAY_GITHUB_PRIVATE_KEY_FILE`. The delivery supplies the installation ID.
+These credentials remain in the orchestrator and are never added to an
+execution, workspace, or OpenCode environment. This resolves immutable
+revisions for public workspaces; private repository materialization remains
+separate future work.
+
 An agent delegates by using ordinary tools or MCP servers to cause an external
 effect that a connector later normalizes into another event. Bindings consume
 that event exactly like any other; no special Agentbay delegation MCP is
-required. Template-owned MCP sidecars provide standard policy-bounded tool
-access. The included GitHub MCP sidecar exposes the bounded `issue_comment`,
-`branch_create`, `contents_put`, and `pull_request_create` tools through a GitHub
-App without exposing an installation token to OpenCode.
+required. Template-owned sidecars provide standard policy-bounded tool access.
+The GitHub integration uses the official `github-mcp-server` behind a localhost
+token broker. The broker exchanges a GitHub App private key for short-lived,
+repository-scoped installation tokens without exposing credentials to OpenCode.
 Result destinations are separate: they deliver an existing execution's result
 and are not an execution-creation mechanism.
 
@@ -346,8 +402,8 @@ Git clone credentials separate.
 The optional Helm AI gateway authorization path lets sandbox workloads use
 short-lived Kubernetes identity instead of receiving model-provider keys.
 
-For static connection credentials, operators may put a Secret volume on the
-template-owned connection sidecar only. Do not mount that volume into OpenCode,
+For connection credentials, operators may put a Secret volume on the
+template-owned credential broker only. Do not mount that volume into OpenCode,
 the workspace materializer, or Agentbay. Agentbay reads connection metadata, not
 Secret values, and its chart RBAC intentionally grants no `secrets` access.
 Rotate by updating the operator-managed Secret and starting new cold sandboxes;
@@ -356,8 +412,8 @@ sandboxes. Connection records are create/read-only in V1 and do not provide onli
 revocation. A sidecar is inside the sandbox trust boundary:
 it can observe requests sent to it and misuse every credential it mounts, so use
 one narrowly scoped identity per purpose and account for the resulting blast
-radius. A future broker can replace static mounts with short-lived,
-audience-bound credentials without changing the profile-to-sidecar contract.
+radius. The GitHub token broker implements short-lived installation tokens
+without changing the generic profile-to-sidecar contract.
 
 ## Deployment
 
@@ -370,80 +426,38 @@ docker build -f opencode-sandbox.Dockerfile -t ghcr.io/your-org/opencode-sandbox
 docker push ghcr.io/your-org/opencode-sandbox:latest
 ```
 
-Build the dependency-free GitHub MCP sidecar separately. Publish the image and
+Build the dependency-free GitHub token broker separately. Publish the image and
 deploy the immutable digest, not a mutable tag:
 
 ```bash
-docker build -f github-mcp-sidecar.Dockerfile \
-  -t ghcr.io/your-org/github-mcp-sidecar:v1 .
-docker push ghcr.io/your-org/github-mcp-sidecar:v1
+docker build -f github-token-broker.Dockerfile \
+  -t ghcr.io/your-org/github-token-broker:v1 .
+docker push ghcr.io/your-org/github-token-broker:v1
 docker inspect --format='{{index .RepoDigests 0}}' \
-  ghcr.io/your-org/github-mcp-sidecar:v1
+  ghcr.io/your-org/github-token-broker:v1
 ```
 
-The image copies only `github-mcp-sidecar/*.mjs`, runs `server.mjs` directly as
-fixed UID/GID 65532 on a distroless Node 24 image with CA certificates, and is
-compatible with a read-only root filesystem. The sidecar reads
+The image copies only `github-token-broker/*.mjs`, runs `index.mjs` directly as
+fixed UID/GID 65532 on a distroless Node 24 image, and is compatible with a
+read-only root filesystem. The broker reads
 `AGENTBAY_GITHUB_APP_ID_FILE`, `AGENTBAY_GITHUB_INSTALLATION_ID_FILE`, and
-`AGENTBAY_GITHUB_PRIVATE_KEY_FILE`, restricts calls to the configured
-`AGENTBAY_GITHUB_REPOSITORY_OWNER`, `AGENTBAY_GITHUB_REPOSITORY_NAME`, and
-`AGENTBAY_GITHUB_REPOSITORY_ID`, binds localhost port 8082, serves MCP at
-`/mcp`, and reports readiness at `/readyz` and liveness at `/livez`. It accepts
-only the connection refs in injected
-`AGENTBAY_CONNECTIONS`. Its GitHub upstream is fixed to github.com; there is no
-GitHub host override.
+`AGENTBAY_GITHUB_PRIVATE_KEY_FILE`, mints tokens for
+`AGENTBAY_GITHUB_REPOSITORY_ID` and `AGENTBAY_GITHUB_PERMISSIONS`, binds
+localhost port 8083, and reports readiness at `/readyz` and liveness at
+`/livez`. It accepts only the connection refs in `AGENTBAY_CONNECTIONS` and
+forwards MCP traffic to the official server on loopback port 8082.
 
 Configure the OpenCode profile with a remote MCP entry at
-`http://127.0.0.1:8082/mcp` and `oauth: false`. Configure a GitHub App with
+`http://127.0.0.1:8083/` and `oauth: false`. Configure a GitHub App with
 selected-repository permissions **Issues: write**, **Contents: write**, and
 **Pull requests: write**, no **Workflows** permission, and install it on one
 selected repository. Mount its App ID, installation ID, and private key Secret
-files only into `github-mcp`. The sidecar has no `/workspace` mount. Installation
-tokens are minted and used inside the sidecar and never leave it. The sidecar's
-MCP 2025-11-25 support is compatible with the OpenCode 1.14.50 version pinned by
-`opencode-sandbox.Dockerfile`.
-
-The four-tool boundary supports comments and narrowly scoped pull-request
-creation. OpenCode sends bounded complete file content through MCP; the sidecar
-does not read the checkout. For a change, call `branch_create` with the exact
-base commit SHA, then make serial `contents_put` calls using the current expected
-blob SHA for updates or `null` for creates, then call `pull_request_create`.
-Each `contents_put` creates one commit for one file, and each file is limited to
-256 KiB. The sequence may stop after a partial set of commits.
-
-Every write tool requires a stable `idempotency_key` that the caller reuses for
-the same logical write. A key reused concurrently for different input in one
-sidecar process fails with `IDEMPOTENCY_CONFLICT`. Branch and content writes also use
-GitHub state as their durable desired state: the named branch must point to the
-requested commit, and the file must have the requested blob content while its
-expected SHA remains an optimistic precondition. Pull requests and comments
-persist authenticated idempotency markers in GitHub. This durable
-reconciliation survives sidecar restarts, but coordination across sidecar
-processes remains best effort rather than exactly once.
-
-Write tools never blindly retry a mutation after a timeout, transport failure,
-401, 5xx response, or any other outcome that may have applied it. They read
-GitHub and return success only when the desired state is present; otherwise they
-return the ambiguous failure for the caller to reconcile later. A read may
-refresh the installation token and retry once after a 401. A mutation that gets
-a 401 uses that one refresh for reconciliation reads and does not resubmit the
-mutation. A different existing branch, file precondition, pull request, or other
-incompatible state fails with `STATE_CONFLICT` rather than being overwritten.
-
-The sidecar cannot merge pull requests, mutate workflows, access another
-repository, or write `.github/workflows`. It intentionally provides no generic
-GitHub API, Git transport, batch commit, or arbitrary repository filesystem
-access.
-
-Marker replay is best-effort at-least-once recovery, not a uniqueness guarantee.
-The sidecar scans up to the newest 1,000 pull requests for a matching PR marker;
-a marker beyond that window is treated as absent and may produce a duplicate.
-It scans only the newest 2,000 issue comments before posting, with the same
-behavior beyond that window. Overlapping sidecars or attempts can both miss a
-marker and create duplicates even with a stable key. The marker HMAC key is
-derived from the GitHub App private key, so rotating that key makes old markers
-unauthenticatable and may also cause duplicates. Preserve the old key and
-sidecars through the replay window, or explicitly tolerate those duplicates.
+files only into `github-token-broker`; the official MCP server and OpenCode get
+no credential mount. Pin the official `github-mcp-server` image by digest and
+start it with exact `--tools` for the role. Deny `github_*` globally in OpenCode
+and allow only exact official tool names on the selected agent. The broker never
+automatically replays failed MCP requests because mutations may have ambiguous
+outcomes.
 See the Helm
 [`README`](deploy/helm/agentbay/README.md) and
 [`sandbox-template.yaml`](deploy/examples/sandbox-template.yaml) for complete

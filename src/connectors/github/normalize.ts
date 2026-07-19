@@ -4,6 +4,7 @@ import { normalizedCloudEventSchema, type NormalizedCloudEvent } from "../../exe
 const BODY_LIMIT_BYTES = 16 * 1024;
 const supportedActions: Record<GitHubEventName, ReadonlySet<string>> = {
   issues: new Set(["opened", "edited", "closed", "reopened", "assigned", "unassigned", "labeled", "unlabeled"]),
+  issue_comment: new Set(["created", "edited", "deleted"]),
   pull_request: new Set([
     "opened",
     "edited",
@@ -19,6 +20,8 @@ const supportedActions: Record<GitHubEventName, ReadonlySet<string>> = {
     "labeled",
     "unlabeled",
   ]),
+  pull_request_review: new Set(["submitted", "edited", "dismissed"]),
+  pull_request_review_comment: new Set(["created", "edited", "deleted"]),
 } as const;
 
 const bounded = (limit: number) => z.string().min(1).refine((value) => Buffer.byteLength(value, "utf8") <= limit);
@@ -89,6 +92,32 @@ const pullRequestSchema = z.object({
   merged_at: nullableTimestamp,
 });
 
+const commentSchema = z.object({
+  id,
+  body: z.string(),
+  user: actorSchema,
+  created_at: timestamp,
+  updated_at: timestamp,
+});
+
+const reviewSchema = z.object({
+  id,
+  body: z.string().nullable(),
+  user: actorSchema,
+  state: bounded(64),
+  commit_id: sha.nullable(),
+  submitted_at: nullableTimestamp,
+});
+
+const reviewCommentSchema = commentSchema.extend({
+  path: bounded(4_096),
+  line: z.number().int().positive().nullable(),
+  original_line: z.number().int().positive().nullable(),
+  side: z.enum(["LEFT", "RIGHT"]).nullable(),
+  commit_id: sha,
+  in_reply_to_id: id.optional(),
+});
+
 const commonPayloadShape = {
   action: bounded(64),
   installation: z.object({ id }).nullish(),
@@ -98,9 +127,12 @@ const commonPayloadShape = {
 
 const issuesPayloadSchema = z.object({ ...commonPayloadShape, issue: issueSchema });
 const pullRequestPayloadSchema = z.object({ ...commonPayloadShape, pull_request: pullRequestSchema });
+const issueCommentPayloadSchema = z.object({ ...commonPayloadShape, issue: issueSchema, comment: commentSchema });
+const pullRequestReviewPayloadSchema = z.object({ ...commonPayloadShape, pull_request: pullRequestSchema, review: reviewSchema });
+const pullRequestReviewCommentPayloadSchema = z.object({ ...commonPayloadShape, pull_request: pullRequestSchema, comment: reviewCommentSchema });
 const envelopeSchema = z.object({ action: bounded(64) });
 
-export type GitHubEventName = "issues" | "pull_request";
+export type GitHubEventName = "issues" | "issue_comment" | "pull_request" | "pull_request_review" | "pull_request_review_comment";
 
 export type NormalizeGitHubEventInput = {
   event: GitHubEventName;
@@ -165,12 +197,56 @@ function gitBranch(value: z.infer<typeof headBranchSchema>) {
   };
 }
 
+function normalizedIssue(issue: z.infer<typeof issueSchema>) {
+  return {
+    number: issue.number,
+    title: issue.title,
+    ...truncateBody(issue.body),
+    state: issue.state,
+    user: actor(issue.user),
+    labels: labels(issue.labels),
+    assignees: actors(issue.assignees),
+    createdAt: issue.created_at,
+    updatedAt: issue.updated_at,
+    closedAt: issue.closed_at,
+  };
+}
+
+function normalizedPullRequest(pullRequest: z.infer<typeof pullRequestSchema>) {
+  return {
+    number: pullRequest.number,
+    title: pullRequest.title,
+    ...truncateBody(pullRequest.body),
+    draft: pullRequest.draft,
+    state: pullRequest.state,
+    merged: pullRequest.merged,
+    user: actor(pullRequest.user),
+    head: gitBranch(pullRequest.head),
+    base: gitBranch(pullRequest.base),
+    labels: labels(pullRequest.labels),
+    assignees: actors(pullRequest.assignees),
+    requestedReviewers: actors(pullRequest.requested_reviewers),
+    createdAt: pullRequest.created_at,
+    updatedAt: pullRequest.updated_at,
+    closedAt: pullRequest.closed_at,
+    mergedAt: pullRequest.merged_at,
+  };
+}
+
 export function normalizeGitHubEvent(input: NormalizeGitHubEventInput): NormalizedCloudEvent | null {
-  const event = z.enum(["issues", "pull_request"]).parse(input.event);
+  const event = z.enum(["issues", "issue_comment", "pull_request", "pull_request_review", "pull_request_review_comment"]).parse(input.event);
   const action = envelopeSchema.parse(input.payload).action;
   if (!supportedActions[event].has(action)) return null;
 
-  const payload = event === "issues" ? issuesPayloadSchema.parse(input.payload) : pullRequestPayloadSchema.parse(input.payload);
+  const payload = event === "issues"
+    ? issuesPayloadSchema.parse(input.payload)
+    : event === "issue_comment"
+      ? issueCommentPayloadSchema.parse(input.payload)
+      : event === "pull_request"
+        ? pullRequestPayloadSchema.parse(input.payload)
+        : event === "pull_request_review"
+          ? pullRequestReviewPayloadSchema.parse(input.payload)
+          : pullRequestReviewCommentPayloadSchema.parse(input.payload);
   if (payload.action !== action) throw new Error("GitHub payload action changed during normalization");
 
   const repository = {
@@ -194,47 +270,68 @@ export function normalizeGitHubEvent(input: NormalizeGitHubEventInput): Normaliz
     ? (() => {
         const issue = (payload as z.infer<typeof issuesPayloadSchema>).issue;
         subject = `issues/${issue.number}`;
-        return {
-          ...common,
-          issue: {
-            number: issue.number,
-            title: issue.title,
-            ...truncateBody(issue.body),
-            state: issue.state,
-            user: actor(issue.user),
-            labels: labels(issue.labels),
-            assignees: actors(issue.assignees),
-            createdAt: issue.created_at,
-            updatedAt: issue.updated_at,
-            closedAt: issue.closed_at,
-          },
-        };
+        return { ...common, issue: normalizedIssue(issue) };
       })()
-    : (() => {
+    : event === "issue_comment"
+      ? (() => {
+          const value = payload as z.infer<typeof issueCommentPayloadSchema>;
+          subject = `issues/${value.issue.number}`;
+          return {
+            ...common,
+            issue: normalizedIssue(value.issue),
+            comment: {
+              id: value.comment.id,
+              ...truncateBody(value.comment.body),
+              user: actor(value.comment.user),
+              createdAt: value.comment.created_at,
+              updatedAt: value.comment.updated_at,
+            },
+          };
+        })()
+      : event === "pull_request"
+        ? (() => {
         const pullRequest = (payload as z.infer<typeof pullRequestPayloadSchema>).pull_request;
         subject = `pulls/${pullRequest.number}`;
-        return {
-          ...common,
-          pullRequest: {
-            number: pullRequest.number,
-            title: pullRequest.title,
-            ...truncateBody(pullRequest.body),
-            draft: pullRequest.draft,
-            state: pullRequest.state,
-            merged: pullRequest.merged,
-            user: actor(pullRequest.user),
-            head: gitBranch(pullRequest.head),
-            base: gitBranch(pullRequest.base),
-            labels: labels(pullRequest.labels),
-            assignees: actors(pullRequest.assignees),
-            requestedReviewers: actors(pullRequest.requested_reviewers),
-            createdAt: pullRequest.created_at,
-            updatedAt: pullRequest.updated_at,
-            closedAt: pullRequest.closed_at,
-            mergedAt: pullRequest.merged_at,
-          },
-        };
-      })();
+        return { ...common, pullRequest: normalizedPullRequest(pullRequest) };
+      })()
+        : event === "pull_request_review"
+          ? (() => {
+              const value = payload as z.infer<typeof pullRequestReviewPayloadSchema>;
+              subject = `pulls/${value.pull_request.number}`;
+              return {
+                ...common,
+                pullRequest: normalizedPullRequest(value.pull_request),
+                review: {
+                  id: value.review.id,
+                  ...truncateBody(value.review.body),
+                  user: actor(value.review.user),
+                  state: value.review.state.toLowerCase(),
+                  commitSha: value.review.commit_id,
+                  submittedAt: value.review.submitted_at,
+                },
+              };
+            })()
+          : (() => {
+              const value = payload as z.infer<typeof pullRequestReviewCommentPayloadSchema>;
+              subject = `pulls/${value.pull_request.number}`;
+              return {
+                ...common,
+                pullRequest: normalizedPullRequest(value.pull_request),
+                comment: {
+                  id: value.comment.id,
+                  ...truncateBody(value.comment.body),
+                  user: actor(value.comment.user),
+                  path: value.comment.path,
+                  line: value.comment.line,
+                  originalLine: value.comment.original_line,
+                  side: value.comment.side,
+                  commitSha: value.comment.commit_id,
+                  inReplyToId: value.comment.in_reply_to_id ?? null,
+                  createdAt: value.comment.created_at,
+                  updatedAt: value.comment.updated_at,
+                },
+              };
+            })();
 
   return normalizedCloudEventSchema.parse({
     specversion: "1.0",

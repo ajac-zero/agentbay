@@ -89,9 +89,23 @@ export type ExecutionStateTransition = {
   traceContext: Record<string, string>;
 };
 
+export type EventWaitState = "ACTIVE" | "CANCELLED" | "EXPIRED" | "CONSUMED";
+
+export type ExecutionEventWait = {
+  id: string;
+  attempt: number;
+  name: string;
+  state: EventWaitState;
+  correlation: Record<string, JsonPrimitive>;
+  deadlineAt: string;
+  activatedAt: string;
+  endedAt: string | null;
+};
+
 export type ExecutionDetail = Execution & {
   attempts: ExecutionAttempt[];
   transitions: ExecutionStateTransition[];
+  waits: ExecutionEventWait[];
 };
 
 export type RequestExecutionCancellationCommand = {

@@ -1,7 +1,7 @@
 apiVersion: extensions.agents.x-k8s.io/v1alpha1
 kind: SandboxTemplate
 metadata:
-  name: opencode-template
+  name: opencode-developer-template
   namespace: agents
 spec:
   envVarsInjectionPolicy: Allowed
@@ -75,41 +75,54 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
-        # Four bounded tools support issue comments and serial one-file commits.
-        # Build github-mcp-sidecar.Dockerfile, publish it, and replace this
-        # illustrative digest with the immutable digest from your registry.
         - name: github-mcp
-          image: ghcr.io/example/github-mcp-sidecar@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          image: ghcr.io/github/github-mcp-server@sha256:2b0c48b070f61e9d3969269ead600f62d00fb237b60ac849ef3d166ee7de9ad3
+          imagePullPolicy: IfNotPresent
+          args:
+            - http
+            - --listen-host=127.0.0.1
+            - --port=8082
+            - --tools=issue_read,get_file_contents,search_code,get_commit,list_commits,create_branch,push_files,create_pull_request,pull_request_read,actions_list,actions_get,get_job_logs
+          ports:
+            - name: github-mcp
+              containerPort: 8082
+          securityContext: &restricted-sidecar
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile: { type: RuntimeDefault }
+        # Build github-token-broker.Dockerfile, publish it, and replace this
+        # illustrative digest with the immutable digest from your registry.
+        - name: github-token-broker
+          image: ghcr.io/example/github-token-broker@sha256:1111111111111111111111111111111111111111111111111111111111111111
           imagePullPolicy: IfNotPresent
           env:
             - name: AGENTBAY_GITHUB_TENANT
               value: default
             - name: AGENTBAY_GITHUB_CONNECTION
               value: github-production
-            - name: AGENTBAY_GITHUB_REPOSITORY_OWNER
-              value: example-org
-            - name: AGENTBAY_GITHUB_REPOSITORY_NAME
-              value: example-repository
             - name: AGENTBAY_GITHUB_REPOSITORY_ID
               value: "123456789"
+            - name: AGENTBAY_GITHUB_PERMISSIONS
+              value: contents:write,issues:write,pull_requests:write,actions:read
             - name: AGENTBAY_GITHUB_APP_ID_FILE
               value: /var/run/agentbay/github-app/app-id
             - name: AGENTBAY_GITHUB_INSTALLATION_ID_FILE
               value: /var/run/agentbay/github-app/installation-id
             - name: AGENTBAY_GITHUB_PRIVATE_KEY_FILE
               value: /var/run/agentbay/github-app/private-key.pem
-            # The sidecar rejects every other repository, .github/workflows,
-            # merges, and workflow operations. Grant the selected-repository App
-            # Issues, Contents, and Pull requests write, but no Workflows access.
           ports:
-            - name: github-mcp
-              containerPort: 8082
+            - name: github-broker
+              containerPort: 8083
           startupProbe:
             exec:
               command:
                 - /nodejs/bin/node
                 - -e
-                - fetch('http://127.0.0.1:8082/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+                - fetch('http://127.0.0.1:8083/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 30
@@ -118,7 +131,7 @@ spec:
               command:
                 - /nodejs/bin/node
                 - -e
-                - fetch('http://127.0.0.1:8082/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+                - fetch('http://127.0.0.1:8083/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 6
@@ -127,24 +140,12 @@ spec:
               command:
                 - /nodejs/bin/node
                 - -e
-                - fetch('http://127.0.0.1:8082/livez',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+                - fetch('http://127.0.0.1:8083/livez',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
             periodSeconds: 10
             timeoutSeconds: 2
             failureThreshold: 3
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-            readOnlyRootFilesystem: true
-            runAsNonRoot: true
-            runAsUser: 65532
-            runAsGroup: 65532
-            seccompProfile:
-              type: RuntimeDefault
+          securityContext: *restricted-sidecar
           volumeMounts:
-            # Deliberately no workspace mount. OpenCode passes bounded complete
-            # file content through MCP (maximum 256 KiB per file).
             - name: github-app-credentials
               mountPath: /var/run/agentbay/github-app
               readOnly: true

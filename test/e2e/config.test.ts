@@ -34,10 +34,39 @@ describe("loadConfig", () => {
     });
   });
 
+  it("provides disabled revision resolver defaults and requires credentials when enabled", () => {
+    expect(loadConfig({ HOSTNAME: "worker-1" })).toMatchObject({
+      revisionResolverEnabled: false,
+      revisionResolverIdlePollMs: 500,
+      revisionResolverLeaseDurationMs: 60_000,
+      revisionResolverMaxAttempts: 5,
+      revisionResolverRequestTimeoutMs: 30_000,
+      revisionResolverRetryDelayMs: 30_000,
+      revisionResolverWorkerId: "worker-1",
+    });
+    expect(() => loadConfig({ AGENTBAY_REVISION_RESOLVER_ENABLED: "true" })).toThrow(/APP_ID_FILE/);
+    expect(loadConfig({
+      AGENTBAY_REVISION_RESOLVER_ENABLED: "true",
+      AGENTBAY_GITHUB_APP_ID_FILE: "/app-id",
+      AGENTBAY_GITHUB_PRIVATE_KEY_FILE: "/private-key",
+    })).toMatchObject({
+      revisionResolverEnabled: true,
+      githubAppIdFile: "/app-id",
+      githubAppPrivateKeyFile: "/private-key",
+    });
+  });
+
   it("requires dispatcher renewal before lease expiry", () => {
     expect(() => loadConfig({
       AGENTBAY_DISPATCHER_LEASE_DURATION_MS: "1000",
       AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS: "1000",
+    })).toThrow(/must be less/);
+  });
+
+  it("requires revision requests to finish before lease expiry", () => {
+    expect(() => loadConfig({
+      AGENTBAY_REVISION_RESOLVER_LEASE_DURATION_MS: "1000",
+      AGENTBAY_REVISION_RESOLVER_REQUEST_TIMEOUT_MS: "1000",
     })).toThrow(/must be less/);
   });
 

@@ -1,0 +1,1 @@
+ALTER TABLE "agentbay_event_waits" ADD CONSTRAINT "agentbay_event_waits_end_after_activation" CHECK ("agentbay_event_waits"."ended_at" IS NULL OR "agentbay_event_waits"."ended_at" >= "agentbay_event_waits"."activated_at");

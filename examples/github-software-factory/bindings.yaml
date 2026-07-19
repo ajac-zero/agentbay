@@ -1,0 +1,50 @@
+# Request body for POST /v1/bindings/triage-issues/versions.
+---
+version: 1
+triggerId: engineering-github
+profile: { id: triager, version: 1 }
+definition:
+  schemaVersion: 1
+  eventTypes: [com.github.issues.opened]
+  filter:
+    all:
+      - { path: /repository/fullName, op: eq, value: acme/agentbay }
+  prompt: { literal: Triage the new issue., includeEvent: data }
+  workspace: { type: empty }
+---
+# Publish this document once per difficulty, changing both the required label
+# and exact profile ID. The ready label prevents dispatch on intermediate label
+# deliveries.
+version: 1
+triggerId: engineering-github
+profile: { id: developer-easy, version: 1 }
+definition:
+  schemaVersion: 1
+  eventTypes: [com.github.issues.labeled]
+  filter:
+    all:
+      - { path: /repository/fullName, op: eq, value: acme/agentbay }
+      - { path: /issue/labels, op: contains, value: "agentbay/state:ready" }
+      - { path: /issue/labels, op: contains, value: "agentbay/difficulty:easy" }
+  prompt: { literal: Implement the ready issue and open a pull request., includeEvent: data }
+  workspace:
+    type: git
+    repository: { url: { path: /repository/cloneUrl } }
+    revision: { commit: { path: /repository/defaultBranchRevision/commit } }
+---
+version: 1
+triggerId: engineering-github
+profile: { id: reviewer, version: 1 }
+definition:
+  schemaVersion: 1
+  eventTypes:
+    - com.github.pull_request.opened
+    - com.github.pull_request.synchronize
+  filter:
+    all:
+      - { path: /repository/fullName, op: eq, value: acme/agentbay }
+  prompt: { literal: Review this pull request revision., includeEvent: data }
+  workspace:
+    type: git
+    repository: { url: { path: /pullRequest/head/repository/cloneUrl } }
+    revision: { commit: { path: /pullRequest/head/sha } }

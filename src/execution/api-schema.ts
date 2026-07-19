@@ -21,6 +21,12 @@ const dnsLabelSchema = z
   .regex(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/, "must be a valid DNS label");
 const reservedConnectionSidecars = new Set(["opencode", "workspace-materializer", "agentbay-gateway-proxy"]);
 const connectionIdSchema = z.string().min(1).max(128).regex(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/);
+const githubTools = new Set([
+  "actions_get", "actions_list", "add_comment_to_pending_review", "add_issue_comment",
+  "add_reply_to_pull_request_comment", "create_branch", "create_pull_request", "get_commit",
+  "get_file_contents", "get_job_logs", "get_label", "issue_read", "issue_write", "list_commits",
+  "list_label", "pull_request_read", "pull_request_review_write", "push_files", "search_code", "search_issues",
+]);
 const profileConnectionSchema = z
   .object({
     id: connectionIdSchema,
@@ -76,7 +82,45 @@ export const agentProfileDefinitionSchema: z.ZodType<AgentProfileDefinition> = z
         path: ["sandbox", "warmPool"],
       });
     }
+    if (definition.connections.some(({ sidecar }) => sidecar === "github-token-broker")) {
+      const config = definition.runtime.opencodeConfig;
+      const mcp = config.mcp;
+      const github = isObject(mcp) ? mcp.github : undefined;
+      const permission = config.permission;
+      const globalGitHubEntries = isObject(permission)
+        ? Object.entries(permission).filter(([name]) => name.startsWith("github_") && name !== "github_*")
+        : [];
+      const agents = config.agent;
+      const selected = isObject(agents) ? agents[definition.runtime.agent] : undefined;
+      const selectedPermission = isObject(selected) ? selected.permission : undefined;
+      const selectedEntries = isObject(selectedPermission) ? Object.entries(selectedPermission) : [];
+      const githubEntries = selectedEntries.filter(([name]) => name.startsWith("github_"));
+      const hasAllowedTool = githubEntries.some(([name, action]) => githubTools.has(name.slice("github_".length)) && action === "allow");
+      const hasInvalidGitHubRule = githubEntries.some(([name, action]) => !githubTools.has(name.slice("github_".length)) || action !== "allow");
+      if (
+        !isObject(github)
+        || github.type !== "remote"
+        || github.url !== "http://127.0.0.1:8083/"
+        || github.oauth !== false
+        || github.enabled !== true
+        || !isObject(permission)
+        || permission["github_*"] !== "deny"
+        || globalGitHubEntries.length > 0
+        || !hasAllowedTool
+        || hasInvalidGitHubRule
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "github-token-broker requires the fixed localhost GitHub MCP endpoint and deny-by-default per-agent tool permissions",
+          path: ["runtime", "opencodeConfig"],
+        });
+      }
+    }
   });
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 export const definitionSchema = agentProfileDefinitionSchema;
 export const profileRefSchema = z.object({ id: simpleIdSchema, version: z.number().int().positive() }).strict();
 export const executionInputSchema = z
@@ -156,10 +200,22 @@ export const executionTransitionSchema = z
   .strict()
   .openapi("ExecutionTransition");
 
+export const eventWaitSchema = z.object({
+  id: z.string(),
+  attempt: z.number().int().positive(),
+  name: z.string(),
+  state: z.enum(["ACTIVE", "CANCELLED", "EXPIRED", "CONSUMED"]),
+  correlation: z.record(z.string(), z.union([z.null(), z.boolean(), z.number(), z.string()])),
+  deadlineAt: z.string().datetime(),
+  activatedAt: z.string().datetime(),
+  endedAt: z.string().datetime().nullable(),
+}).strict().openapi("EventWait");
+
 export const executionDetailSchema = executionSchema
   .extend({
     attempts: z.array(executionAttemptSchema),
     transitions: z.array(executionTransitionSchema),
+    waits: z.array(eventWaitSchema),
   })
   .strict()
   .openapi("ExecutionDetail");

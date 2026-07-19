@@ -1,0 +1,2 @@
+ALTER TABLE "agentbay_event_waits" ADD CONSTRAINT "agentbay_event_waits_correlation_object" CHECK (jsonb_typeof("agentbay_event_waits"."correlation") = 'object');--> statement-breakpoint
+ALTER TABLE "agentbay_event_waits" ADD CONSTRAINT "agentbay_event_waits_correlation_bounded" CHECK (octet_length("agentbay_event_waits"."correlation"::text) <= 32768);

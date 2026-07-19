@@ -1,4 +1,5 @@
 import type { AdmissionCommand, AdmissionResult } from "../control/admission.js";
+import type { RevisionAwareAdmissionCommand } from "../revision/types.js";
 import type {
   AgentProfileDefinition,
   AgentProfileVersion,
@@ -26,5 +27,5 @@ export interface ExecutionStore {
 }
 
 export interface EventAdmissionStore {
-  admitEvent(command: AdmissionCommand): Promise<AdmissionResult>;
+  admitEvent(command: AdmissionCommand | RevisionAwareAdmissionCommand): Promise<AdmissionResult>;
 }

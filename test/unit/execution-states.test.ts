@@ -21,6 +21,7 @@ describe("execution states", () => {
     expect(isTerminalExecutionState("DEAD_LETTERED")).toBe(true);
     expect(isTerminalExecutionState("SUCCEEDED")).toBe(false);
     expect(isTerminalExecutionState("CANCEL_REQUESTED")).toBe(false);
+    expect(isTerminalExecutionState("WAITING")).toBe(false);
   });
 });
 
@@ -44,6 +45,10 @@ describe("isValidExecutionTransition", () => {
     expect(isValidExecutionTransition("QUEUED", "CANCEL_REQUESTED")).toBe(true);
     expect(isValidExecutionTransition("CANCEL_REQUESTED", "CANCELLED")).toBe(true);
     expect(isValidExecutionTransition("PROVISIONING", "TIMED_OUT")).toBe(true);
+    expect(isValidExecutionTransition("RUNNING", "WAITING")).toBe(true);
+    expect(isValidExecutionTransition("WAITING", "QUEUED")).toBe(true);
+    expect(isValidExecutionTransition("WAITING", "CANCEL_REQUESTED")).toBe(true);
+    expect(isValidExecutionTransition("WAITING", "TIMED_OUT")).toBe(true);
   });
 
   it("rejects skips, self-transitions, and transitions out of terminal states", () => {

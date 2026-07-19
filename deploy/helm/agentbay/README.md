@@ -133,6 +133,24 @@ clone only public HTTPS repositories, using
 `/pullRequest/head/repository/cloneUrl` and `/pullRequest/head/sha` from
 normalized pull-request event data.
 
+For issue-driven Git workspaces, enable the durable default-branch resolver and
+mount an operator-managed GitHub App Secret only into the orchestrator:
+
+```yaml
+orchestrator:
+  revisionResolver:
+    enabled: true
+    credentialsSecret: agentbay-github-app
+```
+
+The Secret must contain `app-id` and `private-key.pem`. Each issue delivery
+provides its installation and repository IDs. The worker mints a
+selected-repository token with `contents:read`, resolves and persists the exact
+default-branch commit, and only then admits bindings selecting
+`/repository/defaultBranchRevision/commit`. Configure polling, lease, retry,
+attempt, and request timeout bounds under `orchestrator.revisionResolver`.
+Resolver credentials are not mounted into migrations or the reconciler.
+
 ## Replicas and maintenance
 
 API replicas share durable state in PostgreSQL, so `replicaCount` can be greater
@@ -144,6 +162,11 @@ database operations are safe to run concurrently; tune or disable them under
 This maintenance loop complements the embedded execution dispatcher. Configure
 it with `orchestrator.dispatcher.enabled`, `idlePollMs`, `leaseDurationMs`, and
 `renewIntervalMs`. Each replica runs one worker when enabled.
+
+Each replica also runs one revision worker when
+`orchestrator.revisionResolver.enabled=true`. PostgreSQL fenced claims make this
+safe with multiple replicas. Expired claims are recoverable; failed requests
+enter retry wait and become `DEAD_LETTERED` after `maxAttempts`.
 
 ## RBAC and namespaces
 
@@ -224,12 +247,11 @@ template, and injects only the non-secret canonical envelope, for example
 as `AGENTBAY_CONNECTIONS` on that sidecar. Sidecar images, commands, and
 credential volumes are operator-owned template configuration, not profile input.
 
-The following example runs the repository's GitHub MCP sidecar. Build
-`github-mcp-sidecar.Dockerfile`, publish it, and replace the illustrative digest
-with the registry digest. The Secret is created and managed separately; this
-values file creates no Secret, contains no credential value, and mounts the
-three projected files only in `github-mcp`, never in OpenCode or the workspace
-materializer. The sidecar deliberately has no `/workspace` volume mount:
+The following example runs GitHub's official MCP server behind Agentbay's
+installation-token broker. Build `github-token-broker.Dockerfile`, publish it,
+and replace the illustrative digest. The Secret is managed separately and is
+mounted only in the broker, never in OpenCode, the official server, or the
+workspace materializer:
 
 ```yaml
 sandboxTemplates:
@@ -243,51 +265,63 @@ sandboxTemplates:
         type: emptyDir
       sidecars:
         - name: github-mcp
-          image: ghcr.io/your-org/github-mcp-sidecar@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          image: ghcr.io/github/github-mcp-server@sha256:2b0c48b070f61e9d3969269ead600f62d00fb237b60ac849ef3d166ee7de9ad3
+          args:
+            - http
+            - --listen-host=127.0.0.1
+            - --port=8082
+            - --tools=issue_read,issue_write,add_issue_comment
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+        - name: github-token-broker
+          image: ghcr.io/your-org/github-token-broker@sha256:1111111111111111111111111111111111111111111111111111111111111111
           env:
             - name: AGENTBAY_GITHUB_TENANT
               value: default
             - name: AGENTBAY_GITHUB_CONNECTION
               value: github-production
-            - name: AGENTBAY_GITHUB_REPOSITORY_OWNER
-              value: example-org
-            - name: AGENTBAY_GITHUB_REPOSITORY_NAME
-              value: example-repository
             - name: AGENTBAY_GITHUB_REPOSITORY_ID
               value: "123456789"
+            - name: AGENTBAY_GITHUB_PERMISSIONS
+              value: issues:write
             - name: AGENTBAY_GITHUB_APP_ID_FILE
               value: /var/run/agentbay/github-app/app-id
             - name: AGENTBAY_GITHUB_INSTALLATION_ID_FILE
               value: /var/run/agentbay/github-app/installation-id
             - name: AGENTBAY_GITHUB_PRIVATE_KEY_FILE
               value: /var/run/agentbay/github-app/private-key.pem
-          ports:
-            - name: github-mcp
-              containerPort: 8082
-          startupProbe:
+          startupProbe: &githubBrokerStartupProbe
             exec:
               command:
                 - /nodejs/bin/node
                 - -e
-                - fetch('http://127.0.0.1:8082/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+                - fetch('http://127.0.0.1:8083/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 30
-          readinessProbe:
+          readinessProbe: &githubBrokerReadinessProbe
             exec:
               command:
                 - /nodejs/bin/node
                 - -e
-                - fetch('http://127.0.0.1:8082/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+                - fetch('http://127.0.0.1:8083/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 6
-          livenessProbe:
+          livenessProbe: &githubBrokerLivenessProbe
             exec:
               command:
                 - /nodejs/bin/node
                 - -e
-                - fetch('http://127.0.0.1:8082/livez',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+                - fetch('http://127.0.0.1:8083/livez',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
             periodSeconds: 10
             timeoutSeconds: 2
             failureThreshold: 3
@@ -328,7 +362,7 @@ is present in OpenCode:
   "mcp": {
     "github": {
       "type": "remote",
-      "url": "http://127.0.0.1:8082/mcp",
+      "url": "http://127.0.0.1:8083/",
       "oauth": false,
       "enabled": true
     }
@@ -346,69 +380,24 @@ kubectl -n agents create secret generic example-github-app-credentials \
   --from-file=private-key.pem=./private-key.pem
 ```
 
-Register a dedicated GitHub App with selected-repository permissions **Issues:
-write**, **Contents: write**, and **Pull requests: write**, no **Workflows** or
-organization/account permissions, and install it on only
-`example-org/example-repository`. The sidecar
-accepts the exact `AGENTBAY_CONNECTIONS` grant injected for the profile,
-exchanges its private key for a short-lived installation token, and fixes its
-upstream to `https://api.github.com`. It rejects owner/repository arguments
-outside `AGENTBAY_GITHUB_REPOSITORY_OWNER`,
-`AGENTBAY_GITHUB_REPOSITORY_NAME`, and `AGENTBAY_GITHUB_REPOSITORY_ID`; there is
-no configurable GitHub host or workflow policy. The bounded MCP surface exposes
-`issue_comment`, `branch_create`, `contents_put`, and `pull_request_create`. An
-`issues.opened` binding using `issue_comment`, or a review agent preparing a
-pull request, are intended profiles. The installation token and private key
-never enter OpenCode, its environment, prompts, workspace, or tool results.
-The sidecar implements MCP 2025-11-25 and is compatible with the OpenCode
-1.14.50 version pinned by `opencode-sandbox.Dockerfile`.
+Register a dedicated GitHub App with only the repository permissions required by
+the role and install it on the selected repository. The broker validates the
+exact `AGENTBAY_CONNECTIONS` grant, mints short-lived installation tokens, and
+injects them into requests to the official server. The official server receives
+no private key and OpenCode receives neither key nor token. Restrict capabilities
+with all three layers: GitHub App permissions, exact official `--tools`, and
+deny-by-default OpenCode `github_*` permissions with per-agent allows. The broker
+does not replay failed requests because a mutation outcome may be ambiguous.
 
-For a pull request, OpenCode passes bounded complete file content through MCP;
-the sidecar never reads `/workspace`. Call `branch_create` with the exact base
-commit SHA, issue serial `contents_put` calls with the optimistic expected blob
-SHA for an update or `null` for a create, and finish with
-`pull_request_create`. Each put creates one commit for one file and files are
-limited to 256 KiB. The sequence is not atomic and can leave a partially updated
-branch.
-
-Every write tool requires a stable `idempotency_key`; callers must reuse it for
-the same logical write. Concurrent reuse for different input within one sidecar
-process returns `IDEMPOTENCY_CONFLICT`. Branch and content writes reconcile against
-their natural durable desired state in GitHub: the branch at the requested
-commit and the file with the requested blob, subject to the expected SHA
-precondition. Pull requests and comments persist authenticated markers in
-GitHub. Reconciliation survives process restarts, but cross-process coordination
-is best effort rather than exactly once.
-
-The sidecar never blindly retries a mutation after an ambiguous timeout,
-transport failure, 401, 5xx response, or similar outcome. It reads GitHub to
-determine whether the desired state exists and returns the ambiguous failure if
-it cannot confirm success. Reads may refresh the installation token and retry
-once after a 401. A mutation 401 uses that one refresh for read-only
-reconciliation and does not resubmit the mutation. Incompatible existing state
-returns `STATE_CONFLICT` rather than being overwritten.
-
-The sidecar cannot merge, mutate workflows, access another repository, write
-`.github/workflows`, create multi-file commits, or make arbitrary GitHub API
-calls. Do not grant the App Workflows permission.
-
-Marker replay is best-effort at-least-once recovery, not a uniqueness guarantee.
-The sidecar scans up to the newest 1,000 pull requests for a matching PR marker;
-a marker beyond that window is treated as absent and may produce a duplicate.
-It scans only the newest 2,000 issue comments, with the same behavior beyond the
-window. Overlapping sidecars or attempts can both miss a marker and create
-duplicates even when callers use stable keys. The marker HMAC key is derived
-from the GitHub App private key, so private-key rotation makes old markers
-unauthenticatable and may also produce duplicates. Preserve the old private key
-and sidecars through the replay window, or explicitly tolerate duplicates
-during rotation.
-
-Use restrictive egress because the sidecar is trusted with every mounted
-credential and request sent to it. When rotating the Secret, account for the
-marker-key behavior above and replace cold sandboxes; revoke upstream access
-before deleting the connection and terminating affected sandboxes. A future
-credential broker can issue short-lived credentials in place of this static
-fallback.
+Use one SandboxTemplate per role with only that role's official `--tools` list
+and minimum App permissions. Containers in one Pod share loopback, so OpenCode
+permissions alone cannot prevent direct broker calls. The official tools define
+their own mutation and idempotency behavior; Agentbay makes no exactly-once
+guarantee. Use restrictive egress because the broker is trusted with every
+mounted credential and request sent to it. The broker rereads credential files
+whenever it mints a token, so projected Secret rotation takes effect on the next
+refresh. Revoke upstream access before deleting a connection or terminating
+affected sandboxes.
 
 By default, the materializer uses the template's `image.repository`, `tag`, and
 `pullPolicy`. If it is published as a separate image, override any of those
