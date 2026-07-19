@@ -321,6 +321,7 @@ function closedDeletedForkPayload() {
     repository: { ...branchRepository, default_branch: "main", private: false },
     sender: actor,
     pull_request: {
+      id: 700,
       number: 7,
       title: "Closed pull request",
       body: "The source fork was deleted",

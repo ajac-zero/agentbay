@@ -9,6 +9,7 @@ export type Config = {
   dispatcherRenewIntervalMs: number;
   dispatcherWorkerId: string;
   claimReadyTimeoutMs: number;
+  controlPlaneUrl?: string;
   kubeNamespace: string;
   opencodeDirectory: string;
   opencodePort: number;
@@ -34,6 +35,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const config = {
     adminToken: emptyToUndefined(env.AGENTBAY_ADMIN_TOKEN),
     claimReadyTimeoutMs: readTimerDelay(env.AGENTBAY_CLAIM_READY_TIMEOUT_MS, 180_000),
+    controlPlaneUrl: readControlPlaneUrl(env.AGENTBAY_CONTROL_PLANE_URL),
     dispatcherEnabled: readStrictBoolean(env.AGENTBAY_DISPATCHER_ENABLED, true),
     dispatcherIdlePollMs: readTimerDelay(env.AGENTBAY_DISPATCHER_IDLE_POLL_MS, 500),
     dispatcherLeaseDurationMs: readPositiveInteger(env.AGENTBAY_DISPATCHER_LEASE_DURATION_MS, 60_000),
@@ -79,6 +81,14 @@ function readSandboxClaimApiVersion(value: string | undefined): SandboxClaimAPIV
 
 function emptyToUndefined(value: string | undefined): string | undefined {
   return value && value.length > 0 ? value : undefined;
+}
+
+function readControlPlaneUrl(value: string | undefined): string | undefined {
+  const configured = emptyToUndefined(value);
+  if (!configured) return undefined;
+  const url = new URL(configured);
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("AGENTBAY_CONTROL_PLANE_URL must be an HTTP(S) URL without credentials, query, or fragment");
+  return url.toString();
 }
 
 function readPositiveInteger(value: string | undefined, fallback: number): number {

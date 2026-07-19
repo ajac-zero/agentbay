@@ -238,6 +238,43 @@ export const executions = pgTable("agentbay_executions", {
     .where(sql`${table.state} = 'QUEUED'`),
 ]);
 
+export const githubPullRequestEffects = pgTable("agentbay_github_pull_request_effects", {
+  attemptedAt: timestamp("attempted_at", { withTimezone: true }),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  executionID: text("execution_id").notNull(),
+  fenceHash: text("fence_hash").notNull(),
+  baseRef: text("base_ref").notNull(),
+  githubPullRequestID: text("github_pull_request_id"),
+  headRef: text("head_ref").notNull(),
+  id: text("id").primaryKey(),
+  openedEventID: text("opened_event_id"),
+  pullRequestNumber: integer("pull_request_number"),
+  pullRequestURL: text("pull_request_url"),
+  pullRequestTitle: text("pull_request_title").notNull(),
+  repositoryFullName: text("repository_full_name").notNull(),
+  repositoryID: text("repository_id").notNull(),
+  requestHash: text("request_hash").notNull(),
+  state: text("state").notNull(),
+  tenantID: text("tenant_id").notNull(),
+}, (table) => [
+  check("agentbay_github_pull_request_effects_state_valid", sql`${table.state} IN ('REGISTERED','REPORTED','CONFIRMED')`),
+  check("agentbay_github_pull_request_effects_fence_hash_valid", sql`${table.fenceHash} ~ '^[0-9a-f]{64}$'`),
+  check("agentbay_github_pull_request_effects_repository_id_valid", sql`${table.repositoryID} ~ '^[1-9][0-9]*$'`),
+  check("agentbay_github_pull_request_effects_repository_name_bounded", sql`octet_length(${table.repositoryFullName}) BETWEEN 3 AND 255`),
+  check("agentbay_github_pull_request_effects_request_hash_valid", sql`${table.requestHash} ~ '^[0-9a-f]{64}$'`),
+  check("agentbay_github_pull_request_effects_pr_id_valid", sql`${table.githubPullRequestID} IS NULL OR ${table.githubPullRequestID} ~ '^[1-9][0-9]*$'`),
+  check("agentbay_github_pull_request_effects_pr_number_valid", sql`${table.pullRequestNumber} IS NULL OR ${table.pullRequestNumber} > 0`),
+  check("agentbay_github_pull_request_effects_url_bounded", sql`${table.pullRequestURL} IS NULL OR octet_length(${table.pullRequestURL}) BETWEEN 20 AND 2048`),
+  check("agentbay_github_pull_request_effects_request_bounded", sql`octet_length(${table.pullRequestTitle}) BETWEEN 1 AND 4096 AND octet_length(${table.headRef}) BETWEEN 1 AND 255 AND octet_length(${table.baseRef}) BETWEEN 1 AND 255`),
+  check("agentbay_github_pull_request_effects_identity_consistent", sql`(${table.state}='REGISTERED' AND ${table.githubPullRequestID} IS NULL AND ${table.pullRequestNumber} IS NULL AND ${table.pullRequestURL} IS NULL AND ${table.openedEventID} IS NULL AND ${table.confirmedAt} IS NULL) OR (${table.state}='REPORTED' AND ${table.githubPullRequestID} IS NOT NULL AND ${table.pullRequestNumber} IS NOT NULL AND ${table.pullRequestURL} IS NOT NULL AND ${table.openedEventID} IS NULL AND ${table.confirmedAt} IS NULL) OR (${table.state}='CONFIRMED' AND ${table.githubPullRequestID} IS NOT NULL AND ${table.pullRequestNumber} IS NOT NULL AND ${table.pullRequestURL} IS NOT NULL AND ${table.openedEventID} IS NOT NULL AND ${table.confirmedAt} IS NOT NULL)`),
+  foreignKey({ columns: [table.executionID, table.tenantID], foreignColumns: [executions.id, executions.tenantID], name: "agentbay_github_pull_request_effects_execution_tenant_fk" }),
+  foreignKey({ columns: [table.openedEventID, table.tenantID], foreignColumns: [events.id, events.tenantID], name: "agentbay_github_pull_request_effects_event_tenant_fk" }),
+  uniqueIndex("agentbay_github_pull_request_effects_execution_unique").on(table.tenantID, table.executionID),
+  uniqueIndex("agentbay_github_pull_request_effects_pr_id_unique").on(table.tenantID, table.repositoryID, table.githubPullRequestID).where(sql`${table.githubPullRequestID} IS NOT NULL`),
+  uniqueIndex("agentbay_github_pull_request_effects_pr_number_unique").on(table.tenantID, table.repositoryID, table.pullRequestNumber).where(sql`${table.pullRequestNumber} IS NOT NULL`),
+]);
+
 export const executionInputs = pgTable("agentbay_execution_inputs", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   eventID: text("event_id").notNull(),

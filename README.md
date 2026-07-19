@@ -252,6 +252,18 @@ retained as immutable intents. Continuations coalesce to the latest intent,
 while terminal completion dominates continuation. Fenced turn completion
 atomically applies the pending intent instead of entering `WAITING`.
 
+Wait correlation may contain one write-once connector-supplied value for a
+future external identity. Until it is supplied, successful turns enter a
+non-matchable pending-context wait. Matching wake events are retained as
+immutable offers at their original binding versions and reconciled atomically
+when trusted correlation becomes complete.
+
+The GitHub broker registers `create_pull_request` before forwarding the
+non-idempotent mutation and refuses to forward an existing registration. A
+registered effect may report its result after lease turnover using its original
+one-purpose capability, but an adopted sandbox with a rotated dispatcher fence
+cannot initiate a new PR effect. Ambiguous mutations are not retried.
+
 GitHub issue events do not contain a default-branch commit. A developer binding
 can select `/repository/defaultBranchRevision/commit`. When such a binding
 matches, Agentbay commits the original normalized event and a durable resolution

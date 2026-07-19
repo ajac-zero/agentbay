@@ -62,6 +62,7 @@ export class OpenCodeExecutionAttemptRunner implements ExecutionAttemptRunner {
 }
 
 export type DispatcherWorkerOptions = {
+  controlPlaneUrl?: string;
   idlePollMs: number;
   leaseDurationMs: number;
   maxAttempts: number;
@@ -181,6 +182,7 @@ export class DispatcherWorker {
       const provisioningInput = {
         attempt: execution.lease.attempt,
         connections: profile.resolvedPolicy.connections,
+        controlPlaneUrl: this.#options.controlPlaneUrl,
         executionId: execution.executionId,
         fencingToken: execution.lease.fencingToken,
         opencodeConfig: profile.resolvedPolicy.runtime.opencodeConfig,

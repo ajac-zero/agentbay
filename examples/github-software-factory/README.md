@@ -13,9 +13,11 @@ the generic `contains` array predicate. They demonstrate:
 1. `issues.opened` starts triage.
 2. Triage applies one difficulty label and then `agentbay/state:ready`.
 3. `issues.labeled` selects exactly one developer profile.
-4. `pull_request.opened` starts one reviewer lifecycle.
-5. `pull_request.synchronize` coalesces the latest revision into that lifecycle.
-6. A merged `pull_request.closed` event terminally completes the lifecycle.
+4. The broker attributes the developer's primary PR through a fenced mutation receipt and matching signed webhook.
+5. `pull_request.opened` starts one separate reviewer lifecycle.
+6. Requested changes wake the developer at the reviewed head SHA.
+7. `pull_request.synchronize` coalesces the latest revision into the reviewer lifecycle.
+8. A merged `pull_request.closed` event terminally completes both independent lifecycles.
 
 The GitHub connector also normalizes issue comments, pull-request reviews, and
 pull-request review comments for later continuation matching.
@@ -40,13 +42,13 @@ the latest event's exact head SHA becomes the next immutable turn workspace.
 A merged close event dominates pending synchronize events and completes the
 lifecycle after the current fenced turn reaches a successful boundary.
 
-The developer binding also cannot enable a PR lifecycle wait yet: an
-issue-origin execution needs the future PR identity before it can safely
-correlate review and merge events. Repository-only correlation would let one PR
-wake another execution.
+The developer and reviewer remain separate executions. The issue-origin
+developer context starts with repository ID and an empty supplied PR-number
+slot. Only the execution-scoped GitHub broker receipt, verified against the
+signed opened webhook's repository ID, PR database ID, and number, can fill that
+slot. PR body text and repository-only correlation are never authoritative.
 
-Once wake bindings and deterministic PR identity are implemented, this example
-will add the following generic policy:
+The reciprocal policy is:
 
 ```text
 pull_request_review.submitted where review.state=changes_requested

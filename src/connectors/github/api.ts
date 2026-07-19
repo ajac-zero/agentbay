@@ -109,6 +109,11 @@ export function mountGitHubWebhookApi(
       admittedAt: new Date().toISOString(),
       ...(revisionResolution ? { revisionResolution } : {}),
     });
+    if (eventName === "pull_request" && event.type === "com.github.pull_request.opened" && "reconcileGitHubPullRequestEffects" in store) {
+      const data = event.data as { repository: { id: number }; pullRequest: { id: number; number: number } };
+      await (store as GitHubWebhookApiStore & { reconcileGitHubPullRequestEffects: (tenantId: string, identity: { repositoryId: number; githubPullRequestId: string; pullRequestNumber: number }) => Promise<void> })
+        .reconcileGitHubPullRequestEffects(TENANT_ID, { repositoryId: data.repository.id, githubPullRequestId: String(data.pullRequest.id), pullRequestNumber: data.pullRequest.number });
+    }
     return context.body(null, 202);
   }), webhookValidationHook as never);
 }

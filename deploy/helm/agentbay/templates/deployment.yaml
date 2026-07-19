@@ -79,6 +79,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: AGENTBAY_CONTROL_PLANE_URL
+              value: {{ default (printf "http://%s.%s.svc:%v" (include "agentbay.fullname" .) .Release.Namespace .Values.service.port) .Values.orchestrator.controlPlaneUrl | quote }}
             - name: AGENTBAY_REVISION_RESOLVER_ENABLED
               value: {{ .Values.orchestrator.revisionResolver.enabled | quote }}
             - name: AGENTBAY_REVISION_RESOLVER_IDLE_POLL_MS

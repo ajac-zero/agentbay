@@ -195,6 +195,9 @@ aiGatewayAuthz:
 orchestrator:
   # -- Port the orchestrator HTTP server listens on.
   port: 3000
+  # -- URL injected only into trusted sidecars for fenced internal callbacks.
+  # Defaults to the chart-managed in-cluster Service when empty.
+  controlPlaneUrl: ""
   executionMaintenance:
     # -- Reconcile expired execution leases and due retries in each orchestrator replica.
     enabled: true
@@ -412,6 +415,8 @@ sandboxTemplates:
           allowDNS: true
           # -- Allow egress to all public IPv4 except RFC1918 + link-local.
           allowInternetExceptPrivate: true
+          # -- Allow trusted sidecar callbacks to the orchestrator HTTP port.
+          allowControlPlane: true
           # -- Extra `egress` rules appended verbatim to the policy.
           extra: []
       # -- Extra container `env` entries appended to the opencode container.

@@ -8,8 +8,9 @@ import type { TriggerStore } from "../control/trigger.js";
 import type { BindingStore } from "../control/binding.js";
 import type { ConnectionStore } from "../connection/index.js";
 import type { RevisionResolutionStore } from "../revision/types.js";
+import type { GitHubEffectStore } from "../connectors/github/effects-api.js";
 
-export type RuntimeStore = ExecutionStore & TriggerStore & BindingStore & ConnectionStore & EventAdmissionStore & OutboxStore & DispatcherExecutionStore & RevisionResolutionStore & {
+export type RuntimeStore = ExecutionStore & TriggerStore & BindingStore & ConnectionStore & EventAdmissionStore & OutboxStore & DispatcherExecutionStore & RevisionResolutionStore & GitHubEffectStore & {
   close: () => Promise<void>;
 };
 
