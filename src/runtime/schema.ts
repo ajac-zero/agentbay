@@ -193,6 +193,7 @@ export const executions = pgTable("agentbay_executions", {
   availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
   bindingVersionID: text("binding_version_id").notNull(),
   completedAt: timestamp("completed_at", { withTimezone: true }),
+  currentInputSequence: integer("current_input_sequence").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   eventID: text("event_id").notNull(),
   id: text("id").primaryKey(),
@@ -209,6 +210,7 @@ export const executions = pgTable("agentbay_executions", {
   workspace: jsonb("workspace").$type<import("../workspace/types.js").ResolvedWorkspace>().notNull().default({ type: "empty" }),
 }, (table) => [
   check("agentbay_executions_state_valid", sql`${table.state} IN ('RECEIVED', 'PLANNED', 'QUEUED', 'PROVISIONING', 'RUNNING', 'WAITING', 'SUCCEEDED', 'DELIVERING', 'COMPLETED', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'CANCEL_REQUESTED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')`),
+  check("agentbay_executions_current_input_sequence_positive", sql`${table.currentInputSequence} > 0`),
   foreignKey({
     columns: [table.bindingVersionID, table.tenantID],
     foreignColumns: [bindingVersions.id, bindingVersions.tenantID],
@@ -234,6 +236,23 @@ export const executions = pgTable("agentbay_executions", {
   index("agentbay_executions_dispatch_idx")
     .on(table.availableAt, table.createdAt, table.id)
     .where(sql`${table.state} = 'QUEUED'`),
+]);
+
+export const executionInputs = pgTable("agentbay_execution_inputs", {
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  eventID: text("event_id").notNull(),
+  executionID: text("execution_id").notNull(),
+  input: jsonb("input").$type<unknown>().notNull(),
+  kind: text("kind").notNull(),
+  sequence: integer("sequence").notNull(),
+  tenantID: text("tenant_id").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.executionID, table.sequence] }),
+  check("agentbay_execution_inputs_sequence_positive", sql`${table.sequence} > 0`),
+  check("agentbay_execution_inputs_kind_valid", sql`${table.kind} IN ('INITIAL', 'WAKE')`),
+  foreignKey({ columns: [table.executionID, table.tenantID], foreignColumns: [executions.id, executions.tenantID], name: "agentbay_execution_inputs_execution_tenant_fk" }),
+  foreignKey({ columns: [table.eventID, table.tenantID], foreignColumns: [events.id, events.tenantID], name: "agentbay_execution_inputs_event_tenant_fk" }),
+  uniqueIndex("agentbay_execution_inputs_initial_unique").on(table.executionID).where(sql`${table.kind} = 'INITIAL'`),
 ]);
 
 export const executionAttempts = pgTable("agentbay_execution_attempts", {
@@ -304,8 +323,32 @@ export const eventWaits = pgTable("agentbay_event_waits", {
     name: "agentbay_event_waits_attempt_fk",
   }),
   uniqueIndex("agentbay_event_waits_one_active_execution_unique").on(table.tenantID, table.executionID).where(sql`${table.state} = 'ACTIVE'`),
+  unique("agentbay_event_waits_id_tenant_execution_unique").on(table.id, table.tenantID, table.executionID),
   index("agentbay_event_waits_deadline_idx").on(table.deadlineAt, table.executionID).where(sql`${table.state} = 'ACTIVE'`),
   index("agentbay_event_waits_name_idx").on(table.tenantID, table.name).where(sql`${table.state} = 'ACTIVE'`),
+]);
+
+export const eventWakes = pgTable("agentbay_event_wakes", {
+  action: text("action").notNull(),
+  bindingVersionID: text("binding_version_id").notNull(),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }).notNull(),
+  eventID: text("event_id").notNull(),
+  eventWaitID: text("event_wait_id").notNull(),
+  executionID: text("execution_id").notNull(),
+  id: text("id").primaryKey(),
+  inputSequence: integer("input_sequence"),
+  tenantID: text("tenant_id").notNull(),
+  toState: text("to_state").notNull(),
+}, (table) => [
+  check("agentbay_event_wakes_action_valid", sql`${table.action} IN ('CONTINUED', 'COMPLETED')`),
+  check("agentbay_event_wakes_lifecycle_consistent", sql`(${table.action} = 'CONTINUED' AND ${table.toState} = 'QUEUED' AND ${table.inputSequence} IS NOT NULL) OR (${table.action} = 'COMPLETED' AND ${table.toState} = 'COMPLETED' AND ${table.inputSequence} IS NULL)`),
+  foreignKey({ columns: [table.bindingVersionID, table.tenantID], foreignColumns: [bindingVersions.id, bindingVersions.tenantID], name: "agentbay_event_wakes_binding_tenant_fk" }),
+  foreignKey({ columns: [table.eventID, table.tenantID], foreignColumns: [events.id, events.tenantID], name: "agentbay_event_wakes_event_tenant_fk" }),
+  foreignKey({ columns: [table.executionID, table.tenantID], foreignColumns: [executions.id, executions.tenantID], name: "agentbay_event_wakes_execution_tenant_fk" }),
+  foreignKey({ columns: [table.eventWaitID, table.tenantID, table.executionID], foreignColumns: [eventWaits.id, eventWaits.tenantID, eventWaits.executionID], name: "agentbay_event_wakes_wait_execution_fk" }),
+  foreignKey({ columns: [table.executionID, table.inputSequence], foreignColumns: [executionInputs.executionID, executionInputs.sequence], name: "agentbay_event_wakes_input_fk" }),
+  uniqueIndex("agentbay_event_wakes_wait_unique").on(table.eventWaitID),
+  index("agentbay_event_wakes_event_idx").on(table.tenantID, table.eventID, table.executionID),
 ]);
 
 export const executionTransitions = pgTable("agentbay_execution_transitions", {

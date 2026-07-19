@@ -37,9 +37,7 @@ triggerId: engineering-github
 profile: { id: reviewer, version: 1 }
 definition:
   schemaVersion: 1
-  eventTypes:
-    - com.github.pull_request.opened
-    - com.github.pull_request.synchronize
+  eventTypes: [com.github.pull_request.opened]
   filter:
     all:
       - { path: /repository/fullName, op: eq, value: acme/agentbay }

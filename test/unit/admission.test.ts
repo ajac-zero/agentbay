@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { matchesBinding, matchesFilterClause, planAdmission, planExecution, renderBindingInput, UNTRUSTED_EVENT_BEGIN, UNTRUSTED_EVENT_END } from "../../src/control/admission.js";
-import type { PublishedBindingVersion } from "../../src/control/binding.js";
+import { matchesBinding, matchesFilterClause, planAdmission, planExecution, projectWakeCorrelation, renderBindingInput, renderPromptInput, UNTRUSTED_EVENT_BEGIN, UNTRUSTED_EVENT_END } from "../../src/control/admission.js";
+import type { PublishedBindingVersion, WakeBindingDefinition } from "../../src/control/binding.js";
 import type { NormalizedCloudEvent } from "../../src/execution/events.js";
 
 const event: NormalizedCloudEvent = {
@@ -120,11 +120,44 @@ describe("rendering and event-level planning", () => {
       admittedAt: command.admittedAt,
     });
     expect(result.executions).toHaveLength(1);
+    expect(result.wakes).toEqual([]);
     expect(result.replayed).toBe(true);
   });
 
   it("rejects disabled and cross-tenant binding candidates", () => {
     expect(planExecution({ ...binding, enabled: false }, command)).toBeUndefined();
     expect(planExecution({ ...binding, tenantId: "other" }, command)).toBeUndefined();
+  });
+});
+
+describe("wake planning", () => {
+  const definition: WakeBindingDefinition = {
+    disposition: "wake",
+    schemaVersion: 1,
+    eventTypes: ["com.example.created"],
+    filter: { all: [] },
+    wake: {
+      waitName: "review",
+      correlation: [{ name: "count", path: "/count" }, { name: "active", path: "/active" }],
+      action: { type: "continue", prompt: { literal: "Continue.", includeEvent: "data" } },
+    },
+  };
+
+  it("projects exact bounded primitive correlation", () => {
+    expect(projectWakeCorrelation(definition, event)).toEqual({ count: 2, active: false });
+    expect(projectWakeCorrelation({ ...definition, wake: { ...definition.wake, correlation: [{ name: "bad", path: "/nested" }] } }, event)).toBeUndefined();
+    expect(projectWakeCorrelation({ ...definition, wake: { ...definition.wake, correlation: [{ name: "bad", path: "/missing" }] } }, event)).toBeUndefined();
+    expect(projectWakeCorrelation({ ...definition, wake: { ...definition.wake, correlation: [{ name: "bad", path: "/value" }] } }, {
+      ...event, data: { value: "x".repeat(1_025) },
+    })).toBeUndefined();
+  });
+
+  it("renders bounded continuation prompts using the admitted event", () => {
+    const action = definition.wake.action;
+    if (action.type !== "continue") throw new Error("Expected continuation action");
+    expect(renderPromptInput(action.prompt, event)).toEqual({
+      text: expect.stringContaining(`Continue.\n\n${UNTRUSTED_EVENT_BEGIN}`),
+      context: { event: event.data, includeEvent: "data" },
+    });
   });
 });

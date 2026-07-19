@@ -30,11 +30,16 @@ never uses a mutable branch name.
 
 ## Planned Continuations
 
-Durable `EventWait` activation and the `WAITING` execution state are implemented
-through immutable binding `afterTurn` policy. The developer binding intentionally
-does not enable it yet: an issue-origin execution needs a deterministic PR
-identity before it can safely correlate review and merge events. Repository-only
-correlation would let one PR wake another execution.
+Durable wake bindings consume active waits atomically during normal event
+admission. GitHub PR events provide safe repository ID plus pull request number
+correlation. The example does not enable a PR continuation yet because a
+`synchronize` event also changes the immutable workspace revision; continuation
+workspace reconstruction is the next lifecycle slice.
+
+The developer binding also cannot enable a PR lifecycle wait yet: an
+issue-origin execution needs the future PR identity before it can safely
+correlate review and merge events. Repository-only correlation would let one PR
+wake another execution.
 
 Once wake bindings and deterministic PR identity are implemented, this example
 will add the following generic policy:

@@ -48,7 +48,7 @@ import {
   type RequestExecutionCancellationCommand,
   type RequestExecutionCancellationResult,
 } from "../execution/types.js";
-import { planExecution, type AdmissionCommand, type AdmissionResult } from "../control/admission.js";
+import { planExecution, projectWakeCorrelation, renderPromptInput, type AdmissionCommand, type AdmissionResult, type AdmissionWakeResult } from "../control/admission.js";
 import {
   ConnectionAlreadyExistsError,
   ConnectionNotFoundError,
@@ -57,7 +57,7 @@ import {
   parseConnection,
   type CreateConnectionCommand,
 } from "../connection/index.js";
-import { bindingDefinitionSchema, publishedBindingVersionSchema, BindingVersionAlreadyExistsError, type BindingStore, type PublishedBindingVersion } from "../control/binding.js";
+import { bindingDefinitionSchema, isWakeBinding, publishedBindingVersionSchema, BindingVersionAlreadyExistsError, type BindingStore, type PublishedBindingVersion, type WakeBindingDefinition } from "../control/binding.js";
 import { triggerSchema, TriggerAlreadyExistsError, TriggerNotFoundError, type Trigger, type TriggerStore } from "../control/trigger.js";
 import { agentProfileDefinitionSchema } from "../execution/api-schema.js";
 import { hashCanonicalJson, resolveJsonPointer, type JsonPrimitive, type JsonValue } from "../json.js";
@@ -330,10 +330,10 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         values: [binding.id, binding.tenantId, binding.bindingId, binding.version, binding.triggerId, profile.rows[0].id,
           JSON.stringify({
             filter: definition.filter,
-            prompt: definition.prompt,
             schemaVersion: definition.schemaVersion,
-            workspace: definition.workspace,
-            afterTurn: definition.afterTurn,
+            ...("disposition" in definition
+              ? { disposition: definition.disposition, wake: definition.wake }
+              : { workspace: definition.workspace, prompt: definition.prompt, afterTurn: definition.afterTurn }),
           }), definition.eventTypes, publishedAt],
       });
       if (inserted.rowCount !== 1) throw new BindingVersionAlreadyExistsError(binding.bindingId, binding.version);
@@ -389,8 +389,9 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       if (existing.rows.length > 0) {
         if (existing.rows.length !== 1 || existing.rows[0]!.admission_hash !== command.admissionHash) throw new IdempotencyConflictError();
         const persisted = await loadEventExecutions(client, command.tenantId, existing.rows[0]!.id);
+        const wakes = await loadEventWakes(client, command.tenantId, existing.rows[0]!.id);
         await client.query("COMMIT");
-        return { event: eventSummary(existing.rows[0]!), executions: persisted, replayed: true };
+        return { event: eventSummary(existing.rows[0]!), executions: persisted, wakes, replayed: true };
       }
 
       const trigger = await client.query("SELECT id FROM agentbay_triggers WHERE tenant_id = $1 AND id = $2 AND enabled FOR SHARE",
@@ -407,6 +408,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       const requiresResolution = revisionResolution !== undefined && candidates.rows.some((row) => {
         const binding = bindingFromRow(row);
         return matchesBinding(binding, command.event)
+          && !("disposition" in binding.definition)
           && binding.definition.workspace.type === "git"
           && binding.definition.workspace.revision.commit.path === "/repository/defaultBranchRevision/commit";
       });
@@ -431,6 +433,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         ]);
       }
       const created = requiresResolution ? [] : await this.createExecutions(client, command, candidates.rows);
+      const wakes = await this.consumeEventWaits(client, command, candidates.rows);
       await client.query("COMMIT");
       return {
         event: {
@@ -445,6 +448,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           type: command.event.type,
         },
         executions: created,
+        wakes,
         replayed: false,
       };
     } catch (error) {
@@ -537,7 +541,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         resolved_at = $4, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = $4
         WHERE event_id = $1 AND tenant_id = $2`, [input.eventId, input.tenantId, input.commit, new Date(input.resolvedAt)]);
       await client.query("COMMIT");
-      return { event: eventSummary(eventRow), executions: created, replayed: false };
+      return { event: eventSummary(eventRow), executions: created, wakes: await loadEventWakes(client, input.tenantId, input.eventId), replayed: false };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -585,6 +589,10 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         ($4,$2,$3,2,'RECEIVED','PLANNED','event-admission','binding and profile resolved',$6),
         ($5,$2,$3,3,'PLANNED','QUEUED','event-admission','execution queued',$6)`,
       [randomUUID(), command.tenantId, executionId, randomUUID(), randomUUID(), now]);
+      await client.query(`INSERT INTO agentbay_execution_inputs
+        (tenant_id, execution_id, sequence, kind, event_id, input, created_at)
+        VALUES ($1,$2,1,'INITIAL',$3,$4::jsonb,$5)`,
+      [command.tenantId, executionId, command.internalEventId, JSON.stringify(planned.input), now]);
       await client.query(`INSERT INTO agentbay_outbox
         (id, tenant_id, topic, aggregate_type, aggregate_id, payload, available_at, created_at)
         VALUES ($1,$2,'execution.requested','execution',$3,$4::jsonb,$5,$5)`,
@@ -592,6 +600,96 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       created.push(executionRecordFromJoined(execution.rows[0]!));
     }
     return created;
+  }
+
+  private async consumeEventWaits(
+    client: pg.PoolClient,
+    command: AdmissionCommand,
+    rows: BindingProfileRow[],
+  ): Promise<AdmissionWakeResult[]> {
+    const plans: Array<{ binding: PublishedBindingVersion & { definition: WakeBindingDefinition }; correlation: Record<string, JsonPrimitive> }> = [];
+    for (const row of rows) {
+      const binding = bindingFromRow(row);
+      if (!isWakeBinding(binding) || !matchesBinding(binding, command.event)) continue;
+      const correlation = projectWakeCorrelation(binding.definition, command.event);
+      if (correlation) plans.push({ binding, correlation });
+    }
+    if (plans.length === 0) return [];
+
+    const selected = new Map<string, { executionId: string; waitId: string; binding: typeof plans[number]["binding"]; correlation: Record<string, JsonPrimitive> }>();
+    for (const plan of plans) {
+      const candidates = await client.query<{ execution_id: string; id: string }>(`SELECT wait.execution_id, wait.id
+        FROM agentbay_event_waits AS wait
+        JOIN agentbay_executions AS execution ON execution.id = wait.execution_id AND execution.tenant_id = wait.tenant_id
+        WHERE wait.tenant_id = $1 AND wait.name = $2 AND wait.correlation = $3::jsonb
+          AND wait.state = 'ACTIVE' AND wait.deadline_at > clock_timestamp() AND execution.state = 'WAITING'
+        ORDER BY wait.execution_id, wait.id`, [command.tenantId, plan.binding.definition.wake.waitName, JSON.stringify(plan.correlation)]);
+      for (const candidate of candidates.rows) {
+        if (!selected.has(candidate.id)) selected.set(candidate.id, {
+          binding: plan.binding, correlation: plan.correlation, executionId: candidate.execution_id, waitId: candidate.id,
+        });
+      }
+    }
+
+    const results: AdmissionWakeResult[] = [];
+    const ordered = [...selected.values()].sort((left, right) => left.executionId.localeCompare(right.executionId) || left.waitId.localeCompare(right.waitId));
+    for (const item of ordered) {
+      const executionResult = await client.query<{ current_input_sequence: number; state: string }>(
+        "SELECT state, current_input_sequence FROM agentbay_executions WHERE tenant_id = $1 AND id = $2 FOR UPDATE",
+        [command.tenantId, item.executionId],
+      );
+      if (executionResult.rows[0]?.state !== "WAITING") continue;
+      const waitResult = await client.query<{ state: string; name: string; correlation: Record<string, JsonPrimitive>; deadline_at: Date }>(`SELECT state, name, correlation, deadline_at
+        FROM agentbay_event_waits WHERE tenant_id = $1 AND id = $2 AND execution_id = $3 FOR UPDATE`,
+      [command.tenantId, item.waitId, item.executionId]);
+      const wait = waitResult.rows[0];
+      const now = (await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
+      if (!wait || wait.state !== "ACTIVE" || wait.name !== item.binding.definition.wake.waitName
+        || hashCanonicalJson(wait.correlation) !== hashCanonicalJson(item.correlation) || wait.deadline_at <= now) continue;
+
+      const wakeId = randomUUID();
+      const wakeAction = item.binding.definition.wake.action;
+      const continuation = wakeAction.type === "continue";
+      const inputSequence = continuation ? executionResult.rows[0]!.current_input_sequence + 1 : null;
+      const action = continuation ? "CONTINUED" : "COMPLETED";
+      const targetState = continuation ? "QUEUED" : "COMPLETED";
+      await client.query("UPDATE agentbay_event_waits SET state = 'CONSUMED', ended_at = $3 WHERE tenant_id = $1 AND id = $2 AND state = 'ACTIVE'", [command.tenantId, item.waitId, now]);
+      if (continuation) {
+        if (wakeAction.type !== "continue") throw new Error("Wake action changed during admission");
+        const input = renderPromptInput(wakeAction.prompt, command.event);
+        await client.query(`INSERT INTO agentbay_execution_inputs
+          (tenant_id, execution_id, sequence, kind, event_id, input, created_at)
+          VALUES ($1,$2,$3,'WAKE',$4,$5::jsonb,$6)`,
+        [command.tenantId, item.executionId, inputSequence, command.internalEventId, JSON.stringify(input), now]);
+      }
+      await client.query(`UPDATE agentbay_executions SET state = $3::text, updated_at = $4::timestamptz, available_at = $4::timestamptz,
+          current_input_sequence = COALESCE($5::integer, current_input_sequence), completed_at = CASE WHEN $3::text = 'COMPLETED' THEN $4::timestamptz ELSE NULL END,
+          timeout_at = CASE WHEN $3::text = 'QUEUED'
+            THEN $4::timestamptz + (((resolved_policy->>'timeoutSeconds')::integer) * interval '1 second')
+            ELSE timeout_at END
+        WHERE tenant_id = $1 AND id = $2 AND state = 'WAITING'`,
+      [command.tenantId, item.executionId, targetState, now, inputSequence]);
+      await client.query(`INSERT INTO agentbay_event_wakes
+        (id, tenant_id, event_id, event_wait_id, execution_id, binding_version_id, action, input_sequence, to_state, consumed_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [wakeId, command.tenantId, command.internalEventId, item.waitId, item.executionId, item.binding.id, action, inputSequence, targetState, now]);
+      await client.query(`INSERT INTO agentbay_execution_transitions
+        (id, tenant_id, execution_id, attempt, sequence, from_state, to_state, actor, reason, created_at)
+        VALUES ($1,$2,$3,NULL,(SELECT COALESCE(MAX(sequence),0)+1 FROM agentbay_execution_transitions WHERE tenant_id=$2 AND execution_id=$3),
+          'WAITING',$4,'event-admission','matching event consumed active wait',$5)`,
+      [randomUUID(), command.tenantId, item.executionId, targetState, now]);
+      if (continuation) {
+        await client.query(`INSERT INTO agentbay_outbox
+          (id, tenant_id, topic, aggregate_type, aggregate_id, payload, available_at, created_at)
+          VALUES ($1,$2,'execution.requested','event-wake',$3,$4::jsonb,$5,$5)`,
+        [randomUUID(), command.tenantId, wakeId, JSON.stringify({ schemaVersion: 1, tenantId: command.tenantId, executionId: item.executionId, wakeId, inputSequence }), now]);
+      }
+      results.push({
+        action, binding: { id: item.binding.bindingId, version: item.binding.version }, consumedAt: now.toISOString(),
+        eventWaitId: item.waitId, executionId: item.executionId, id: wakeId, inputSequence, state: targetState,
+      });
+    }
+    return results;
   }
 
   async getExecution(tenantId: string, executionId: string): Promise<Execution | undefined> {
@@ -775,7 +873,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
             RETURNING execution_id
           )
           SELECT execution.id, execution.tenant_id, execution.state AS execution_state,
-                 execution.event_id, execution.input, execution.workspace, execution.resolved_policy,
+                  execution.event_id, current_input.input, execution.workspace, execution.resolved_policy,
                  execution.created_at, execution.timeout_at,
                   profile.id AS profile_version_id, profile.profile_id, profile.version,
                   profile.definition AS definition,
@@ -784,6 +882,8 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           FROM updated_execution AS execution
           JOIN inserted_attempt AS attempt ON attempt.execution_id = execution.id
           JOIN inserted_transition AS transition ON transition.execution_id = execution.id
+          JOIN agentbay_execution_inputs AS current_input
+            ON current_input.execution_id = execution.id AND current_input.sequence = execution.current_input_sequence
           JOIN agentbay_agent_profile_versions AS profile
             ON profile.id = execution.profile_version_id AND profile.tenant_id = execution.tenant_id
         `,
@@ -868,7 +968,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
             RETURNING execution.*
           )
           SELECT execution.id, execution.tenant_id, execution.state AS execution_state,
-                 execution.event_id, execution.input, execution.workspace, execution.resolved_policy,
+                  execution.event_id, current_input.input, execution.workspace, execution.resolved_policy,
                  execution.created_at, execution.timeout_at,
                  profile.id AS profile_version_id, profile.profile_id, profile.version,
                  profile.definition AS definition,
@@ -878,6 +978,8 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           FROM updated_execution AS execution
           JOIN updated_attempt AS attempt
             ON attempt.execution_id = execution.id AND attempt.tenant_id = execution.tenant_id
+          JOIN agentbay_execution_inputs AS current_input
+            ON current_input.execution_id = execution.id AND current_input.sequence = execution.current_input_sequence
           JOIN agentbay_agent_profile_versions AS profile
             ON profile.id = execution.profile_version_id AND profile.tenant_id = execution.tenant_id
         `,
@@ -1542,6 +1644,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       const bindingResult = await client.query<BindingRow>(BINDING_SELECT + " WHERE binding.tenant_id = $1 AND binding.id = $2", [command.tenantId, execution.binding_version_id]);
       const binding = bindingResult.rows[0] ? bindingFromRow(bindingResult.rows[0]) : undefined;
       if (!binding) throw new PersistedExecutionCorruptionError(command.executionId, "binding version");
+      if ("disposition" in binding.definition) throw new PersistedExecutionCorruptionError(command.executionId, "wake binding created execution");
       const policy = binding.definition.afterTurn;
       let wait: { id: string; name: string; correlation: Record<string, JsonPrimitive>; deadline: Date } | undefined;
       let executionState: "SUCCEEDED" | "WAITING" | "TIMED_OUT" = "SUCCEEDED";
@@ -1758,6 +1861,17 @@ type EventWaitRow = {
   name: string;
   state: string;
 };
+type EventWakeRow = {
+  action: "CONTINUED" | "COMPLETED";
+  binding_id: string;
+  binding_version: number;
+  consumed_at: Date;
+  event_wait_id: string;
+  execution_id: string;
+  id: string;
+  input_sequence: number | null;
+  to_state: "QUEUED" | "COMPLETED";
+};
 
 type ClaimedExecutionRow = {
   attempt: number;
@@ -1918,12 +2032,12 @@ function triggerFromRow(row: TriggerSqlRow): Trigger {
 function bindingFromRow(row: BindingRow): PublishedBindingVersion {
   const persisted = row.definition as Record<string, unknown>;
   const definition = bindingDefinitionSchema.parse({
-    afterTurn: persisted.afterTurn,
     filter: persisted.filter,
-    prompt: persisted.prompt,
     schemaVersion: persisted.schemaVersion,
-    workspace: persisted.workspace,
     eventTypes: row.event_types,
+    ...(persisted.disposition === "wake"
+      ? { disposition: persisted.disposition, wake: persisted.wake }
+      : { afterTurn: persisted.afterTurn, prompt: persisted.prompt, workspace: persisted.workspace }),
   });
   return {
     bindingId: row.binding_id,
@@ -2000,9 +2114,11 @@ function revisionResolutionFromRow(row: RevisionResolutionRow): ClaimedRevisionR
   };
 }
 
-const EXECUTION_SELECT = `SELECT execution.*, binding.binding_id, binding.version AS binding_version,
+const EXECUTION_SELECT = `SELECT execution.*, current_input.input AS input, binding.binding_id, binding.version AS binding_version,
   profile.profile_id, profile.version AS profile_version
   FROM agentbay_executions AS execution
+  JOIN agentbay_execution_inputs AS current_input
+    ON current_input.execution_id = execution.id AND current_input.sequence = execution.current_input_sequence
   JOIN agentbay_binding_versions AS binding ON binding.id = execution.binding_version_id AND binding.tenant_id = execution.tenant_id
   JOIN agentbay_agent_profile_versions AS profile ON profile.id = execution.profile_version_id AND profile.tenant_id = execution.tenant_id`;
 
@@ -2010,6 +2126,24 @@ async function loadEventExecutions(client: pg.PoolClient, tenantId: string, even
   const result = await client.query<ExecutionJoinedRow>(EXECUTION_SELECT + ` WHERE execution.tenant_id = $1 AND execution.event_id = $2
     ORDER BY binding.binding_id, binding.version, execution.id`, [tenantId, eventId]);
   return result.rows.map(executionRecordFromJoined);
+}
+
+async function loadEventWakes(client: pg.PoolClient, tenantId: string, eventId: string): Promise<AdmissionWakeResult[]> {
+  const result = await client.query<EventWakeRow>(`SELECT wake.*, binding.binding_id, binding.version AS binding_version
+    FROM agentbay_event_wakes AS wake
+    JOIN agentbay_binding_versions AS binding ON binding.id = wake.binding_version_id AND binding.tenant_id = wake.tenant_id
+    WHERE wake.tenant_id = $1 AND wake.event_id = $2
+    ORDER BY wake.execution_id, wake.event_wait_id, wake.id`, [tenantId, eventId]);
+  return result.rows.map((row) => ({
+    action: row.action,
+    binding: { id: row.binding_id, version: row.binding_version },
+    consumedAt: row.consumed_at.toISOString(),
+    eventWaitId: row.event_wait_id,
+    executionId: row.execution_id,
+    id: row.id,
+    inputSequence: row.input_sequence,
+    state: row.to_state,
+  }));
 }
 
 function executionRecordFromJoined(row: ExecutionJoinedRow): Execution {

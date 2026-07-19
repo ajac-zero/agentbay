@@ -237,9 +237,13 @@ closes the active wait and immediately cancels the execution. Maintenance
 expires overdue waits as `TIMED_OUT`. Execution details expose complete wait
 history alongside attempts and transitions.
 
-Wake bindings and continuation submission are not implemented yet. Until they
-are, use `afterTurn` only when durable waiting and cancellation/expiry behavior
-is desired; no ingress can currently consume an active wait.
+Wake bindings declare `disposition: "wake"`, an exact wait name, bounded
+correlation projections over normalized event data, and either a `continue` or
+`complete` action. Admission atomically consumes each matching one-shot wait.
+A continuation appends immutable input history and moves `WAITING -> QUEUED`;
+retries use that same input sequence. A terminal action moves directly to
+`COMPLETED`. Exact event replay reloads persisted wake results and never rematches
+current bindings or active waits.
 
 GitHub issue events do not contain a default-branch commit. A developer binding
 can select `/repository/defaultBranchRevision/commit`. When such a binding
