@@ -22,6 +22,7 @@ export const afterTurnSchema = z.object({
     correlation: z.array(z.object({ name: simpleIdSchema, path: jsonPointerSchema }).strict()).min(1).max(16)
       .refine((items) => new Set(items.map((item) => item.name)).size === items.length, "correlation names must be unique"),
     deadlineSeconds: z.number().int().min(1).max(30 * 24 * 60 * 60),
+    admitWhileBusy: z.boolean().optional(),
   }).strict(),
 }).strict();
 
@@ -53,6 +54,7 @@ export const wakeBindingDefinitionSchema = z
     disposition: z.literal("wake"),
     wake: z.object({
       waitName: simpleIdSchema,
+      delivery: z.enum(["active-only", "active-or-coalesced"]).optional(),
       correlation: z.array(z.object({ name: simpleIdSchema, path: jsonPointerSchema }).strict()).min(1).max(16)
         .refine((items) => new Set(items.map((item) => item.name)).size === items.length, "correlation names must be unique"),
       action: z.discriminatedUnion("type", [

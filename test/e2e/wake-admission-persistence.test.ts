@@ -135,6 +135,120 @@ describe("wake admission persistence", () => {
     expect(await store.getExecution("default", executionId)).toMatchObject({ state: "WAITING" });
   });
 
+  it("coalesces busy continuation events and applies the latest workspace at turn completion", async () => {
+    const correlation = randomUUID();
+    const executionId = await createQueuedExecution(correlation);
+    await publishWakeBinding(`busy-${correlation}`, "work.busy", {
+      type: "continue", prompt: { literal: "Use latest revision.", includeEvent: "data" },
+      workspace: { type: "git", repository: { url: { path: "/repositoryUrl" } }, revision: { commit: { path: "/commit" } } },
+    });
+    const firstCommand = admissionCommand("work.busy", { key: correlation, repositoryUrl: "https://github.com/acme/repo.git", commit: "a".repeat(40) });
+    const secondCommand = admissionCommand("work.busy", { key: correlation, repositoryUrl: "https://github.com/acme/repo.git", commit: "b".repeat(40) });
+
+    const first = await store.admitEvent(firstCommand);
+    const second = await store.admitEvent(secondCommand);
+    expect(first.pendingWakes).toEqual([expect.objectContaining({ executionId, action: "CONTINUED", disposition: "PENDING" })]);
+    expect(await store.admitEvent(firstCommand)).toEqual({ ...first, replayed: true });
+    expect(second.pendingWakes).toEqual([expect.objectContaining({ executionId, action: "CONTINUED", disposition: "PENDING" })]);
+
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: `busy-worker-${correlation}`, leaseDurationMs: 60_000 });
+    if (!claimed || claimed.executionId !== executionId) throw new Error("Expected busy execution claim");
+    await store.transitionLeasedExecution({
+      actor: claimed.lease.leaseOwner, attempt: 1, executionId, expectedAttemptState: "LEASED", expectedExecutionState: "PROVISIONING",
+      fencingToken: claimed.lease.fencingToken, leaseOwner: claimed.lease.leaseOwner, reason: "ready", targetAttemptState: "RUNNING", targetExecutionState: "RUNNING", tenantId: "default",
+    });
+    const completion = await store.completeLeasedExecutionTurn({
+      actor: claimed.lease.leaseOwner, attempt: 1, executionId, fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner, reason: "complete", result: null, tenantId: "default",
+    });
+    expect(completion).toMatchObject({ applied: true, executionState: "QUEUED" });
+    expect((await pool.query("select count(*)::int as count from agentbay_event_waits where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 0 });
+    expect(await store.getExecution("default", executionId)).toMatchObject({
+      input: { text: expect.stringContaining("Use latest revision.") },
+      workspace: { revision: { commit: "b".repeat(40) } },
+    });
+    expect((await pool.query("select count(*)::int as count from agentbay_execution_inputs where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 2 });
+    const appliedWake = (await pool.query<{ id: string }>("select id from agentbay_event_wakes where execution_id=$1 and wake_intent_id is not null", [executionId])).rows[0]!;
+    expect((await pool.query<{ aggregate_id: string; payload: { wakeId: string } }>(
+      "select aggregate_id, payload from agentbay_outbox where aggregate_type='event-wake' and aggregate_id=$1", [appliedWake.id],
+    )).rows[0]).toMatchObject({ aggregate_id: appliedWake.id, payload: { wakeId: appliedWake.id } });
+    const continuation = await store.claimNextQueuedExecution({ leaseOwner: `busy-continuation-${correlation}`, leaseDurationMs: 60_000 });
+    if (!continuation || continuation.executionId !== executionId) throw new Error("Expected continuation claim");
+    await store.transitionLeasedExecution({
+      actor: continuation.lease.leaseOwner, attempt: 2, executionId, expectedAttemptState: "LEASED", expectedExecutionState: "PROVISIONING",
+      fencingToken: continuation.lease.fencingToken, leaseOwner: continuation.lease.leaseOwner, reason: "ready", targetAttemptState: "RUNNING", targetExecutionState: "RUNNING", tenantId: "default",
+    });
+    await store.completeLeasedExecutionTurn({
+      actor: continuation.lease.leaseOwner, attempt: 2, executionId, fencingToken: continuation.lease.fencingToken,
+      leaseOwner: continuation.lease.leaseOwner, reason: "complete", result: null, tenantId: "default",
+    });
+  });
+
+  it("lets a pending terminal wake dominate continuation and complete after the current turn", async () => {
+    const correlation = randomUUID();
+    const executionId = await createQueuedExecution(correlation);
+    await publishWakeBinding(`continue-${correlation}`, "work.pending-continue", {
+      type: "continue", prompt: { literal: "Continue.", includeEvent: "data" },
+    });
+    await publishWakeBinding(`terminal-${correlation}`, "work.pending-terminal", { type: "complete" });
+    await store.admitEvent(admissionCommand("work.pending-continue", { key: correlation }));
+    const terminal = await store.admitEvent(admissionCommand("work.pending-terminal", { key: correlation }));
+    const dominated = await store.admitEvent(admissionCommand("work.pending-continue", { key: correlation, later: true }));
+    expect(terminal.pendingWakes).toEqual([expect.objectContaining({ action: "COMPLETED", disposition: "PENDING" })]);
+    expect(dominated.pendingWakes).toEqual([expect.objectContaining({ action: "CONTINUED", disposition: "DOMINATED" })]);
+
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: `terminal-worker-${correlation}`, leaseDurationMs: 60_000 });
+    if (!claimed || claimed.executionId !== executionId) throw new Error("Expected terminal execution claim");
+    await store.transitionLeasedExecution({
+      actor: claimed.lease.leaseOwner, attempt: 1, executionId, expectedAttemptState: "LEASED", expectedExecutionState: "PROVISIONING",
+      fencingToken: claimed.lease.fencingToken, leaseOwner: claimed.lease.leaseOwner, reason: "ready", targetAttemptState: "RUNNING", targetExecutionState: "RUNNING", tenantId: "default",
+    });
+    const completion = await store.completeLeasedExecutionTurn({
+      actor: claimed.lease.leaseOwner, attempt: 1, executionId, fencingToken: claimed.lease.fencingToken,
+      leaseOwner: claimed.lease.leaseOwner, reason: "complete", result: null, tenantId: "default",
+    });
+    expect(completion).toMatchObject({ applied: true, executionState: "COMPLETED" });
+    expect((await pool.query("select count(*)::int as count from agentbay_execution_inputs where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 1 });
+    expect((await pool.query("select count(*)::int as count from agentbay_execution_pending_wakes where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 0 });
+  });
+
+  it("does not apply a wake binding to the execution created by the same event", async () => {
+    const correlation = randomUUID();
+    await store.publishBindingVersion({
+      bindingId: `same-create-${correlation}`, createdAt: new Date().toISOString(), disabledAt: null, enabled: true, id: randomUUID(),
+      profile: { id: "developer", version: 1 }, tenantId: "default", triggerId: "events", version: 1,
+      definition: {
+        schemaVersion: 1, eventTypes: ["work.same"], filter: { all: [{ path: "/key", op: "eq", value: correlation }] },
+        prompt: { literal: "Start.", includeEvent: "data" }, workspace: { type: "empty" },
+        afterTurn: { disposition: "wait", wait: { name: "work-lifecycle", correlation: [{ name: "key", path: "/key" }], deadlineSeconds: 600, admitWhileBusy: true } },
+      },
+    });
+    await publishWakeBinding(`same-wake-${correlation}`, "work.same", { type: "continue", prompt: { literal: "Continue.", includeEvent: "data" } });
+
+    const admitted = await store.admitEvent(admissionCommand("work.same", { key: correlation }));
+
+    expect(admitted.executions).toHaveLength(1);
+    expect(admitted.pendingWakes).toEqual([]);
+    expect((await pool.query("select count(*)::int as count from agentbay_event_wake_intents where event_id=$1", [admitted.event.id])).rows[0]).toEqual({ count: 0 });
+    await store.requestExecutionCancellation({
+      actor: "test", executionId: admitted.executions[0]!.id, reason: "cleanup", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID(),
+    });
+  });
+
+  it("clears a pending pointer on cancellation while retaining immutable intent history", async () => {
+    const correlation = randomUUID();
+    const executionId = await createQueuedExecution(correlation);
+    await publishWakeBinding(`cancel-${correlation}`, "work.cancel-pending", { type: "continue", prompt: { literal: "Continue.", includeEvent: "data" } });
+    await store.admitEvent(admissionCommand("work.cancel-pending", { key: correlation }));
+
+    await store.requestExecutionCancellation({
+      actor: "test", executionId, reason: "cancel", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID(),
+    });
+
+    expect((await pool.query("select count(*)::int as count from agentbay_execution_pending_wakes where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 0 });
+    expect((await pool.query("select count(*)::int as count from agentbay_event_wake_intents where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 1 });
+  });
+
   it("terminally completes a waiting execution without queueing another attempt", async () => {
     const correlation = randomUUID();
     const executionId = await createWaitingExecution(correlation);
@@ -211,6 +325,22 @@ describe("wake admission persistence", () => {
     return executionId;
   }
 
+  async function createQueuedExecution(correlation: string): Promise<string> {
+    const bindingId = `busy-start-${correlation}`;
+    await store.publishBindingVersion({
+      bindingId, createdAt: new Date().toISOString(), disabledAt: null, enabled: true, id: randomUUID(),
+      profile: { id: "developer", version: 1 }, tenantId: "default", triggerId: "events", version: 1,
+      definition: {
+        schemaVersion: 1, eventTypes: ["work.busy-start"], filter: { all: [{ path: "/key", op: "eq", value: correlation }] },
+        prompt: { literal: "Start busy work.", includeEvent: "data" }, workspace: { type: "empty" },
+        afterTurn: { disposition: "wait", wait: {
+          name: "work-lifecycle", correlation: [{ name: "key", path: "/key" }], deadlineSeconds: 600, admitWhileBusy: true,
+        } },
+      },
+    });
+    return (await store.admitEvent(admissionCommand("work.busy-start", { key: correlation }))).executions[0]!.id;
+  }
+
   async function publishWakeBinding(bindingId: string, eventType: string, action: { type: "complete" } | {
     type: "continue"; prompt: { literal: string; includeEvent: "data" }; workspace?: BindingWorkspace;
   }): Promise<void> {
@@ -219,7 +349,7 @@ describe("wake admission persistence", () => {
       profile: { id: "developer", version: 1 }, tenantId: "default", triggerId: "events", version: 1,
       definition: {
         disposition: "wake", schemaVersion: 1, eventTypes: [eventType], filter: { all: [] },
-        wake: { waitName: "work-lifecycle", correlation: [{ name: "key", path: "/key" }], action },
+        wake: { waitName: "work-lifecycle", delivery: "active-or-coalesced", correlation: [{ name: "key", path: "/key" }], action },
       },
     });
   }

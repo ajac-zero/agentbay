@@ -246,6 +246,12 @@ use that same input and workspace sequence. A terminal action moves directly to
 `COMPLETED`. Exact event replay reloads persisted wake results and never rematches
 current bindings or active waits.
 
+Bindings may explicitly opt into busy wake admission. Matching events received
+while an execution is queued, provisioning, running, or waiting to retry are
+retained as immutable intents. Continuations coalesce to the latest intent,
+while terminal completion dominates continuation. Fenced turn completion
+atomically applies the pending intent instead of entering `WAITING`.
+
 GitHub issue events do not contain a default-branch commit. A developer binding
 can select `/repository/defaultBranchRevision/commit`. When such a binding
 matches, Agentbay commits the original normalized event and a durable resolution

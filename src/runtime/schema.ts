@@ -256,6 +256,61 @@ export const executionInputs = pgTable("agentbay_execution_inputs", {
   uniqueIndex("agentbay_execution_inputs_initial_unique").on(table.executionID).where(sql`${table.kind} = 'INITIAL'`),
 ]);
 
+export const executionWakeContexts = pgTable("agentbay_execution_wake_contexts", {
+  correlation: jsonb("correlation").$type<Record<string, import("../json.js").JsonPrimitive>>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  executionID: text("execution_id").notNull(),
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  tenantID: text("tenant_id").notNull(),
+}, (table) => [
+  check("agentbay_execution_wake_contexts_correlation_object", sql`jsonb_typeof(${table.correlation}) = 'object'`),
+  foreignKey({ columns: [table.executionID, table.tenantID], foreignColumns: [executions.id, executions.tenantID], name: "agentbay_execution_wake_contexts_execution_tenant_fk" }),
+  uniqueIndex("agentbay_execution_wake_contexts_execution_unique").on(table.tenantID, table.executionID),
+  index("agentbay_execution_wake_contexts_match_idx").on(table.tenantID, table.name),
+]);
+
+export const eventWakeIntents = pgTable("agentbay_event_wake_intents", {
+  action: text("action").notNull(),
+  admittedAt: timestamp("admitted_at", { withTimezone: true }).notNull(),
+  bindingVersionID: text("binding_version_id").notNull(),
+  disposition: text("disposition").notNull(),
+  eventID: text("event_id").notNull(),
+  executionID: text("execution_id").notNull(),
+  id: text("id").primaryKey(),
+  input: jsonb("input").$type<unknown>(),
+  tenantID: text("tenant_id").notNull(),
+  workspace: jsonb("workspace").$type<import("../workspace/types.js").ResolvedWorkspace>(),
+}, (table) => [
+  check("agentbay_event_wake_intents_action_valid", sql`${table.action} IN ('CONTINUED', 'COMPLETED')`),
+  check("agentbay_event_wake_intents_disposition_valid", sql`${table.disposition} IN ('PENDING', 'DOMINATED')`),
+  check("agentbay_event_wake_intents_payload_consistent", sql`(${table.action} = 'CONTINUED' AND ${table.input} IS NOT NULL AND ${table.workspace} IS NOT NULL) OR (${table.action} = 'COMPLETED' AND ${table.input} IS NULL AND ${table.workspace} IS NULL)`),
+  foreignKey({ columns: [table.eventID, table.tenantID], foreignColumns: [events.id, events.tenantID], name: "agentbay_event_wake_intents_event_tenant_fk" }),
+  foreignKey({ columns: [table.executionID, table.tenantID], foreignColumns: [executions.id, executions.tenantID], name: "agentbay_event_wake_intents_execution_tenant_fk" }),
+  foreignKey({ columns: [table.bindingVersionID, table.tenantID], foreignColumns: [bindingVersions.id, bindingVersions.tenantID], name: "agentbay_event_wake_intents_binding_tenant_fk" }),
+  uniqueIndex("agentbay_event_wake_intents_event_execution_unique").on(table.tenantID, table.eventID, table.executionID),
+  uniqueIndex("agentbay_event_wake_intents_pending_reference_unique").on(table.id, table.tenantID, table.executionID),
+  uniqueIndex("agentbay_event_wake_intents_applied_reference_unique").on(
+    table.id, table.tenantID, table.eventID, table.executionID, table.bindingVersionID, table.action,
+  ),
+]);
+
+export const executionPendingWakes = pgTable("agentbay_execution_pending_wakes", {
+  executionID: text("execution_id").notNull(),
+  intentID: text("intent_id").notNull(),
+  tenantID: text("tenant_id").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.tenantID, table.executionID] }),
+  foreignKey({ columns: [table.executionID, table.tenantID], foreignColumns: [executions.id, executions.tenantID], name: "agentbay_execution_pending_wakes_execution_tenant_fk" }),
+  foreignKey({
+    columns: [table.intentID, table.tenantID, table.executionID],
+    foreignColumns: [eventWakeIntents.id, eventWakeIntents.tenantID, eventWakeIntents.executionID],
+    name: "agentbay_execution_pending_wakes_intent_fk",
+  }),
+  uniqueIndex("agentbay_execution_pending_wakes_intent_unique").on(table.intentID),
+]);
+
 export const executionAttempts = pgTable("agentbay_execution_attempts", {
   attempt: integer("attempt").notNull(),
   executionID: text("execution_id").notNull(),
@@ -334,7 +389,8 @@ export const eventWakes = pgTable("agentbay_event_wakes", {
   bindingVersionID: text("binding_version_id").notNull(),
   consumedAt: timestamp("consumed_at", { withTimezone: true }).notNull(),
   eventID: text("event_id").notNull(),
-  eventWaitID: text("event_wait_id").notNull(),
+  eventWaitID: text("event_wait_id"),
+  wakeIntentID: text("wake_intent_id"),
   executionID: text("execution_id").notNull(),
   id: text("id").primaryKey(),
   inputSequence: integer("input_sequence"),
@@ -343,12 +399,19 @@ export const eventWakes = pgTable("agentbay_event_wakes", {
 }, (table) => [
   check("agentbay_event_wakes_action_valid", sql`${table.action} IN ('CONTINUED', 'COMPLETED')`),
   check("agentbay_event_wakes_lifecycle_consistent", sql`(${table.action} = 'CONTINUED' AND ${table.toState} = 'QUEUED' AND ${table.inputSequence} IS NOT NULL) OR (${table.action} = 'COMPLETED' AND ${table.toState} = 'COMPLETED' AND ${table.inputSequence} IS NULL)`),
+  check("agentbay_event_wakes_exactly_one_source", sql`(${table.eventWaitID} IS NOT NULL) <> (${table.wakeIntentID} IS NOT NULL)`),
   foreignKey({ columns: [table.bindingVersionID, table.tenantID], foreignColumns: [bindingVersions.id, bindingVersions.tenantID], name: "agentbay_event_wakes_binding_tenant_fk" }),
   foreignKey({ columns: [table.eventID, table.tenantID], foreignColumns: [events.id, events.tenantID], name: "agentbay_event_wakes_event_tenant_fk" }),
   foreignKey({ columns: [table.executionID, table.tenantID], foreignColumns: [executions.id, executions.tenantID], name: "agentbay_event_wakes_execution_tenant_fk" }),
   foreignKey({ columns: [table.eventWaitID, table.tenantID, table.executionID], foreignColumns: [eventWaits.id, eventWaits.tenantID, eventWaits.executionID], name: "agentbay_event_wakes_wait_execution_fk" }),
+  foreignKey({
+    columns: [table.wakeIntentID, table.tenantID, table.eventID, table.executionID, table.bindingVersionID, table.action],
+    foreignColumns: [eventWakeIntents.id, eventWakeIntents.tenantID, eventWakeIntents.eventID, eventWakeIntents.executionID, eventWakeIntents.bindingVersionID, eventWakeIntents.action],
+    name: "agentbay_event_wakes_intent_fk",
+  }),
   foreignKey({ columns: [table.executionID, table.inputSequence], foreignColumns: [executionInputs.executionID, executionInputs.sequence], name: "agentbay_event_wakes_input_fk" }),
-  uniqueIndex("agentbay_event_wakes_wait_unique").on(table.eventWaitID),
+  uniqueIndex("agentbay_event_wakes_wait_unique").on(table.eventWaitID).where(sql`${table.eventWaitID} IS NOT NULL`),
+  uniqueIndex("agentbay_event_wakes_intent_unique").on(table.wakeIntentID).where(sql`${table.wakeIntentID} IS NOT NULL`),
   index("agentbay_event_wakes_event_idx").on(table.tenantID, table.eventID, table.executionID),
 ]);
 

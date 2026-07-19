@@ -93,7 +93,7 @@ export type CompleteLeasedExecutionTurnCommand = {
 };
 
 export type CompleteLeasedExecutionTurnResult =
-  | { applied: true; attemptState: "SUCCEEDED"; executionState: "SUCCEEDED" | "WAITING" | "TIMED_OUT"; eventWaitId?: string }
+  | { applied: true; attemptState: "SUCCEEDED"; executionState: "SUCCEEDED" | "WAITING" | "QUEUED" | "COMPLETED" | "TIMED_OUT"; eventWaitId?: string }
   | { applied: false; reason: "NOT_FOUND" | "STATE_MISMATCH" | "LEASE_MISMATCH" | "LEASE_EXPIRED" };
 
 export type ExpiredEventWait = {

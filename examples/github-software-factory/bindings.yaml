@@ -37,9 +37,7 @@ triggerId: engineering-github
 profile: { id: reviewer, version: 1 }
 definition:
   schemaVersion: 1
-  eventTypes:
-    - com.github.pull_request.opened
-    - com.github.pull_request.synchronize
+  eventTypes: [com.github.pull_request.opened]
   filter:
     all:
       - { path: /repository/fullName, op: eq, value: acme/agentbay }
@@ -48,3 +46,55 @@ definition:
     type: git
     repository: { url: { path: /pullRequest/head/repository/cloneUrl } }
     revision: { commit: { path: /pullRequest/head/sha } }
+  afterTurn:
+    disposition: wait
+    wait:
+      name: reviewer-pr-lifecycle
+      correlation:
+        - { name: repositoryId, path: /repository/id }
+        - { name: pullRequestNumber, path: /pullRequest/number }
+      deadlineSeconds: 604800
+      admitWhileBusy: true
+---
+version: 1
+triggerId: engineering-github
+profile: { id: reviewer, version: 1 }
+definition:
+  schemaVersion: 1
+  disposition: wake
+  eventTypes: [com.github.pull_request.synchronize]
+  filter:
+    all:
+      - { path: /repository/fullName, op: eq, value: acme/agentbay }
+  wake:
+    waitName: reviewer-pr-lifecycle
+    delivery: active-or-coalesced
+    correlation:
+      - { name: repositoryId, path: /repository/id }
+      - { name: pullRequestNumber, path: /pullRequest/number }
+    action:
+      type: continue
+      prompt: { literal: Review the latest pull request revision., includeEvent: data }
+      workspace:
+        type: git
+        repository: { url: { path: /pullRequest/head/repository/cloneUrl } }
+        revision: { commit: { path: /pullRequest/head/sha } }
+---
+version: 1
+triggerId: engineering-github
+profile: { id: reviewer, version: 1 }
+definition:
+  schemaVersion: 1
+  disposition: wake
+  eventTypes: [com.github.pull_request.closed]
+  filter:
+    all:
+      - { path: /repository/fullName, op: eq, value: acme/agentbay }
+      - { path: /pullRequest/merged, op: eq, value: true }
+  wake:
+    waitName: reviewer-pr-lifecycle
+    delivery: active-or-coalesced
+    correlation:
+      - { name: repositoryId, path: /repository/id }
+      - { name: pullRequestNumber, path: /pullRequest/number }
+    action: { type: complete }

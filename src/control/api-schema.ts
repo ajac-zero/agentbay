@@ -74,6 +74,11 @@ const admissionResultSchema = z.object({
   event: admittedEventSchema,
   executions: z.array(executionSchema),
   wakes: z.array(admissionWakeResultSchema),
+  pendingWakes: z.array(z.object({
+    id: z.string(), executionId: z.string(), binding: profileRefSchema,
+    action: z.enum(["CONTINUED", "COMPLETED"]), disposition: z.enum(["PENDING", "DOMINATED"]),
+    admittedAt: z.string().datetime(),
+  }).strict()),
   replayed: z.boolean(),
 }).strict().openapi("AdmissionResult");
 
