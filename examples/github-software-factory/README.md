@@ -13,7 +13,9 @@ the generic `contains` array predicate. They demonstrate:
 1. `issues.opened` starts triage.
 2. Triage applies one difficulty label and then `agentbay/state:ready`.
 3. `issues.labeled` selects exactly one developer profile.
-4. `pull_request.opened` and `pull_request.synchronize` start review.
+4. `pull_request.opened` starts one reviewer lifecycle.
+5. `pull_request.synchronize` coalesces the latest revision into that lifecycle.
+6. A merged `pull_request.closed` event terminally completes the lifecycle.
 
 The GitHub connector also normalizes issue comments, pull-request reviews, and
 pull-request review comments for later continuation matching.
@@ -28,15 +30,15 @@ and the default branch, and persists its exact commit before creating any
 execution. The binding selects `/repository/defaultBranchRevision/commit`; it
 never uses a mutable branch name.
 
-## Planned Continuations
+## Durable Reviewer Continuations
 
 Durable wake bindings consume active waits atomically during normal event
 admission. GitHub PR events provide safe repository ID plus pull request number
-correlation. Each opened or synchronize event creates a review execution pinned
-to that event's exact head SHA, so a push cannot be lost merely because another
-review turn is running. Generic wake continuations can also resolve a new
-per-turn immutable workspace, but the factory will use that path only after wake
-events can be durably coalesced while an execution is queued or running.
+correlation. A PR opened event creates one reviewer lifecycle. Synchronize
+events received while its turn is queued or running are durably coalesced, and
+the latest event's exact head SHA becomes the next immutable turn workspace.
+A merged close event dominates pending synchronize events and completes the
+lifecycle after the current fenced turn reaches a successful boundary.
 
 The developer binding also cannot enable a PR lifecycle wait yet: an
 issue-origin execution needs the future PR identity before it can safely

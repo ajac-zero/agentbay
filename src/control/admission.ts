@@ -78,6 +78,7 @@ export type AdmissionResult = {
   event: AdmittedEventSummary;
   executions: Execution[];
   wakes: AdmissionWakeResult[];
+  pendingWakes: PendingWakeResult[];
   replayed: boolean;
 };
 
@@ -90,6 +91,15 @@ export type AdmissionWakeResult = {
   inputSequence: number | null;
   state: "QUEUED" | "COMPLETED";
   consumedAt: string;
+};
+
+export type PendingWakeResult = {
+  id: string;
+  executionId: string;
+  binding: { id: string; version: number };
+  action: "CONTINUED" | "COMPLETED";
+  disposition: "PENDING" | "DOMINATED";
+  admittedAt: string;
 };
 
 export function projectWakeCorrelation(definition: WakeBindingDefinition, event: NormalizedCloudEvent): Record<string, JsonPrimitive> | undefined {
@@ -141,6 +151,7 @@ export function planAdmission(
     },
     executions,
     wakes: [],
+    pendingWakes: [],
     replayed,
   };
 }

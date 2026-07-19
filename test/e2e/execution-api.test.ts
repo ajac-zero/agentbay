@@ -140,7 +140,7 @@ describe("public API", () => {
 
     const admitted = await request(app, "POST", "/v1/triggers/github/events", event, { "Idempotency-Key": "delivery-1" });
     expect(admitted.status).toBe(202);
-    expect(admitted.body).toMatchObject({ replayed: false, event: { triggerId: "github", eventId: "evt-1" }, executions: [{ binding: { id: "issues", version: 1 } }], wakes: [] });
+    expect(admitted.body).toMatchObject({ replayed: false, event: { triggerId: "github", eventId: "evt-1" }, executions: [{ binding: { id: "issues", version: 1 } }], wakes: [], pendingWakes: [] });
     expect(store.lastAdmission?.event).toMatchObject({ datacontenttype: "application/json", traceparent: "00-a1b2c3-01" });
 
     const execution = (admitted.body as AdmissionResult).executions[0]!;
@@ -161,7 +161,7 @@ describe("public API", () => {
     await request(otherApp, "POST", "/v1/triggers", { id: "github", type: "cloudevents.http", config: { schemaVersion: 1 } });
     const unmatched = await request(otherApp, "POST", "/v1/triggers/github/events", cloudEvent("push", {}), { "Idempotency-Key": "delivery-2" });
     expect(unmatched.status).toBe(202);
-    expect(unmatched.body).toMatchObject({ replayed: false, executions: [], wakes: [] });
+    expect(unmatched.body).toMatchObject({ replayed: false, executions: [], wakes: [], pendingWakes: [] });
   });
 
   it("requires structured CloudEvents and Idempotency-Key and maps conflicts", async () => {

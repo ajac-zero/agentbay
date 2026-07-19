@@ -115,6 +115,7 @@ describe("binding schemas", () => {
         name: "developer-pr-lifecycle",
         correlation: [{ name: "repositoryId", path: "/repository/id" }, { name: "issue", path: "/issue/number" }],
         deadlineSeconds: 604_800,
+        admitWhileBusy: true,
       },
     } as const;
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, afterTurn }).success).toBe(true);
@@ -146,6 +147,8 @@ describe("binding schemas", () => {
       },
     } as const;
     expect(bindingDefinitionSchema.safeParse(wake).success).toBe(true);
+    expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, delivery: "active-or-coalesced" } }).success).toBe(true);
+    expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, delivery: "unknown" } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, action: { type: "complete" } } }).success).toBe(true);
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, action: { type: "complete", workspace: { type: "empty" } } } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...wake, workspace: { type: "empty" } }).success).toBe(false);

@@ -50,6 +50,13 @@
       "when": 1784471422099,
       "tag": "0006_flowery_red_shift",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784474987930,
+      "tag": "0007_true_black_queen",
+      "breakpoints": true
     }
   ]
 }
