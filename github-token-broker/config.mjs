@@ -1,0 +1,100 @@
+import { createPrivateKey } from "node:crypto";
+import { readFile as nodeReadFile } from "node:fs/promises";
+
+const DEFAULT_CREDENTIAL_PATHS = Object.freeze({
+  appId: "/var/run/agentbay/github-app/app-id",
+  installationId: "/var/run/agentbay/github-app/installation-id",
+  privateKey: "/var/run/agentbay/github-app/private-key.pem",
+});
+
+function required(env, name) {
+  const value = env[name];
+  if (typeof value !== "string" || value.length === 0 || value.trim() !== value || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new Error(`Invalid or missing ${name}`);
+  }
+  return value;
+}
+
+function positiveInteger(value, name) {
+  if (!/^[1-9][0-9]*$/.test(value)) throw new Error(`Invalid ${name}`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`Invalid ${name}`);
+  return parsed;
+}
+
+function port(value, name) {
+  const parsed = positiveInteger(value, name);
+  if (parsed > 65_535) throw new Error(`Invalid ${name}`);
+  return parsed;
+}
+
+function path(env, name, fallback) {
+  return name in env ? required(env, name) : fallback;
+}
+
+export function parseStartupConfig(env = process.env) {
+  const tenantId = required(env, "AGENTBAY_GITHUB_TENANT");
+  const connectionRef = required(env, "AGENTBAY_GITHUB_CONNECTION");
+  const repositoryId = positiveInteger(required(env, "AGENTBAY_GITHUB_REPOSITORY_ID"), "AGENTBAY_GITHUB_REPOSITORY_ID");
+  let grants;
+  try {
+    grants = JSON.parse(required(env, "AGENTBAY_CONNECTIONS"));
+  } catch {
+    throw new Error("Invalid AGENTBAY_CONNECTIONS");
+  }
+  if (
+    grants === null || typeof grants !== "object" || Array.isArray(grants)
+    || Object.keys(grants).sort().join(",") !== "refs,schemaVersion,tenantId"
+    || grants.schemaVersion !== 1 || grants.tenantId !== tenantId
+    || !Array.isArray(grants.refs) || grants.refs.length !== 1 || grants.refs[0] !== connectionRef
+  ) throw new Error("AGENTBAY_CONNECTIONS does not match this broker");
+
+  const upstream = new URL(env.AGENTBAY_GITHUB_MCP_UPSTREAM ?? "http://127.0.0.1:8082/");
+  if (upstream.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(upstream.hostname)) {
+    throw new Error("AGENTBAY_GITHUB_MCP_UPSTREAM must be loopback HTTP");
+  }
+  const permissionEntries = required(env, "AGENTBAY_GITHUB_PERMISSIONS").split(",").map((entry) => {
+    const [name, access, extra] = entry.split(":");
+    if (extra !== undefined || !/^[a-z_]+$/.test(name ?? "") || !["read", "write"].includes(access ?? "")) {
+      throw new Error("Invalid AGENTBAY_GITHUB_PERMISSIONS");
+    }
+    return [name, access];
+  });
+  const permissions = Object.fromEntries(permissionEntries);
+  if (Object.keys(permissions).length !== permissionEntries.length) throw new Error("Invalid AGENTBAY_GITHUB_PERMISSIONS");
+  if (Object.keys(permissions).length === 0) throw new Error("Invalid AGENTBAY_GITHUB_PERMISSIONS");
+  const host = env.AGENTBAY_GITHUB_BROKER_HOST ?? "127.0.0.1";
+  if (!["127.0.0.1", "localhost", "::1"].includes(host)) throw new Error("AGENTBAY_GITHUB_BROKER_HOST must be loopback");
+
+  return Object.freeze({
+    tenantId,
+    connectionRef,
+    repositoryId,
+    permissions: Object.freeze(permissions),
+    upstream: upstream.toString(),
+    host,
+    port: port(env.AGENTBAY_GITHUB_BROKER_PORT ?? "8083", "AGENTBAY_GITHUB_BROKER_PORT"),
+    credentialPaths: Object.freeze({
+      appId: path(env, "AGENTBAY_GITHUB_APP_ID_FILE", DEFAULT_CREDENTIAL_PATHS.appId),
+      installationId: path(env, "AGENTBAY_GITHUB_INSTALLATION_ID_FILE", DEFAULT_CREDENTIAL_PATHS.installationId),
+      privateKey: path(env, "AGENTBAY_GITHUB_PRIVATE_KEY_FILE", DEFAULT_CREDENTIAL_PATHS.privateKey),
+    }),
+  });
+}
+
+export async function readGitHubAppCredentials(paths, readFile = nodeReadFile) {
+  let values;
+  try {
+    values = await Promise.all([readFile(paths.appId, "utf8"), readFile(paths.installationId, "utf8"), readFile(paths.privateKey, "utf8")]);
+  } catch {
+    throw new Error("Unable to read GitHub App credentials");
+  }
+  const appId = positiveInteger(values[0].trim(), "GitHub App ID credential");
+  const installationId = positiveInteger(values[1].trim(), "GitHub installation ID credential");
+  try {
+    if (createPrivateKey(values[2]).asymmetricKeyType !== "rsa") throw new Error();
+  } catch {
+    throw new Error("Invalid GitHub App private key credential");
+  }
+  return Object.freeze({ appId, installationId, privateKey: values[2] });
+}
