@@ -65,9 +65,15 @@ const cloudEventRequestSchema = z.object({
   dataschema: z.string().optional(),
   data: z.unknown(),
 }).catchall(z.union([z.string(), z.boolean(), z.number()]));
+const admissionWakeResultSchema = z.object({
+  id: z.string(), executionId: z.string(), eventWaitId: z.string(), binding: profileRefSchema,
+  action: z.enum(["CONTINUED", "COMPLETED"]), inputSequence: z.number().int().positive().nullable(),
+  state: z.enum(["QUEUED", "COMPLETED"]), consumedAt: z.string().datetime(),
+}).strict().openapi("AdmissionWakeResult");
 const admissionResultSchema = z.object({
   event: admittedEventSchema,
   executions: z.array(executionSchema),
+  wakes: z.array(admissionWakeResultSchema),
   replayed: z.boolean(),
 }).strict().openapi("AdmissionResult");
 

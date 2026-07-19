@@ -2,7 +2,7 @@ import type { Execution, ExecutionInput } from "../execution/types.js";
 import type { NormalizedCloudEvent } from "../execution/events.js";
 import { bindingExecutionIdempotencyKey } from "../execution/idempotency.js";
 import { canonicalJson, resolveJsonPointer, type JsonPrimitive, type JsonValue } from "../json.js";
-import type { BindingDefinition, FilterClause, PublishedBindingVersion } from "./binding.js";
+import type { BindingDefinition, FilterClause, PublishedBindingVersion, WakeBindingDefinition } from "./binding.js";
 import { resolveWorkspace } from "../workspace/resolver.js";
 
 export const UNTRUSTED_EVENT_BEGIN = "--- BEGIN UNTRUSTED EVENT ---";
@@ -38,7 +38,11 @@ export function matchesBinding(binding: PublishedBindingVersion, event: Normaliz
 }
 
 export function renderBindingInput(binding: PublishedBindingVersion, event: NormalizedCloudEvent): ExecutionInput {
-  const prompt = binding.definition.prompt;
+  if ("disposition" in binding.definition) throw new Error("Wake bindings do not create execution input");
+  return renderPromptInput(binding.definition.prompt, event);
+}
+
+export function renderPromptInput(prompt: { literal: string; includeEvent: "none" | "data" | "envelope" }, event: NormalizedCloudEvent): ExecutionInput {
   const included = prompt.includeEvent === "data" ? event.data : prompt.includeEvent === "envelope" ? event : undefined;
   if (included === undefined) return { text: prompt.literal };
   const serialized = canonicalJson(included as JsonValue);
@@ -73,11 +77,34 @@ export type AdmittedEventSummary = {
 export type AdmissionResult = {
   event: AdmittedEventSummary;
   executions: Execution[];
+  wakes: AdmissionWakeResult[];
   replayed: boolean;
 };
 
+export type AdmissionWakeResult = {
+  id: string;
+  executionId: string;
+  eventWaitId: string;
+  binding: { id: string; version: number };
+  action: "CONTINUED" | "COMPLETED";
+  inputSequence: number | null;
+  state: "QUEUED" | "COMPLETED";
+  consumedAt: string;
+};
+
+export function projectWakeCorrelation(definition: WakeBindingDefinition, event: NormalizedCloudEvent): Record<string, JsonPrimitive> | undefined {
+  const correlation: Record<string, JsonPrimitive> = {};
+  for (const item of definition.wake.correlation) {
+    const resolved = resolveJsonPointer(event.data, item.path);
+    if (!resolved.found || (resolved.value !== null && typeof resolved.value === "object")
+      || Buffer.byteLength(JSON.stringify(resolved.value), "utf8") > 1_024) return undefined;
+    correlation[item.name] = resolved.value;
+  }
+  return correlation;
+}
+
 export function planExecution(binding: PublishedBindingVersion, command: AdmissionCommand): Execution | undefined {
-  if (binding.tenantId !== command.tenantId || binding.triggerId !== command.triggerId || !matchesBinding(binding, command.event)) return undefined;
+  if ("disposition" in binding.definition || binding.tenantId !== command.tenantId || binding.triggerId !== command.triggerId || !matchesBinding(binding, command.event)) return undefined;
   const id = bindingExecutionIdempotencyKey(binding.id, command.internalEventId);
   return {
     id,
@@ -113,6 +140,7 @@ export function planAdmission(
       admittedAt: command.admittedAt,
     },
     executions,
+    wakes: [],
     replayed,
   };
 }

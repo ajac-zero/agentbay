@@ -849,7 +849,9 @@ describe("dispatcher persistence", () => {
         },
       },
     });
-    expect((await store.getBindingVersion("default", bindingId, 1))?.definition.afterTurn).toEqual({
+    const persistedBinding = await store.getBindingVersion("default", bindingId, 1);
+    if (!persistedBinding || "disposition" in persistedBinding.definition) throw new Error("Expected create binding");
+    expect(persistedBinding.definition.afterTurn).toEqual({
       disposition: "wait",
       wait: {
         name: "work-item-lifecycle",

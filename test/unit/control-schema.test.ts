@@ -124,4 +124,24 @@ describe("binding schemas", () => {
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, afterTurn: { ...afterTurn, wait: { ...afterTurn.wait, deadlineSeconds: 0 } } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, afterTurn: { ...afterTurn, wait: { ...afterTurn.wait, extra: true } } }).success).toBe(false);
   });
+
+  it("accepts bounded wake continuation and terminal policies", () => {
+    const wake = {
+      disposition: "wake",
+      schemaVersion: 1,
+      eventTypes: ["com.example.review.submitted"],
+      filter: { all: [] },
+      wake: {
+        waitName: "developer-pr-lifecycle",
+        correlation: [{ name: "repositoryId", path: "/repository/id" }, { name: "pullRequest", path: "/pullRequest/number" }],
+        action: { type: "continue", prompt: { literal: "Address review feedback.", includeEvent: "data" } },
+      },
+    } as const;
+    expect(bindingDefinitionSchema.safeParse(wake).success).toBe(true);
+    expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, action: { type: "complete" } } }).success).toBe(true);
+    expect(bindingDefinitionSchema.safeParse({ ...wake, workspace: { type: "empty" } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, correlation: [] } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, correlation: [{ name: "x", path: "/x" }, { name: "x", path: "/y" }] } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, action: { type: "complete", prompt: { literal: "bad", includeEvent: "none" } } } }).success).toBe(false);
+  });
 });

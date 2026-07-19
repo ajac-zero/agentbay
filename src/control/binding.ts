@@ -25,21 +25,48 @@ export const afterTurnSchema = z.object({
   }).strict(),
 }).strict();
 
-export const bindingDefinitionSchema = z
+const eventMatchSchema = {
+  schemaVersion: z.literal(1),
+  eventTypes: z.array(z.string().min(1).max(255)).min(1).max(32),
+  filter: z.object({ all: z.array(filterClauseSchema).max(16) }).strict(),
+};
+
+export const promptSchema = z
   .object({
-    schemaVersion: z.literal(1),
-    eventTypes: z.array(z.string().min(1).max(255)).min(1).max(32),
-    filter: z.object({ all: z.array(filterClauseSchema).max(16) }).strict(),
-    prompt: z
-      .object({
-        literal: z.string().refine((value) => Buffer.byteLength(value, "utf8") <= MAX_PROMPT_BYTES, `must be at most ${MAX_PROMPT_BYTES} bytes`),
-        includeEvent: z.enum(["none", "data", "envelope"]),
-      })
-      .strict(),
+    literal: z.string().refine((value) => Buffer.byteLength(value, "utf8") <= MAX_PROMPT_BYTES, `must be at most ${MAX_PROMPT_BYTES} bytes`),
+    includeEvent: z.enum(["none", "data", "envelope"]),
+  })
+  .strict();
+
+export const createBindingDefinitionSchema = z
+  .object({
+    ...eventMatchSchema,
+    prompt: promptSchema,
     workspace: bindingWorkspaceSchema,
     afterTurn: afterTurnSchema.optional(),
   })
   .strict();
+
+export const wakeBindingDefinitionSchema = z
+  .object({
+    ...eventMatchSchema,
+    disposition: z.literal("wake"),
+    wake: z.object({
+      waitName: simpleIdSchema,
+      correlation: z.array(z.object({ name: simpleIdSchema, path: jsonPointerSchema }).strict()).min(1).max(16)
+        .refine((items) => new Set(items.map((item) => item.name)).size === items.length, "correlation names must be unique"),
+      action: z.discriminatedUnion("type", [
+        z.object({ type: z.literal("continue"), prompt: promptSchema }).strict(),
+        z.object({ type: z.literal("complete") }).strict(),
+      ]),
+    }).strict(),
+  })
+  .strict();
+
+export const bindingDefinitionSchema = z.union([
+  createBindingDefinitionSchema,
+  wakeBindingDefinitionSchema,
+]);
 
 export const publishedBindingVersionSchema = z
   .object({
@@ -60,6 +87,8 @@ export type VersionedRef = z.infer<typeof versionedRefSchema>;
 export type FilterClause = z.infer<typeof filterClauseSchema>;
 export type AfterTurnPolicy = z.infer<typeof afterTurnSchema>;
 export type BindingDefinition = z.infer<typeof bindingDefinitionSchema>;
+export type CreateBindingDefinition = z.infer<typeof createBindingDefinitionSchema>;
+export type WakeBindingDefinition = z.infer<typeof wakeBindingDefinitionSchema>;
 export type PublishedBindingVersion = z.infer<typeof publishedBindingVersionSchema>;
 
 export interface BindingStore {
@@ -67,6 +96,10 @@ export interface BindingStore {
   getBindingVersion(tenantId: string, bindingId: string, version: number): Promise<PublishedBindingVersion | undefined>;
   disableBindingVersion(tenantId: string, bindingId: string, version: number, disabledAt: string): Promise<PublishedBindingVersion | undefined>;
   listBindingCandidates(tenantId: string, triggerId: string, eventType: string): Promise<readonly PublishedBindingVersion[]>;
+}
+
+export function isWakeBinding(binding: PublishedBindingVersion): binding is PublishedBindingVersion & { definition: WakeBindingDefinition } {
+  return "disposition" in binding.definition && binding.definition.disposition === "wake";
 }
 
 export class BindingVersionAlreadyExistsError extends Error {
