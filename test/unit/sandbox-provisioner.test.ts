@@ -106,6 +106,10 @@ function provisioner(timeout = config.claimReadyTimeoutMs): SandboxClaimExecutio
   return new SandboxClaimExecutionAttemptProvisioner(kubeConfig(), { ...config, claimReadyTimeoutMs: timeout });
 }
 
+function betaProvisioner(): SandboxClaimExecutionAttemptProvisioner {
+  return new SandboxClaimExecutionAttemptProvisioner(kubeConfig(), { ...config, sandboxClaimApiVersion: "v1beta1" });
+}
+
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 afterEach(() => {
@@ -114,6 +118,32 @@ afterEach(() => {
 });
 
 describe("SandboxClaimExecutionAttemptProvisioner", () => {
+  it("creates a native v1beta1 claim referencing a concrete warm pool", async () => {
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockRejectedValue({ code: 404 });
+    const create = vi.spyOn(CustomObjectsApi.prototype, "createNamespacedCustomObject").mockImplementation(async ({ body }) => ({
+      ...(body as SandboxClaim),
+      status: {
+        conditions: [{ type: "Ready", status: "True", lastTransitionTime: "", message: "" }],
+        sandbox: { podIPs: ["10.0.0.8"] },
+      },
+    }));
+
+    await betaProvisioner().provision({ ...input, warmPool: "opencode-pool" }, new AbortController().signal);
+
+    const created = create.mock.calls[0]![0].body as SandboxClaim;
+    expect(created.apiVersion).toBe("extensions.agents.x-k8s.io/v1beta1");
+    expect(created.spec).toMatchObject({ warmPoolRef: { name: "opencode-pool" } });
+    expect(created.spec).not.toHaveProperty("sandboxTemplateRef");
+    expect(created.spec).not.toHaveProperty("warmpool");
+  });
+
+  it("rejects v1beta1 sentinel pool names before creating a claim", async () => {
+    const create = vi.spyOn(CustomObjectsApi.prototype, "createNamespacedCustomObject");
+
+    await expect(betaProvisioner().provision(input, new AbortController().signal)).rejects.toThrow(/concrete SandboxWarmPool/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("creates the exact attempt claim and returns its ready endpoint", async () => {
     vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockRejectedValue({ code: 404 });
     const create = vi.spyOn(CustomObjectsApi.prototype, "createNamespacedCustomObject").mockImplementation(async ({ body }) => {
@@ -158,8 +188,12 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     ]));
     expect(created.spec?.env?.filter(({ name }) => name.startsWith("AGENTBAY_WORKSPACE_GIT_"))).toEqual([]);
     expect(created.spec?.env?.filter(({ name }) => name === "AGENTBAY_CONNECTIONS")).toEqual([]);
-    expect(created.spec?.additionalPodMetadata?.annotations).toEqual({
+    expect(created.spec?.additionalPodMetadata?.annotations).toMatchObject({
       "agentbay.dev/connections-digest": createHash("sha256").update("[]").digest("hex"),
+      "agentbay.dev/managed-by": "agentbay",
+      "agentbay.dev/execution": input.executionId,
+      "agentbay.dev/attempt": "2",
+      "agentbay.dev/profile": input.profileVersion.profileId,
     });
   });
 
@@ -200,7 +234,7 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     const digest = createHash("sha256").update(authorization).digest("hex");
     expect(created.metadata.annotations).toMatchObject({ "agentbay.dev/connections-digest": digest });
     expect(created.metadata.annotations).not.toHaveProperty("agentbay.dev/connections");
-    expect(created.spec?.additionalPodMetadata?.annotations).toEqual({
+    expect(created.spec?.additionalPodMetadata?.annotations).toMatchObject({
       "agentbay.dev/connections-digest": digest,
     });
     expect(JSON.stringify(created)).not.toContain("secret");
@@ -647,7 +681,7 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     expect(remove).toHaveBeenCalledWith(expect.objectContaining({
       name: claimNameForExecutionAttempt(input.executionId, input.attempt),
       propagationPolicy: "Foreground",
-      body: { preconditions: { uid: "claim-uid", resourceVersion: "23" } },
+      body: { preconditions: { uid: "claim-uid" } },
     }));
   });
 

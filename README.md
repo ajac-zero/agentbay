@@ -169,9 +169,11 @@ contains only that sidecar's sorted connection IDs:
 
 Resolution is fail closed: a missing connection or invalid mapping prevents
 profile publication, and a sidecar name absent from the selected template makes
-the controller reject the attempt rather than redirecting access. Connection-enabled profiles
-use cold sandboxes (`warmPool: none`) so the template-owned sidecars, mounts, and
-claim-specific authorization/runtime configuration are applied together.
+the controller reject the attempt rather than redirecting access. Profiles name
+a concrete `v1beta1` `SandboxWarmPool`. Claim-specific environment injection
+forces a cold start from that pool's template, so template-owned sidecars,
+mounts, and authorization/runtime configuration are applied together. A pool
+with `replicas: 0` makes that cold-start policy explicit without prewarming Pods.
 
 For example, a V1 binding-version request body is:
 
@@ -207,9 +209,9 @@ V1 accepts public HTTPS repositories resolving exclusively to public IPv4 addres
 IDs only. It rejects credentials, mutable refs, local/private hosts, and mixed
 public/private DNS results. The sandbox materializer pins a validated DNS answer,
 fetches the exact commit without a shell, checks it out detached, and verifies
-`HEAD` before OpenCode starts. Git workspaces require a cold sandbox (`warmPool:
-none`); private repository credentials, submodules, Git LFS, and warm-pool Git
-materialization are not implemented yet.
+`HEAD` before OpenCode starts. Git workspace environment injection forces a cold
+start from the profile's named pool; private repository credentials, submodules,
+Git LFS, and warm-pool Git materialization are not implemented yet.
 
 Bindings may declare a policy-controlled after-turn wait:
 
@@ -496,8 +498,8 @@ Install the agent-sandbox CRDs and controllers before enabling sandbox
 resources:
 
 ```bash
-TAG=v0.4.6
-kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$TAG/manifest.yaml
+TAG=v0.5.2
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$TAG/sandbox.yaml
 kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$TAG/extensions.yaml
 ```
 

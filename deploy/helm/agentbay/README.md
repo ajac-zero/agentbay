@@ -14,8 +14,8 @@ Install the `agent-sandbox` CRDs and controllers once per cluster before using
 SandboxClaim-based execution:
 
 ```bash
-TAG=v0.4.6
-kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$TAG/manifest.yaml
+TAG=v0.5.2
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$TAG/sandbox.yaml
 kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$TAG/extensions.yaml
 kubectl -n agent-sandbox-system rollout status deploy/agent-sandbox-controller
 ```
@@ -173,8 +173,9 @@ enter retry wait and become `DEAD_LETTERED` after `maxAttempts`.
 The API runs in the release namespace. SandboxClaims are created in
 `claims.namespace`, which defaults to the release namespace. When `rbac.create`
 is enabled, the chart installs a namespaced Role and RoleBinding for
-SandboxClaim access. `claims.apiVersion` defaults to `v1alpha1`; use `v1beta1`
-only when the installed CRDs serve it.
+SandboxClaim access. `claims.apiVersion` defaults to `v1beta1`, matching Agent
+Sandbox `v0.5.2`. `v1alpha1` is retained only for explicitly configured older
+controllers.
 
 Neither the orchestrator nor reconciler Role grants access to Kubernetes
 Secrets. Agentbay resolves non-secret connection metadata and writes
@@ -210,8 +211,12 @@ sandboxWarmPools:
   pools:
     - name: opencode-default
       sandboxTemplateRef: opencode-template
-      replicas: 2
+      replicas: 0
 ```
+
+Every profile must name a concrete pool in `sandbox.warmPool`. A zero-replica
+pool provides cold-start allocation. Claim-specific environment injection also
+forces a cold start when a pool is prewarmed.
 
 The template renderer provides an OpenCode container, workspace, service, and
 managed NetworkPolicy. It also runs a `workspace-materializer` init container

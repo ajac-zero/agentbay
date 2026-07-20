@@ -13,12 +13,12 @@ metadata:
     {{- include "agentbay.labels" $root | nindent 4 }}
     app.kubernetes.io/component: sandbox-warmpool
 spec:
-  replicas: {{ $p.replicas | default 1 }}
+  replicas: {{ if hasKey $p "replicas" }}{{ $p.replicas }}{{ else }}1{{ end }}
   sandboxTemplateRef:
     name: {{ required "sandboxWarmPools.pools[].sandboxTemplateRef is required" $p.sandboxTemplateRef }}
   {{- with $p.updateStrategy }}
   updateStrategy:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-{{- end }}
+{{ end }}
 {{- end }}

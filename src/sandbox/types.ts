@@ -23,7 +23,7 @@ export type SandboxClaimCondition = {
   type: string;
 };
 
-export type SandboxClaim = {
+type SandboxClaimBase = {
   apiVersion: `extensions.agents.x-k8s.io/${SandboxClaimAPIVersion}`;
   kind: "SandboxClaim";
   metadata: {
@@ -45,10 +45,6 @@ export type SandboxClaim = {
       shutdownTime?: string;
       ttlSecondsAfterFinished?: number;
     };
-    sandboxTemplateRef: {
-      name: string;
-    };
-    warmpool?: string;
   };
   status?: {
     conditions?: SandboxClaimCondition[];
@@ -57,6 +53,13 @@ export type SandboxClaim = {
       podIPs?: string[];
     };
   };
+};
+
+export type SandboxClaim = SandboxClaimBase & {
+  spec?: SandboxClaimBase["spec"] & (
+    | { sandboxTemplateRef: { name: string }; warmpool?: string; warmPoolRef?: never }
+    | { warmPoolRef: { name: string }; sandboxTemplateRef?: never; warmpool?: never }
+  );
 };
 
 export type ExecutionAttemptProvisioningInput = {

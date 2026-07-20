@@ -33,13 +33,6 @@ type ManifestObject = KubernetesObject & {
   [key: string]: unknown;
 };
 
-type CrdVersion = {
-  name: string;
-  served?: boolean;
-  storage?: boolean;
-  [key: string]: unknown;
-};
-
 const GROUP = "extensions.agents.x-k8s.io";
 const VERSION = "v1beta1";
 const PLURAL = "sandboxclaims";
@@ -48,9 +41,9 @@ const AGENT_SANDBOX_NAMESPACE = "agent-sandbox-system";
 const AGENT_SANDBOX_CONTROLLER = "agent-sandbox-controller";
 const NAMESPACE = "agentbay-e2e";
 const K3S_IMAGE = process.env.AGENTBAY_E2E_K3S_IMAGE ?? "rancher/k3s:v1.31.2-k3s1";
-const AGENT_SANDBOX_VERSION = "v0.4.6";
+const AGENT_SANDBOX_VERSION = "v0.5.2";
 const AGENT_SANDBOX_MANIFEST_URLS = [
-  `https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/manifest.yaml`,
+  `https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/sandbox.yaml`,
   `https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/extensions.yaml`,
 ];
 
@@ -79,6 +72,7 @@ describe("SandboxClaimExecutionAttemptProvisioner e2e", () => {
     await waitForCrdEstablished(extensionsApi, "sandboxes.agents.x-k8s.io");
     await waitForCrdEstablished(extensionsApi, CRD_NAME);
     await waitForCrdEstablished(extensionsApi, "sandboxtemplates.extensions.agents.x-k8s.io");
+    await waitForCrdEstablished(extensionsApi, "sandboxwarmpools.extensions.agents.x-k8s.io");
     await waitForDeploymentReady(appsApi, AGENT_SANDBOX_CONTROLLER, AGENT_SANDBOX_NAMESPACE);
 
     await coreApi.createNamespace({
@@ -87,6 +81,7 @@ describe("SandboxClaimExecutionAttemptProvisioner e2e", () => {
       },
     });
     await applyObject(objectApi, sandboxTemplate());
+    await applyObject(objectApi, sandboxWarmPool());
 
     provisioner = new SandboxClaimExecutionAttemptProvisioner(kubeConfig, testConfig());
   });
@@ -122,15 +117,14 @@ describe("SandboxClaimExecutionAttemptProvisioner e2e", () => {
       "agentbay.dev/profile-version": String(input.profileVersion.version),
     });
     expect(createdClaim.spec).toMatchObject({
-      sandboxTemplateRef: { name: "opencode-template" },
-      warmpool: "none",
+      warmPoolRef: { name: "opencode-pool" },
       lifecycle: {
         shutdownPolicy: "DeleteForeground",
         shutdownTime: input.timeoutAt.toISOString(),
         ttlSecondsAfterFinished: 60,
       },
       additionalPodMetadata: {
-        labels: {
+        annotations: {
           "agentbay.dev/managed-by": "agentbay",
           "agentbay.dev/execution": executionId,
           "agentbay.dev/attempt": String(attempt),
@@ -172,7 +166,7 @@ describe("SandboxClaimExecutionAttemptProvisioner e2e", () => {
     expect(sandbox).toMatchObject({ workloadName: claimName, password });
     expect(sandbox.host).toEqual(expect.any(String));
 
-    const podName = await waitForSandboxPod(coreApi, claimName);
+    const podName = await waitForSandboxPod(coreApi, customObjectsApi, claimName);
     const portForward = await startPortForward(rawKubeConfig, podName);
 
     try {
@@ -249,7 +243,7 @@ function testProvisioningInput(executionId: string, attempt: number): ExecutionA
       version: 7,
     },
     sandboxTemplate: "opencode-template",
-    warmPool: "none",
+    warmPool: "opencode-pool",
     connections: [{ id: "github-production", sidecar: "github-api" }],
     workspace: { type: "empty" },
     opencodeConfig: {
@@ -285,28 +279,11 @@ async function fetchAgentSandboxObjects(): Promise<ManifestObject[]> {
       ...loadAllYaml(nonEmptyYamlDocuments(await response.text()))
         .filter((object): object is ManifestObject =>
           Boolean(object?.apiVersion && object?.kind && object?.metadata?.name),
-        )
-        .map(withBetaCrdVersion),
+        ),
     );
   }
 
   return objects;
-}
-
-function withBetaCrdVersion(object: ManifestObject): ManifestObject {
-  if (object.apiVersion !== "apiextensions.k8s.io/v1" || object.kind !== "CustomResourceDefinition") return object;
-
-  const spec = object.spec as { versions?: CrdVersion[] } | undefined;
-  const alphaVersion = spec?.versions?.find((version) => version.name === "v1alpha1");
-  if (!spec?.versions || !alphaVersion || spec.versions.some((version) => version.name === VERSION)) return object;
-
-  // The pinned released controller is still alpha-only; serving both versions lets this test exercise beta clients.
-  spec.versions = [
-    { ...alphaVersion, name: "v1alpha1", served: true, storage: false },
-    { ...alphaVersion, name: VERSION, served: true, storage: true },
-  ];
-
-  return object;
 }
 
 async function applyObject(api: KubernetesObjectApi, object: ManifestObject): Promise<void> {
@@ -390,16 +367,22 @@ async function waitForClaimDeleted(api: CustomObjectsApi, claimName: string): Pr
   throw new Error(`Timed out waiting for SandboxClaim ${claimName} to be deleted`);
 }
 
-async function waitForSandboxPod(api: CoreV1Api, claimName: string): Promise<string> {
+async function waitForSandboxPod(api: CoreV1Api, claimsApi: CustomObjectsApi, claimName: string): Promise<string> {
   const deadline = Date.now() + 60_000;
 
   while (Date.now() <= deadline) {
-    const pods = await api.listNamespacedPod({
+    const claim = await claimsApi.getNamespacedCustomObject({
+      group: GROUP,
+      version: VERSION,
       namespace: NAMESPACE,
-      labelSelector: `agentbay.dev/claim=${claimName}`,
-    });
-    const podName = pods.items.find((pod) => pod.status?.phase === "Running")?.metadata?.name;
-    if (podName) return podName;
+      plural: PLURAL,
+      name: claimName,
+    }) as SandboxClaim;
+    const podName = claim.status?.sandbox?.name;
+    if (podName) {
+      const pod = await api.readNamespacedPod({ namespace: NAMESPACE, name: podName });
+      if (pod.status?.phase === "Running") return podName;
+    }
 
     await sleep(500);
   }
@@ -535,6 +518,21 @@ setInterval(() => {}, 60_000);`,
           ],
         },
       },
+    },
+  };
+}
+
+function sandboxWarmPool(): ManifestObject {
+  return {
+    apiVersion: "extensions.agents.x-k8s.io/v1beta1",
+    kind: "SandboxWarmPool",
+    metadata: {
+      name: "opencode-pool",
+      namespace: NAMESPACE,
+    },
+    spec: {
+      replicas: 0,
+      sandboxTemplateRef: { name: "opencode-template" },
     },
   };
 }

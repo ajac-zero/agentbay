@@ -11,6 +11,9 @@ orchestrator:
     credentialsSecret: example-github-app-credentials
     mountPath: /var/run/agentbay/github-app
 
+claims:
+  apiVersion: v1beta1
+
 sandboxTemplates:
   enabled: true
   templates:
@@ -101,7 +104,6 @@ sandboxTemplates:
             - { name: AGENTBAY_GITHUB_REPOSITORY_ID, value: "123456789" }
             - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "issues:write" }
           volumeMounts: *credentialMount
-      extraVolumes: *credentialVolume
     - <<: *baseTemplate
       name: opencode-reviewer-template
       image: *sandboxImage
@@ -122,3 +124,16 @@ sandboxTemplates:
             - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "contents:read,pull_requests:write,actions:read" }
           volumeMounts: *credentialMount
       extraVolumes: *credentialVolume
+
+sandboxWarmPools:
+  enabled: true
+  pools:
+    - name: opencode-triager-pool
+      sandboxTemplateRef: opencode-triager-template
+      replicas: 0
+    - name: opencode-developer-pool
+      sandboxTemplateRef: opencode-developer-template
+      replicas: 0
+    - name: opencode-reviewer-pool
+      sandboxTemplateRef: opencode-reviewer-template
+      replicas: 0

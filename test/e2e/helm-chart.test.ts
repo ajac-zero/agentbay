@@ -7,9 +7,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const CHART_PATH = resolve(__dirname, "..", "..", "deploy", "helm", "agentbay");
 const K3S_IMAGE = process.env.AGENTBAY_E2E_K3S_IMAGE ?? "rancher/k3s:v1.31.2-k3s1";
-const AGENT_SANDBOX_VERSION = "v0.4.6";
+const AGENT_SANDBOX_VERSION = "v0.5.2";
 const AGENT_SANDBOX_MANIFEST_URLS = [
-  `https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/manifest.yaml`,
+  `https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/sandbox.yaml`,
   `https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/extensions.yaml`,
 ];
 const NAMESPACE = "agentbay-helm-e2e";
@@ -203,7 +203,7 @@ sandboxTemplates:
         expect(result.stdout).toMatch(/agentbay-gateway/);
         expect(result.stdout).toMatch(/app\.kubernetes\.io\/name: envoy-ai-gateway/);
         expect(result.stdout).toMatch(/name: SANDBOX_CLAIM_API_VERSION/);
-        expect(result.stdout).toMatch(/value: "v1alpha1"/);
+        expect(result.stdout).toMatch(/value: "v1beta1"/);
       } finally {
         await rm(workDir, { force: true, recursive: true });
       }
@@ -228,6 +228,7 @@ sandboxTemplates:
       expect(result.stdout).toMatch(/apiVersion: extensions\.agents\.x-k8s\.io\/v1beta1/);
       expect(result.stdout).toMatch(/kind: SandboxTemplate/);
       expect(result.stdout).toMatch(/kind: SandboxWarmPool/);
+      expect(result.stdout).toMatch(/replicas: 0/);
     });
 
     it("uses an external Postgres URL from an existing Secret when configured", () => {

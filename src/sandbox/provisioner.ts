@@ -50,10 +50,13 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
 
   async provision(input: ExecutionAttemptProvisioningInput, signal: AbortSignal): Promise<ExecutionAttemptEndpoint> {
     throwIfAborted(signal);
-    if (input.workspace.type === "git" && input.warmPool && input.warmPool !== "none") {
+    if (this.config.sandboxClaimApiVersion === "v1beta1" && (!input.warmPool || input.warmPool === "none" || input.warmPool === "default")) {
+      throw new Error("v1beta1 SandboxClaims require a concrete SandboxWarmPool name");
+    }
+    if (this.config.sandboxClaimApiVersion === "v1alpha1" && input.workspace.type === "git" && input.warmPool && input.warmPool !== "none") {
       throw new Error("Git workspaces cannot be provisioned from a warm pool");
     }
-    if (input.connections.length > 0 && input.warmPool !== "none") {
+    if (this.config.sandboxClaimApiVersion === "v1alpha1" && input.connections.length > 0 && input.warmPool !== "none") {
       throw new Error("Connection authorization cannot be provisioned from a warm pool");
     }
     if (input.connections.some(({ sidecar }) => sidecar === "opencode")) {
@@ -302,8 +305,12 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
         annotations: ownership,
       },
       spec: {
-        sandboxTemplateRef: { name: input.sandboxTemplate },
-        ...(input.warmPool === undefined ? {} : { warmpool: input.warmPool }),
+        ...(this.config.sandboxClaimApiVersion === "v1beta1"
+          ? { warmPoolRef: { name: input.warmPool! } }
+          : {
+              sandboxTemplateRef: { name: input.sandboxTemplate },
+              ...(input.warmPool === undefined ? {} : { warmpool: input.warmPool }),
+            }),
         lifecycle: {
           shutdownTime: input.timeoutAt.toISOString(),
           shutdownPolicy: "DeleteForeground",
@@ -311,8 +318,8 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
         },
         env,
         additionalPodMetadata: {
-          annotations: connectionAnnotations,
-          labels: {
+          annotations: {
+            ...connectionAnnotations,
             "agentbay.dev/managed-by": "agentbay",
             "agentbay.dev/execution": labelValue(input.executionId),
             "agentbay.dev/attempt": String(input.attempt),
@@ -561,10 +568,11 @@ function assertOwnership(claim: SandboxClaim, expected: Record<string, string>, 
 }
 
 function deletePreconditions(claim: SandboxClaim): { body: { preconditions: { uid?: string; resourceVersion?: string } } } | object {
-  const preconditions = {
-    ...(claim.metadata.uid ? { uid: claim.metadata.uid } : {}),
-    ...(claim.metadata.resourceVersion ? { resourceVersion: claim.metadata.resourceVersion } : {}),
-  };
+  const preconditions = claim.metadata.uid
+    ? { uid: claim.metadata.uid }
+    : claim.metadata.resourceVersion
+      ? { resourceVersion: claim.metadata.resourceVersion }
+      : {};
   return Object.keys(preconditions).length > 0 ? { body: { preconditions } } : {};
 }
 

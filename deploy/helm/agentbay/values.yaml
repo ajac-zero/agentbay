@@ -95,8 +95,8 @@ rbac:
 claims:
   # -- agent-sandbox extensions API version used by the orchestrator and
   # -- chart-managed SandboxTemplate / SandboxWarmPool resources. Use
-  # -- `v1beta1` only when the cluster serves beta agent-sandbox CRDs.
-  apiVersion: v1alpha1
+  # -- `v1alpha1` is deprecated and should only be used with older controllers.
+  apiVersion: v1beta1
   # -- Namespace where SandboxClaims are created by the orchestrator.
   # -- Defaults to the release namespace. The orchestrator's RBAC is scoped
   # -- to this namespace.
@@ -426,7 +426,8 @@ sandboxTemplates:
       # -- Additional containers appended to the sandbox Pod. Useful for local
       # -- authz/proxy sidecars that expose model, API, or MCP gateways on
       # -- localhost. Connection profiles may select only sidecars already
-      # -- owned by this template and use cold sandboxes (`warmPool: none`).
+      # -- owned by this template. Claim env injection forces cold starts from
+      # -- the profile's concrete v1beta1 SandboxWarmPool.
       # -- See the chart README for the official GitHub MCP server plus Agentbay
       # -- installation-token broker example. Pin both images by digest and mount
       # -- the GitHub App credential volume only on the broker, never through
@@ -464,7 +465,7 @@ sandboxWarmPools:
       namespace: ""
       # -- Name of the SandboxTemplate this pool replenishes.
       sandboxTemplateRef: opencode-template
-      replicas: 2
+      replicas: 0
       updateStrategy:
         type: OnReplenish
 
