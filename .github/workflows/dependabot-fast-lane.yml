@@ -1,0 +1,103 @@
+name: Dependabot Fast Lane
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  checks: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: dependabot-fast-lane-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  evaluate:
+    name: Dependabot Fast Lane
+    if: >-
+      github.repository == 'ajac-zero/agentbay' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.user.id == 49699333 &&
+      startsWith(github.event.pull_request.head.ref, 'dependabot/') &&
+      github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Verify Dependabot metadata
+        id: metadata
+        continue-on-error: true
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      - name: Classify update
+        id: classify
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAINTAINER_CHANGES: ${{ steps.metadata.outputs.maintainer-changes }}
+          PACKAGE_ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: |
+          set -euo pipefail
+          eligible=false
+          if [[ "${{ steps.metadata.outcome }}" == success \
+            && "$PACKAGE_ECOSYSTEM" == npm \
+            && "$MAINTAINER_CHANGES" == false \
+            && ("$UPDATE_TYPE" == version-update:semver-patch || "$UPDATE_TYPE" == version-update:semver-minor) ]]; then
+            files="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" --jq '.[].filename')"
+            if [[ -n "$files" ]] && ! grep -Ev '^(package\.json|pnpm-lock\.yaml)$' <<<"$files" | grep -q .; then
+              eligible=true
+            fi
+          fi
+          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for required checks
+        id: checks
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr checks "$PR_URL" --required --watch --fail-fast --interval 10
+
+      - name: Revalidate and approve exact head
+        if: steps.classify.outcome == 'success' && steps.classify.outputs.eligible == 'true' && steps.checks.outcome == 'success'
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          pr="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+          [[ "$(jq -r .state <<<"$pr")" == open ]]
+          [[ "$(jq -r .draft <<<"$pr")" == false ]]
+          [[ "$(jq -r .user.id <<<"$pr")" == 49699333 ]]
+          [[ "$(jq -r .head.sha <<<"$pr")" == "$EXPECTED_HEAD" ]]
+          [[ "$(jq -r .base.ref <<<"$pr")" == main ]]
+          files="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" --jq '.[].filename')"
+          [[ -n "$files" ]]
+          if grep -Ev '^(package\.json|pnpm-lock\.yaml)$' <<<"$files" | grep -q .; then
+            exit 1
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+            -X POST -f event=APPROVE -f commit_id="$EXPECTED_HEAD" \
+            -f body='Deterministic approval: verified Dependabot npm patch/minor update, dependency-only files, exact head SHA, and all required checks passed.'
+
+      - name: Route ineligible update to Agentbay review
+        if: always() && !(steps.classify.outcome == 'success' && steps.classify.outputs.eligible == 'true' && steps.checks.outcome == 'success')
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          pr="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+          [[ "$(jq -r .state <<<"$pr")" == open ]]
+          [[ "$(jq -r .user.id <<<"$pr")" == 49699333 ]]
+          [[ "$(jq -r .head.sha <<<"$pr")" == "$EXPECTED_HEAD" ]]
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
+            -X POST --input - <<'JSON'
+          {"labels":["agentbay-review"]}
+          JSON

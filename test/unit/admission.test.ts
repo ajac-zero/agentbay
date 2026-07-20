@@ -58,6 +58,9 @@ describe("binding matcher", () => {
     expect(matchesFilterClause({ labels: ["difficulty:easy"] }, { path: "/labels", op: "containsAny", values: ["difficulty:medium", "difficulty:easy"] })).toBe(true);
     expect(matchesFilterClause({ labels: ["difficulty:easy"] }, { path: "/labels", op: "contains", value: "state:ready" })).toBe(false);
     expect(matchesFilterClause({ labels: [{ name: "state:ready" }] }, { path: "/labels", op: "contains", value: "state:ready" })).toBe(false);
+    expect(matchesFilterClause({ branch: "feature" }, { path: "/branch", op: "notStartsWith", value: "dependabot/" })).toBe(true);
+    expect(matchesFilterClause({ branch: "dependabot/npm/hono" }, { path: "/branch", op: "notStartsWith", value: "dependabot/" })).toBe(false);
+    expect(matchesFilterClause({ branch: 42 }, { path: "/branch", op: "notStartsWith", value: "dependabot/" })).toBe(false);
   });
 
   it("matches native change requests only from the configured reviewer App", () => {
