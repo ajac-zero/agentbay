@@ -52,6 +52,27 @@ describe("GitHub webhook API", () => {
     });
   });
 
+  it("registers an eyes acknowledgment for opened pull requests when enabled", async () => {
+    const store = new FakeStore();
+    const payload = closedDeletedForkPayload();
+    const response = await webhook(testApp(store, { [SECRET_ENV]: SECRET }, verifyGitHubSignature, true), {
+      ...payload,
+      action: "opened",
+      pull_request: { ...payload.pull_request, state: "open", closed_at: null },
+    }, { event: "pull_request" });
+
+    expect(response.status).toBe(202);
+    expect(store.lastAdmission).toMatchObject({
+      event: { type: "com.github.pull_request.opened" },
+      githubIssueAcknowledgment: {
+        installationId: 10,
+        repositoryId: 20,
+        repositoryFullName: "acme/widgets",
+        issueNumber: 7,
+      },
+    });
+  });
+
   it("admits issue comments as normalized events", async () => {
     const store = new FakeStore();
     const payload = issuePayload();
