@@ -133,6 +133,14 @@ function mergePullRequestArguments(body) {
   return { args, id: message.id };
 }
 
+function createsIssue(body) {
+  let message;
+  try { message = JSON.parse(body.toString("utf8")); } catch { return false; }
+  if (Array.isArray(message)) throw new Error("JSON_RPC_BATCH_NOT_SUPPORTED");
+  if (message?.method !== "tools/call" || message?.params?.name !== "issue_write") return false;
+  return message.params.arguments?.method === "create";
+}
+
 function mcpResult(id, value, isError = false) {
   return Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(value) }], ...(isError ? { isError: true } : {}) } }));
 }
@@ -199,6 +207,7 @@ function pullRequestIdentity(bytes, owner, repo, requestId) {
 }
 
 export function startBroker(config, provider) {
+  let issuesCreated = 0;
   const server = http.createServer(async (request, response) => {
     const controller = new AbortController();
     if (request.method === "GET") {
@@ -222,6 +231,10 @@ export function startBroker(config, provider) {
         return;
       }
       const body = await readRequest(request);
+      if (request.method === "POST" && createsIssue(body) && config.maxIssuesCreated !== undefined) {
+        if (issuesCreated >= config.maxIssuesCreated) throw new Error("ISSUE_CREATE_LIMIT_EXCEEDED");
+        issuesCreated += 1;
+      }
       const mergeCall = request.method === "POST" ? mergePullRequestArguments(body) : undefined;
       if (mergeCall) {
         const merged = await executeFencedMerge(mergeCall, config, provider);

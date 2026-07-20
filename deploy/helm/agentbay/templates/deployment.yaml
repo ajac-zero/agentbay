@@ -108,6 +108,22 @@ spec:
               value: {{ .Values.orchestrator.githubIssueAcknowledgment.retryDelayMs | quote }}
             - name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS
               value: {{ .Values.orchestrator.githubIssueAcknowledgment.requestTimeoutMs | quote }}
+            - name: AGENTBAY_SCHEDULE_WORKER_ENABLED
+              value: {{ .Values.orchestrator.scheduleWorker.enabled | quote }}
+            - name: AGENTBAY_SCHEDULE_WORKER_IDLE_POLL_MS
+              value: {{ .Values.orchestrator.scheduleWorker.idlePollMs | quote }}
+            - name: AGENTBAY_SCHEDULE_WORKER_LEASE_DURATION_MS
+              value: {{ .Values.orchestrator.scheduleWorker.leaseDurationMs | quote }}
+            - name: AGENTBAY_SCHEDULE_WORKER_RETRY_DELAY_MS
+              value: {{ .Values.orchestrator.scheduleWorker.retryDelayMs | quote }}
+            - name: AGENTBAY_SCHEDULE_WORKER_MAX_ATTEMPTS
+              value: {{ .Values.orchestrator.scheduleWorker.maxAttempts | quote }}
+            - name: AGENTBAY_SCHEDULE_WORKER_MATERIALIZE_BATCH_SIZE
+              value: {{ .Values.orchestrator.scheduleWorker.materializeBatchSize | quote }}
+            - name: AGENTBAY_SCHEDULE_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             {{- if $githubWorkerEnabled }}
             - name: AGENTBAY_GITHUB_APP_ID_FILE
               value: {{ printf "%s/app-id" .Values.orchestrator.revisionResolver.mountPath | quote }}

@@ -35,6 +35,8 @@ describe("GitHub token broker", () => {
       AGENTBAY_CONNECTIONS: JSON.stringify({ refs: ["github-production"], schemaVersion: 1, tenantId: "default" }),
     };
     expect(parseStartupConfig(env)).toMatchObject({ ...config, upstream: "http://127.0.0.1:8082/", port: 8083 });
+    expect(parseStartupConfig({ ...env, AGENTBAY_GITHUB_MAX_ISSUES_CREATED: "1" }).maxIssuesCreated).toBe(1);
+    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MAX_ISSUES_CREATED: "0" })).toThrow(/MAX_ISSUES/);
     expect(() => parseStartupConfig({ ...env, AGENTBAY_CONNECTIONS: JSON.stringify({ refs: ["other"], schemaVersion: 1, tenantId: "default" }) })).toThrow();
     expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MCP_UPSTREAM: "https://example.com" })).toThrow(/loopback/);
     expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_PERMISSIONS: "contents:admin" })).toThrow();
@@ -134,6 +136,23 @@ describe("GitHub token broker", () => {
   it("creates a signed GitHub App JWT", () => {
     const jwt = createGitHubAppJwt({ appId: 10, privateKey: pem, now: () => Date.parse("2026-07-19T01:00:00Z") });
     expect(jwt.split(".")).toHaveLength(3);
+  });
+
+  it("enforces an execution-scoped issue creation budget", async () => {
+    let upstreamCalls = 0;
+    const upstream = await listen(http.createServer((_request, response) => {
+      upstreamCalls += 1;
+      response.writeHead(200, { "content-type": "application/json" }).end("{}");
+    }));
+    running.push(upstream);
+    const broker = await startBroker({ upstream: `http://127.0.0.1:${upstream.port}/`, host: "127.0.0.1", port: 0, maxIssuesCreated: 1 },
+      { getToken: async () => "ghs", invalidate: () => {} });
+    running.push(broker);
+    const endpoint = `http://127.0.0.1:${(broker.server.address() as AddressInfo).port}/`;
+    const create = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "issue_write", arguments: { method: "create", owner: "acme", repo: "repo", title: "Bug", body: "Evidence" } } });
+    expect((await fetch(endpoint, { method: "POST", body: create })).status).toBe(200);
+    expect((await fetch(endpoint, { method: "POST", body: create })).status).toBe(502);
+    expect(upstreamCalls).toBe(1);
   });
 
   it("streams MCP SSE responses", async () => {

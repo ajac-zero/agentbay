@@ -1138,10 +1138,13 @@ Later, one global control plane may route to multiple execution clusters. Each c
 
 ### 19.3 Scheduled maintenance
 
-1. A cron trigger emits an event each night.
-2. The binding invokes a dependency-maintenance agent against selected repositories.
-3. Per-tenant and provider quotas control fan-out.
-4. Successful changes are published as branches and pull requests; failures are sent to an operations queue.
+1. An enabled `schedule.cron` trigger stores a standard five-field expression with explicit UTC timezone and `skip` misfire policy.
+2. When `next_fire_at` is due, one scheduler replica locks the schedule row, inserts a uniquely keyed occurrence, and advances the schedule in the same PostgreSQL transaction.
+3. An occurrence worker leases the durable occurrence and admits a normalized `dev.agentbay.schedule.triggered` CloudEvent using its stable occurrence ID and scheduled time.
+4. Repository schedules request the existing GitHub default-branch revision-resolution gate. No execution is created until the exact commit SHA is persisted.
+5. A binding invokes a one-shot maintenance or audit agent against that immutable revision. An active singleton may suppress overlapping executions without losing occurrence audit history.
+6. Crash recovery re-leases the same occurrence; admission idempotency prevents duplicate events or executions. Disabled triggers stop both future materialization and pending occurrence delivery.
+7. No sandbox exists between occurrences. Per-tenant and provider quotas continue to control execution fan-out.
 
 ### 19.4 Chat request
 

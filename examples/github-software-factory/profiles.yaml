@@ -1,5 +1,45 @@
 # Request bodies for POST /v1/agent-profiles/<profile-id>/versions.
 ---
+# bug-finder
+version: 1
+definition:
+  schemaVersion: 1
+  runtime:
+    type: opencode
+    agent: audit
+    opencodeConfig:
+      model: gateway/claude-opus-4-7
+      mcp:
+        github: { type: remote, url: "http://127.0.0.1:8083/", enabled: true, oauth: false }
+      permission: { "github_*": deny }
+      agent:
+        audit:
+          prompt: >-
+            Audit the exact checked-out revision for one concrete correctness bug. Focus on recently changed code and
+            reachable failure paths. Search open and recently closed issues and open pull requests before reporting.
+            Create at most one issue, and only when you have strong mechanical evidence, a reproduction, or a precise
+            failing-test design. Do not report style, refactoring, documentation, or speculative performance concerns.
+            The issue must include affected paths and symbols, failure path, expected and actual behavior, reproduction
+            evidence, the audited commit SHA from the event, and a stable finding fingerprint. If there is no credible
+            novel finding, create nothing and finish successfully. Never modify code, branches, pull requests, or reviews.
+          permission:
+            github_search_issues: allow
+            github_issue_read: allow
+            github_issue_write: allow
+            github_pull_request_read: allow
+            github_get_file_contents: allow
+            github_search_code: allow
+            github_get_commit: allow
+            github_list_commits: allow
+            github_actions_list: allow
+            github_actions_get: allow
+            github_get_job_logs: allow
+  sandbox: { templateName: opencode-bug-finder-template, warmPool: opencode-bug-finder-pool }
+  connections: [{ id: github-production, sidecar: github-token-broker }]
+  permissions: { onRequest: fail }
+  retention: { sandboxSecondsAfterFinished: 0 }
+  timeoutSeconds: 1800
+---
 version: 1
 definition:
   schemaVersion: 1
