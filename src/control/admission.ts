@@ -127,6 +127,38 @@ export function projectActiveSingleton(definition: CreateBindingDefinition, even
   return { name: definition.activeSingleton.name, values };
 }
 
+export function projectCheckpoint(definition: CreateBindingDefinition, event: NormalizedCloudEvent): {
+  name: string; keyValues: JsonPrimitive[]; value: JsonPrimitive;
+} | undefined {
+  if (!definition.checkpoint) return undefined;
+  const keyValues = definition.checkpoint.key.map((path) => resolveBoundedPrimitive(event.data, path, "Checkpoint key"));
+  return {
+    name: definition.checkpoint.name,
+    keyValues,
+    value: resolveBoundedPrimitive(event.data, definition.checkpoint.value.path, "Checkpoint value"),
+  };
+}
+
+export function addCheckpointInput(input: ExecutionInput, checkpoint: {
+  name: string; previous: JsonPrimitive | null; current: JsonPrimitive; initial: boolean;
+}): ExecutionInput {
+  const incremental = { checkpoint: checkpoint.name, previous: checkpoint.previous, current: checkpoint.current, initial: checkpoint.initial };
+  const serialized = canonicalJson(incremental);
+  return {
+    text: `${input.text}\n\nIncremental audit range (trusted control-plane context):\n${serialized}`,
+    context: { ...(input.context ?? {}), incremental },
+  };
+}
+
+function resolveBoundedPrimitive(data: JsonValue, path: string, label: string): JsonPrimitive {
+  const resolved = resolveJsonPointer(data, path);
+  if (!resolved.found || (resolved.value !== null && typeof resolved.value === "object")
+    || Buffer.byteLength(JSON.stringify(resolved.value), "utf8") > 1_024) {
+    throw new Error(`${label} path ${path} must resolve to a bounded JSON primitive`);
+  }
+  return resolved.value;
+}
+
 export function planExecution(binding: PublishedBindingVersion, command: AdmissionCommand): Execution | undefined {
   if ("disposition" in binding.definition || binding.tenantId !== command.tenantId || binding.triggerId !== command.triggerId || !matchesBinding(binding, command.event)) return undefined;
   const id = bindingExecutionIdempotencyKey(binding.id, command.internalEventId);

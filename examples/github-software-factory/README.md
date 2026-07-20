@@ -32,6 +32,11 @@ most one evidence-backed issue. That `issues.opened` webhook enters step 1 above
 Missed intervals use `skip` semantics, and the repository singleton prevents
 overlapping audits without retaining a sandbox between runs.
 
+The binding checkpoint is keyed by stable binding ID and repository ID. A
+successful audit atomically advances it to the audited SHA. An unchanged SHA
+creates no execution or sandbox; failures retain the previous SHA. Each created
+execution receives trusted `previous`, `current`, and `initial` range metadata.
+
 The GitHub connector also normalizes issue comments, pull-request reviews, and
 pull-request review comments for later continuation matching.
 

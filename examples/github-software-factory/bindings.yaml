@@ -13,6 +13,12 @@ definition:
   activeSingleton:
     name: scheduled-bug-finder
     key: [/repository/id]
+  checkpoint:
+    name: repository-audit
+    key: [/repository/id]
+    value: { path: /repository/defaultBranchRevision/commit }
+    advanceOn: succeeded
+    unchanged: skip
   prompt: { literal: Audit this exact scheduled repository revision for one novel concrete bug., includeEvent: data }
   workspace:
     type: git

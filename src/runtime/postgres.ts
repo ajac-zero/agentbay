@@ -48,7 +48,7 @@ import {
   type RequestExecutionCancellationCommand,
   type RequestExecutionCancellationResult,
 } from "../execution/types.js";
-import { planExecution, projectActiveSingleton, projectWakeCorrelation, renderPromptInput, type AdmissionCommand, type AdmissionResult, type AdmissionWakeResult, type PendingWakeResult } from "../control/admission.js";
+import { addCheckpointInput, planExecution, projectActiveSingleton, projectCheckpoint, projectWakeCorrelation, renderPromptInput, type AdmissionCommand, type AdmissionResult, type AdmissionWakeResult, type PendingWakeResult } from "../control/admission.js";
 import {
   ConnectionAlreadyExistsError,
   ConnectionNotFoundError,
@@ -423,7 +423,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
             schemaVersion: definition.schemaVersion,
             ...("disposition" in definition
               ? { disposition: definition.disposition, wake: definition.wake }
-              : { workspace: definition.workspace, prompt: definition.prompt, afterTurn: definition.afterTurn, activeSingleton: definition.activeSingleton }),
+             : { workspace: definition.workspace, prompt: definition.prompt, afterTurn: definition.afterTurn, activeSingleton: definition.activeSingleton, checkpoint: definition.checkpoint }),
           }), definition.eventTypes, publishedAt],
       });
       if (inserted.rowCount !== 1) throw new BindingVersionAlreadyExistsError(binding.bindingId, binding.version);
@@ -678,21 +678,35 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       const planned = planExecution(binding, command);
       if (!planned || "disposition" in binding.definition) return [];
       const singleton = projectActiveSingleton(binding.definition, command.event);
-      return [{ row, binding, planned, singleton: singleton ? { ...singleton, key: hashCanonicalJson(singleton.values) } : undefined }];
+      const checkpoint = projectCheckpoint(binding.definition, command.event);
+      return [{ row, binding, planned, singleton: singleton ? { ...singleton, key: hashCanonicalJson(singleton.values) } : undefined,
+        checkpoint: checkpoint ? { ...checkpoint, key: hashCanonicalJson(checkpoint.keyValues) } : undefined }];
     });
-    const singletonLocks = [...new Set(plans.flatMap((plan) => plan.singleton
-      ? [`active-execution-singleton:${command.tenantId}:${plan.singleton.name}:${plan.singleton.key}`]
-      : []))].sort();
-    for (const lock of singletonLocks) {
+    const admissionLocks = [...new Set(plans.flatMap((plan) => [
+      ...(plan.singleton ? [`active-execution-singleton:${command.tenantId}:${plan.singleton.name}:${plan.singleton.key}`] : []),
+      ...(plan.checkpoint ? [`execution-checkpoint:${command.tenantId}:${plan.binding.bindingId}:${plan.checkpoint.name}:${plan.checkpoint.key}`] : []),
+    ]))].sort();
+    for (const lock of admissionLocks) {
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lock]);
     }
-    for (const { row, binding, planned, singleton } of plans) {
+    for (const { row, binding, planned, singleton, checkpoint } of plans) {
       if (singleton) {
         const owner = await client.query(`SELECT 1 FROM agentbay_executions
           WHERE tenant_id = $1 AND active_singleton_name = $2 AND active_singleton_key = $3
             AND state NOT IN ('SUCCEEDED', 'COMPLETED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')
           LIMIT 1`, [command.tenantId, singleton.name, singleton.key]);
         if (owner.rowCount) continue;
+      }
+      let checkpointPrevious: JsonPrimitive | undefined;
+      if (checkpoint) {
+        const current = await client.query<{ value: JsonPrimitive }>(`SELECT value FROM agentbay_execution_checkpoints
+          WHERE tenant_id=$1 AND binding_id=$2 AND checkpoint_name=$3 AND checkpoint_key_hash=$4 FOR UPDATE`,
+        [command.tenantId, binding.bindingId, checkpoint.name, checkpoint.key]);
+        checkpointPrevious = current.rows[0]?.value;
+        if (current.rows[0] && hashCanonicalJson(current.rows[0].value) === hashCanonicalJson(checkpoint.value)) continue;
+        planned.input = addCheckpointInput(planned.input, {
+          name: checkpoint.name, previous: checkpointPrevious ?? null, current: checkpoint.value, initial: current.rowCount === 0,
+        });
       }
       const now = new Date(command.admittedAt);
       const executionId = randomUUID();
@@ -720,6 +734,15 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         (tenant_id, execution_id, sequence, kind, event_id, input, workspace, created_at)
         VALUES ($1,$2,1,'INITIAL',$3,$4::jsonb,$5::jsonb,$6)`,
       [command.tenantId, executionId, command.internalEventId, JSON.stringify(planned.input), JSON.stringify(planned.workspace), now]);
+      if (checkpoint) {
+        await client.query(`INSERT INTO agentbay_execution_checkpoint_advances
+          (execution_id, tenant_id, binding_id, checkpoint_name, checkpoint_key_hash, checkpoint_key_values,
+           expected_previous_exists, expected_previous_value, target_value, state, created_at)
+          VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8::jsonb,$9::jsonb,'PENDING',$10)`,
+        [executionId, command.tenantId, binding.bindingId, checkpoint.name, checkpoint.key,
+          JSON.stringify(checkpoint.keyValues), checkpointPrevious !== undefined,
+          checkpointPrevious === undefined ? null : JSON.stringify(checkpointPrevious), JSON.stringify(checkpoint.value), now]);
+      }
       if (!("disposition" in binding.definition) && binding.definition.afterTurn?.wait.admitWhileBusy) {
         const wait = binding.definition.afterTurn.wait;
         const correlation = resolveCorrelation(wait.correlation.filter((item): item is Extract<typeof item, { path: string }> => "path" in item), command.event.data);
@@ -2232,6 +2255,42 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         completed_at = CASE WHEN $3::text IN ('TIMED_OUT','FAILED','CANCELLED','COMPLETED','DEAD_LETTERED') THEN $5::timestamptz ELSE NULL END
         WHERE id = $1 AND tenant_id = $2 AND state = 'RUNNING'`,
       [command.executionId, command.tenantId, executionState, JSON.stringify(command.result), now, wait?.deadline ?? execution.timeout_at, continuationSequence]);
+      if (executionState === "SUCCEEDED") {
+        const advance = (await client.query<{
+          binding_id: string; checkpoint_name: string; checkpoint_key_hash: string; checkpoint_key_values: JsonPrimitive[];
+          expected_previous_exists: boolean; expected_previous_value: JsonPrimitive | null; target_value: JsonPrimitive;
+        }>(`SELECT binding_id, checkpoint_name, checkpoint_key_hash, checkpoint_key_values,
+          expected_previous_exists, expected_previous_value, target_value
+          FROM agentbay_execution_checkpoint_advances
+          WHERE execution_id=$1 AND tenant_id=$2 AND state='PENDING' FOR UPDATE`,
+        [command.executionId, command.tenantId])).rows[0];
+        if (advance) {
+          await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+            `execution-checkpoint:${command.tenantId}:${advance.binding_id}:${advance.checkpoint_name}:${advance.checkpoint_key_hash}`,
+          ]);
+          let applied: boolean;
+          if (advance.expected_previous_exists) {
+            const updated = await client.query(`UPDATE agentbay_execution_checkpoints SET
+              value=$6::jsonb, advanced_by_execution_id=$5, advanced_at=$7, updated_at=$7
+              WHERE tenant_id=$1 AND binding_id=$2 AND checkpoint_name=$3 AND checkpoint_key_hash=$4
+                AND value=$8::jsonb`,
+            [command.tenantId, advance.binding_id, advance.checkpoint_name, advance.checkpoint_key_hash,
+              command.executionId, JSON.stringify(advance.target_value), now, JSON.stringify(advance.expected_previous_value)]);
+            applied = updated.rowCount === 1;
+          } else {
+            const inserted = await client.query(`INSERT INTO agentbay_execution_checkpoints
+              (tenant_id,binding_id,checkpoint_name,checkpoint_key_hash,checkpoint_key_values,value,
+               advanced_by_execution_id,advanced_at,created_at,updated_at)
+              VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,$8,$8) ON CONFLICT DO NOTHING`,
+            [command.tenantId, advance.binding_id, advance.checkpoint_name, advance.checkpoint_key_hash,
+              JSON.stringify(advance.checkpoint_key_values), JSON.stringify(advance.target_value), command.executionId, now]);
+            applied = inserted.rowCount === 1;
+          }
+          await client.query(`UPDATE agentbay_execution_checkpoint_advances SET state=$3, applied_at=$4
+            WHERE execution_id=$1 AND tenant_id=$2`,
+          [command.executionId, command.tenantId, applied ? "APPLIED" : "SUPERSEDED", now]);
+        }
+      }
       if (executionState === "WAITING" && wait) {
         await client.query(`INSERT INTO agentbay_event_waits
           (id, tenant_id, execution_id, attempt, name, state, correlation, deadline_at, activated_at)
@@ -2626,7 +2685,7 @@ function bindingFromRow(row: BindingRow): PublishedBindingVersion {
     eventTypes: row.event_types,
     ...(persisted.disposition === "wake"
       ? { disposition: persisted.disposition, wake: persisted.wake }
-      : { activeSingleton: persisted.activeSingleton, afterTurn: persisted.afterTurn, prompt: persisted.prompt, workspace: persisted.workspace }),
+      : { activeSingleton: persisted.activeSingleton, afterTurn: persisted.afterTurn, checkpoint: persisted.checkpoint, prompt: persisted.prompt, workspace: persisted.workspace }),
   });
   return {
     bindingId: row.binding_id,
