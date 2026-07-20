@@ -76,6 +76,18 @@ describe("GitHub webhook API", () => {
     expect(store.lastAdmission).not.toHaveProperty("revisionResolution");
   });
 
+  it("admits completed workflow runs for exact pull request revisions", async () => {
+    const store = new FakeStore();
+    const response = await webhook(testApp(store), workflowRunPayload(), { event: "workflow_run" });
+    expect(response.status).toBe(202);
+    expect(store.lastAdmission?.event).toMatchObject({
+      type: "com.github.workflow_run.completed",
+      subject: "pulls/7",
+      data: { workflowRun: { name: "CI", conclusion: "success", headSha: "a".repeat(40) }, pullRequest: { number: 7 } },
+    });
+    expect(store.lastAdmission).not.toHaveProperty("revisionResolution");
+  });
+
   it("replays the same delivery, conflicts on changed normalized payload, and permits disabled replay", async () => {
     const store = new FakeStore();
     const app = testApp(store);
@@ -160,13 +172,13 @@ describe("GitHub webhook API", () => {
     const store = new FakeStore();
     const app = testApp(store);
     expect((await webhook(app, { zen: "hello" }, { event: "ping" })).status).toBe(204);
-    expect((await webhook(app, { value: true }, { event: "workflow_run" })).status).toBe(204);
+    expect((await webhook(app, { value: true }, { event: "check_suite" })).status).toBe(204);
     expect((await webhook(app, { action: "transferred" })).status).toBe(204);
     expect(store.admitCalls).toBe(0);
 
     store.trigger = { ...store.trigger!, enabled: false, disabledAt: new Date().toISOString() };
     expect((await webhook(app, { zen: "hello" }, { event: "ping" })).status).toBe(404);
-    expect((await webhook(app, { value: true }, { event: "workflow_run" })).status).toBe(404);
+    expect((await webhook(app, { value: true }, { event: "check_suite" })).status).toBe(404);
     expect((await webhook(app, { action: "transferred" })).status).toBe(404);
     expect(store.admitCalls).toBe(0);
   });
@@ -323,6 +335,28 @@ function issuePayload(overrides: Record<string, unknown> = {}) {
       updated_at: "2026-07-18T10:00:00Z",
       closed_at: null,
       ...overrides,
+    },
+  };
+}
+
+function workflowRunPayload() {
+  const actor = { id: 1, login: "octocat", type: "User" };
+  const repository = { id: 20, full_name: "acme/widgets", clone_url: "https://github.com/acme/widgets.git", default_branch: "main", private: false };
+  return {
+    action: "completed",
+    installation: { id: 10 },
+    repository,
+    sender: actor,
+    workflow_run: {
+      id: 900,
+      name: "CI",
+      event: "pull_request",
+      status: "completed",
+      conclusion: "success",
+      head_sha: "a".repeat(40),
+      head_branch: "feature",
+      head_repository: { id: 21, full_name: "contributor/widgets", clone_url: "https://github.com/contributor/widgets.git" },
+      pull_requests: [{ id: 700, number: 7, head: { ref: "feature", sha: "a".repeat(40) }, base: { ref: "main", sha: "b".repeat(40) } }],
     },
   };
 }
