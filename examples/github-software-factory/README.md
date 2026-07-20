@@ -48,6 +48,7 @@ canonical CI workflow event creates a one-shot reviewer for its exact head SHA.
 The active singleton key includes repository ID, PR number, and SHA, preventing
 concurrent duplicate review executions for one revision. A later revision runs
 CI again and creates a distinct one-shot reviewer only after that run completes.
+No reviewer SandboxClaim exists while the workflow is queued or running.
 
 The developer and reviewer remain separate executions. The issue-origin
 developer context starts with repository ID and an empty supplied PR-number
