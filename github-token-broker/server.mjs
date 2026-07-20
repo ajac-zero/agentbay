@@ -41,10 +41,9 @@ function copyHeaders(request, token) {
 }
 
 async function forward(request, body, config, provider, signal) {
-  const target = new URL(request.url ?? "/", config.upstream);
-  if (target.origin !== new URL(config.upstream).origin) throw new Error("INVALID_UPSTREAM_PATH");
+  if (request.url !== "/") throw new Error("INVALID_UPSTREAM_PATH");
   const token = await provider.getToken();
-  const response = await fetch(target, {
+  const response = await fetch(config.upstream, {
     method: request.method,
     headers: copyHeaders(request, token),
     body: request.method === "GET" || request.method === "HEAD" ? undefined : body,
