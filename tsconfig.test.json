@@ -4,5 +4,5 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.e2e.config.ts", "vitest.unit.config.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "examples/**/*.test.ts", "vitest.e2e.config.ts", "vitest.unit.config.ts"]
 }

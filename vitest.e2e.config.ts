@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     environment: "node",
     hookTimeout: 180_000,
-    include: ["test/e2e/**/*.test.ts"],
+    include: ["test/e2e/**/*.test.ts", "examples/**/github-official-mcp.test.ts"],
     testTimeout: 240_000,
   },
 });
