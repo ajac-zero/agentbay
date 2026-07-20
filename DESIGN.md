@@ -345,7 +345,7 @@ For each match, the planner:
 
 An outbox publisher moves committed messages to the durable bus. This prevents a committed execution from being lost between database insertion and queue publication.
 
-For GitHub `issues.opened`, deployments may enable a required `eyes` reaction effect. The control-plane publisher mints a selected-repository installation token with exactly `issues:write`, validates repository identity, and treats GitHub's created and already-present responses as success. The effect is event-scoped and idempotent across webhook replay. No App JWT or installation token is persisted in the event or outbox payload.
+For GitHub `issues.opened` and `pull_request.opened`, deployments may enable a required `eyes` reaction effect. The control-plane publisher mints a selected-repository installation token with exactly `issues:write`, validates repository identity, and treats GitHub's created and already-present responses as success. The effect is event-scoped and idempotent across webhook replay. No App JWT or installation token is persisted in the event or outbox payload.
 
 ### 6.4 Management API
 

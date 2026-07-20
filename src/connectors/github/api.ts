@@ -101,7 +101,10 @@ export function mountGitHubWebhookApi(
     if (!event) return trigger.enabled ? context.body(null, 204) : context.json({ error: "Trigger not found" }, 404);
 
     const revisionResolution = eventName === "issues" ? githubRevisionResolution(event.data) : undefined;
-    const githubIssueAcknowledgment = issueAcknowledgmentEnabled && event.type === "com.github.issues.opened" ? issueAcknowledgment(event.data) : undefined;
+    const githubIssueAcknowledgment = issueAcknowledgmentEnabled
+      && (event.type === "com.github.issues.opened" || event.type === "com.github.pull_request.opened")
+      ? issueAcknowledgment(event.data, event.type === "com.github.issues.opened" ? "issue" : "pullRequest")
+      : undefined;
     await store.admitEvent({
       tenantId: TENANT_ID,
       triggerId: triggerID,
@@ -143,22 +146,22 @@ function githubRevisionResolution(data: JsonValue) {
   };
 }
 
-function issueAcknowledgment(data: JsonValue) {
+function issueAcknowledgment(data: JsonValue, subjectKey: "issue" | "pullRequest") {
   if (data === null || typeof data !== "object" || Array.isArray(data)) return undefined;
   const repository = data.repository;
-  const issue = data.issue;
+  const subject = data[subjectKey];
   const installationId = data.installationId;
   if (repository === null || typeof repository !== "object" || Array.isArray(repository)
-    || issue === null || typeof issue !== "object" || Array.isArray(issue)
+    || subject === null || typeof subject !== "object" || Array.isArray(subject)
     || typeof installationId !== "number" || !Number.isSafeInteger(installationId) || installationId < 1
     || typeof repository.id !== "number" || !Number.isSafeInteger(repository.id) || repository.id < 1
     || typeof repository.fullName !== "string"
-    || typeof issue.number !== "number" || !Number.isSafeInteger(issue.number) || issue.number < 1) return undefined;
+    || typeof subject.number !== "number" || !Number.isSafeInteger(subject.number) || subject.number < 1) return undefined;
   return {
     installationId,
     repositoryId: repository.id,
     repositoryFullName: repository.fullName,
-    issueNumber: issue.number,
+    issueNumber: subject.number,
   };
 }
 
