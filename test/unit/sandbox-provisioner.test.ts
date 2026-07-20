@@ -246,6 +246,36 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     expect(JSON.stringify(created)).not.toContain("credential");
   });
 
+  it("injects a canonical merge capability only into the GitHub broker", async () => {
+    const mergeInput: ExecutionAttemptProvisioningInput = {
+      ...input,
+      connections: [{ id: "github-production", sidecar: "github-token-broker" }],
+      controlPlaneUrl: "http://agentbay:3000/",
+      githubMergeCapability: {
+        commitSha: "a".repeat(40),
+        pullRequestNumber: 42,
+        repositoryFullName: "acme/repo",
+        repositoryId: 7,
+        reviewerId: 9,
+      },
+    };
+    vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockRejectedValue({ code: 404 });
+    const create = vi.spyOn(CustomObjectsApi.prototype, "createNamespacedCustomObject").mockImplementation(async ({ body }) => ({
+      ...(body as SandboxClaim),
+      status: { conditions: [{ type: "Ready", status: "True", lastTransitionTime: "", message: "" }], sandbox: { podIPs: ["10.0.0.8"] } },
+    }));
+
+    await provisioner().provision(mergeInput, new AbortController().signal);
+
+    const created = create.mock.calls[0]![0].body as SandboxClaim;
+    expect(created.spec?.env?.filter(({ name }) => name === "AGENTBAY_GITHUB_MERGE_CAPABILITY")).toEqual([{
+      containerName: "github-token-broker",
+      name: "AGENTBAY_GITHUB_MERGE_CAPABILITY",
+      value: `{"commitSha":"${"a".repeat(40)}","pullRequestNumber":42,"repositoryFullName":"acme/repo","repositoryId":7,"reviewerId":9,"schemaVersion":1}`,
+    }]);
+    expect(JSON.stringify(created.metadata)).not.toContain("commitSha");
+  });
+
   it("digests canonical authorization sorted by ID independently of sidecar grouping", async () => {
     const connectionInput: ExecutionAttemptProvisioningInput = {
       ...input,

@@ -131,6 +131,28 @@ sandboxTemplates:
           secret:
             secretName: example-github-reviewer-app-credentials
             defaultMode: 0440
+    - <<: *baseTemplate
+      name: opencode-merger-template
+      image: *sandboxImage
+      workspace: *workspace
+      networkPolicy: *networkPolicy
+      sidecars:
+        - <<: *developerMcp
+          args:
+            - http
+            - --listen-host=127.0.0.1
+            - --port=8082
+            - --tools=pull_request_read,merge_pull_request
+        - <<: *developerBroker
+          env:
+            - { name: AGENTBAY_GITHUB_TENANT, value: default }
+            - { name: AGENTBAY_GITHUB_CONNECTION, value: github-production }
+            - { name: AGENTBAY_GITHUB_REPOSITORY_ID, value: "123456789" }
+            # Replace with the reviewer App bot actor ID used by the approval binding.
+            - { name: AGENTBAY_GITHUB_MERGE_REVIEWER_ID, value: "987654321" }
+            - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "contents:write,pull_requests:write" }
+          volumeMounts: *credentialMount
+      extraVolumes: *credentialVolume
 
 sandboxWarmPools:
   enabled: true
@@ -143,4 +165,7 @@ sandboxWarmPools:
       replicas: 0
     - name: opencode-reviewer-pool
       sandboxTemplateRef: opencode-reviewer-template
+      replicas: 0
+    - name: opencode-merger-pool
+      sandboxTemplateRef: opencode-merger-template
       replicas: 0
