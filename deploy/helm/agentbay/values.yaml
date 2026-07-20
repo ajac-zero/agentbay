@@ -229,6 +229,13 @@ orchestrator:
     # -- Existing Secret containing `app-id` and `private-key.pem` keys.
     credentialsSecret: ""
     mountPath: /var/run/agentbay/github-app
+  githubIssueAcknowledgment:
+    # -- Add an eyes reaction after durable issues.opened admission and before execution provisioning.
+    enabled: false
+    idlePollMs: 250
+    leaseDurationMs: 60000
+    retryDelayMs: 5000
+    requestTimeoutMs: 30000
   # -- Extra orchestrator env vars expressed as a Kubernetes `env` list. For
   # -- sensitive values, use `valueFrom.secretKeyRef`; for example, expose a
   # -- GitHub webhook secret here so it is available only to the orchestrator

@@ -12,6 +12,9 @@ import { createKubeConfig } from "./sandbox/client.js";
 import { SandboxClaimExecutionAttemptProvisioner } from "./sandbox/provisioner.js";
 import { GitHubAppRevisionResolver } from "./revision/github.js";
 import { RevisionResolutionWorker } from "./revision/worker.js";
+import { GitHubIssueAcknowledgmentTransport, GITHUB_ISSUE_REACTION_TOPIC } from "./connectors/github/issue-acknowledgment.js";
+import { OutboxPublisher } from "./outbox/publisher.js";
+import { runOutboxPublisherLoop } from "./outbox/worker.js";
 
 const config = loadConfig();
 const runtimeStore = await createRuntimeStore();
@@ -21,6 +24,29 @@ const provisioner = config.executionMaintenanceEnabled || config.dispatcherEnabl
 const dispatcherController = new AbortController();
 const maintenanceController = new AbortController();
 const revisionController = new AbortController();
+const acknowledgmentController = new AbortController();
+const acknowledgmentTask = config.githubIssueAcknowledgmentEnabled
+  ? runOutboxPublisherLoop({
+      publisher: new OutboxPublisher({
+        store: runtimeStore,
+        transport: new GitHubIssueAcknowledgmentTransport({
+          appIdFile: config.githubAppIdFile!,
+          privateKeyFile: config.githubAppPrivateKeyFile!,
+        }),
+        batchSize: 1,
+        leaseDurationMs: config.githubIssueAcknowledgmentLeaseDurationMs,
+        transportTimeoutMs: config.githubIssueAcknowledgmentRequestTimeoutMs,
+        baseRetryDelayMs: config.githubIssueAcknowledgmentRetryDelayMs,
+        maxRetryDelayMs: 5 * 60_000,
+        topics: [GITHUB_ISSUE_REACTION_TOPIC],
+      }),
+      idlePollMs: config.githubIssueAcknowledgmentIdlePollMs,
+      signal: acknowledgmentController.signal,
+    })
+  : Promise.resolve();
+const acknowledgment = acknowledgmentTask.catch((error: unknown) => {
+  logger.error("GitHub issue acknowledgment worker stopped unexpectedly", { error });
+});
 const revisionTask = config.revisionResolverEnabled
   ? new RevisionResolutionWorker({
       store: runtimeStore,
@@ -78,7 +104,7 @@ const app = createOpenApiApp();
 
 mountHealthRoute(app);
 mountControlApi(app, config, runtimeStore);
-mountGitHubWebhookApi(app, runtimeStore);
+mountGitHubWebhookApi(app, runtimeStore, undefined, undefined, config.githubIssueAcknowledgmentEnabled);
 mountGitHubEffectsApi(app, runtimeStore);
 mountOpenApiDocs(app);
 
@@ -98,9 +124,10 @@ async function performShutdown(signal: string): Promise<void> {
   maintenanceController.abort();
   dispatcherController.abort();
   revisionController.abort();
+  acknowledgmentController.abort();
   const serverClosed = new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   await serverClosed;
-  await Promise.all([maintenance, dispatcher, revisionResolver]);
+  await Promise.all([maintenance, dispatcher, revisionResolver, acknowledgment]);
   await runtimeStore.close();
 }
 

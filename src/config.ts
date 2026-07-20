@@ -29,6 +29,11 @@ export type Config = {
   revisionResolverWorkerId: string;
   githubAppIdFile?: string;
   githubAppPrivateKeyFile?: string;
+  githubIssueAcknowledgmentEnabled: boolean;
+  githubIssueAcknowledgmentIdlePollMs: number;
+  githubIssueAcknowledgmentLeaseDurationMs: number;
+  githubIssueAcknowledgmentRequestTimeoutMs: number;
+  githubIssueAcknowledgmentRetryDelayMs: number;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -55,6 +60,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     revisionResolverWorkerId: env.AGENTBAY_REVISION_RESOLVER_WORKER_ID ?? env.HOSTNAME ?? `agentbay-${process.pid}`,
     githubAppIdFile: emptyToUndefined(env.AGENTBAY_GITHUB_APP_ID_FILE),
     githubAppPrivateKeyFile: emptyToUndefined(env.AGENTBAY_GITHUB_PRIVATE_KEY_FILE),
+    githubIssueAcknowledgmentEnabled: readStrictBoolean(env.AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED, false),
+    githubIssueAcknowledgmentIdlePollMs: readTimerDelay(env.AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_IDLE_POLL_MS, 250),
+    githubIssueAcknowledgmentLeaseDurationMs: readPositiveInteger(env.AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS, 60_000),
+    githubIssueAcknowledgmentRequestTimeoutMs: readTimerDelay(env.AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS, 30_000),
+    githubIssueAcknowledgmentRetryDelayMs: readNonnegativeInteger(env.AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_RETRY_DELAY_MS, 5_000),
     kubeNamespace: env.AGENTBAY_KUBE_NAMESPACE ?? env.POD_NAMESPACE ?? "agents",
     opencodeDirectory: env.AGENTBAY_OPENCODE_DIRECTORY ?? "/workspace",
     opencodePort: readNumber(env.AGENTBAY_OPENCODE_PORT, 4096),
@@ -64,11 +74,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (config.dispatcherRenewIntervalMs >= config.dispatcherLeaseDurationMs) {
     throw new Error("AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS must be less than AGENTBAY_DISPATCHER_LEASE_DURATION_MS");
   }
-  if (config.revisionResolverEnabled && (!config.githubAppIdFile || !config.githubAppPrivateKeyFile)) {
-    throw new Error("AGENTBAY_GITHUB_APP_ID_FILE and AGENTBAY_GITHUB_PRIVATE_KEY_FILE are required when revision resolution is enabled");
+  if ((config.revisionResolverEnabled || config.githubIssueAcknowledgmentEnabled) && (!config.githubAppIdFile || !config.githubAppPrivateKeyFile)) {
+    throw new Error("AGENTBAY_GITHUB_APP_ID_FILE and AGENTBAY_GITHUB_PRIVATE_KEY_FILE are required when GitHub control-plane workers are enabled");
   }
   if (config.revisionResolverRequestTimeoutMs >= config.revisionResolverLeaseDurationMs) {
     throw new Error("AGENTBAY_REVISION_RESOLVER_REQUEST_TIMEOUT_MS must be less than AGENTBAY_REVISION_RESOLVER_LEASE_DURATION_MS");
+  }
+  if (config.githubIssueAcknowledgmentRequestTimeoutMs >= config.githubIssueAcknowledgmentLeaseDurationMs) {
+    throw new Error("AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS must be less than AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS");
   }
   return config;
 }

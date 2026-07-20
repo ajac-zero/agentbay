@@ -152,10 +152,12 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     claimToken: string;
     limit: number;
     leaseDurationMs: number;
+    topics?: readonly string[];
     signal?: AbortSignal;
   }): Promise<ClaimedOutboxMessage[]> {
     assertPositiveInteger(options.limit, "Outbox claim limit");
     assertPositiveInteger(options.leaseDurationMs, "Outbox lease duration");
+    if (options.topics !== undefined && options.topics.length === 0) throw new RangeError("Outbox claim topics must not be empty");
     options.signal?.throwIfAborted();
 
     const result = await this.pool.query<ClaimedOutboxRow>({
@@ -168,6 +170,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         WHERE outbox.published_at IS NULL
           AND outbox.available_at <= claim_clock.claimed_at
           AND (outbox.lease_expires_at IS NULL OR outbox.lease_expires_at <= claim_clock.claimed_at)
+          AND ($4::text[] IS NULL OR outbox.topic = ANY($4::text[]))
         ORDER BY outbox.available_at, outbox.created_at, outbox.id
         FOR UPDATE OF outbox SKIP LOCKED
         LIMIT $1
@@ -182,7 +185,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
                 outbox.headers, outbox.id, outbox.lease_expires_at, outbox.lease_token,
                 outbox.payload, outbox.publish_attempts, outbox.tenant_id, outbox.topic
       `,
-      values: [options.limit, options.claimToken, options.leaseDurationMs],
+      values: [options.limit, options.claimToken, options.leaseDurationMs, options.topics ?? null],
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
 
@@ -425,6 +428,19 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         command.event.time ? new Date(command.event.time) : null, command.event.datacontenttype ?? "application/json",
         command.event.dataschema ?? null, JSON.stringify(command.event.data), JSON.stringify(extensions), null, new Date(command.admittedAt),
       ]);
+      const githubIssueAcknowledgment = "githubIssueAcknowledgment" in command ? command.githubIssueAcknowledgment : undefined;
+      if (githubIssueAcknowledgment) {
+        await client.query(`INSERT INTO agentbay_outbox
+          (id, tenant_id, topic, aggregate_type, aggregate_id, payload, available_at, created_at)
+          VALUES ($1,$2,'github.issue-reaction.requested','github-issue-reaction',$3,$4::jsonb,$5,$5)`,
+        [randomUUID(), command.tenantId, command.internalEventId, JSON.stringify({
+          schemaVersion: 1,
+          tenantId: command.tenantId,
+          eventId: command.internalEventId,
+          ...githubIssueAcknowledgment,
+          content: "eyes",
+        }), new Date(command.admittedAt)]);
+      }
       if (requiresResolution) {
         await client.query(`INSERT INTO agentbay_event_revision_resolutions
           (event_id, tenant_id, provider, installation_id, repository_id, repository_full_name, clone_url, branch,
@@ -1240,6 +1256,14 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
             WHERE execution.state = 'QUEUED'
               AND execution.available_at <= claim_clock.claimed_at
               AND execution.timeout_at > claim_clock.claimed_at
+              AND NOT EXISTS (
+                SELECT 1 FROM agentbay_outbox AS required_effect
+                WHERE required_effect.tenant_id = execution.tenant_id
+                  AND required_effect.topic = 'github.issue-reaction.requested'
+                  AND required_effect.aggregate_type = 'github-issue-reaction'
+                  AND required_effect.aggregate_id = execution.event_id
+                  AND required_effect.published_at IS NULL
+              )
             ORDER BY execution.available_at, execution.created_at, execution.id
             FOR UPDATE OF execution SKIP LOCKED
             LIMIT 1
