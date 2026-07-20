@@ -116,6 +116,8 @@ GET /docs
 GET /openapi.json
 ```
 
+`GET /healthz` returns `200 OK` when Agentbay is healthy.
+
 Management routes and normalized event ingress require `Authorization: Bearer
 <AGENTBAY_ADMIN_TOKEN>`:
 
