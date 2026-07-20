@@ -37,7 +37,7 @@ const branch = (fullName: string, value: string) => ({
   repo: { ...repository(fullName), extra: true },
 });
 
-const input = (payload: unknown, event: "issues" | "issue_comment" | "pull_request" | "pull_request_review" | "pull_request_review_comment" = "issues") => ({
+const input = (payload: unknown, event: "issues" | "issue_comment" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "workflow_run" = "issues") => ({
   event,
   deliveryId: "delivery-1",
   payloadSha256: "a".repeat(64),
@@ -248,6 +248,58 @@ describe("normalizeGitHubEvent", () => {
 
   it("returns null for unsupported actions", () => {
     expect(normalizeGitHubEvent(input({ action: "deleted" }))).toBeNull();
+  });
+
+  it("normalizes one completed pull request workflow run at its exact head SHA", () => {
+    const event = normalizeGitHubEvent(input({
+      ...common,
+      action: "completed",
+      workflow_run: {
+        id: 900,
+        name: "CI",
+        event: "pull_request",
+        status: "completed",
+        conclusion: "success",
+        head_sha: "a".repeat(40),
+        head_branch: "feature",
+        head_repository: repository("contributor/widgets"),
+        pull_requests: [{
+          id: 700,
+          number: 7,
+          head: { ref: "feature", sha: "a".repeat(40) },
+          base: { ref: "main", sha: "b".repeat(40) },
+        }],
+      },
+    }, "workflow_run"));
+
+    expect(event).toMatchObject({
+      type: "com.github.workflow_run.completed",
+      subject: "pulls/7",
+      data: {
+        pullRequest: {
+          id: 700,
+          number: 7,
+          head: { sha: "a".repeat(40), repository: { fullName: "contributor/widgets" } },
+          base: { ref: "main", sha: "b".repeat(40) },
+        },
+        workflowRun: { id: 900, name: "CI", event: "pull_request", status: "completed", conclusion: "success", headSha: "a".repeat(40) },
+      },
+    });
+  });
+
+  it("ignores workflow runs without exactly one matching pull request head", () => {
+    const payload = {
+      ...common,
+      action: "completed",
+      workflow_run: {
+        id: 900, name: "CI", event: "pull_request", status: "completed", conclusion: "success",
+        head_sha: "a".repeat(40), head_branch: "feature", head_repository: repository(), pull_requests: [],
+      },
+    };
+    expect(normalizeGitHubEvent(input(payload, "workflow_run"))).toBeNull();
+    expect(normalizeGitHubEvent(input({ ...payload, workflow_run: { ...payload.workflow_run, pull_requests: [{
+      id: 700, number: 7, head: { ref: "feature", sha: "c".repeat(40) }, base: { ref: "main", sha: "b".repeat(40) },
+    }] } }, "workflow_run"))).toBeNull();
   });
 
   it.each([
