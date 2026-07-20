@@ -160,6 +160,73 @@ describe("execution persistence", () => {
     expect((await pool.query("select count(*)::int as count from agentbay_events where id = $1", [command.internalEventId])).rows[0]).toEqual({ count: 1 });
   });
 
+  it("admits distinct singleton events without creating concurrent executions", async () => {
+    const createdAt = new Date().toISOString();
+    const triggerId = `singleton-${randomUUID()}`;
+    const bindingId = `singleton-${randomUUID()}`;
+    const sourceBinding = (await store.getBindingVersion("default", "review", 1))!;
+    await store.createTrigger({
+      config: { schemaVersion: 1 }, createdAt, disabledAt: null, enabled: true,
+      id: triggerId, tenantId: "default", type: "cloudevents.http",
+    });
+    const singletonBinding = await store.publishBindingVersion({
+      ...sourceBinding,
+      bindingId,
+      createdAt,
+      definition: {
+        schemaVersion: 1,
+        eventTypes: ["dev.agentbay.issue.ready"],
+        filter: { all: [] },
+        activeSingleton: { name: "developer-issue", key: ["/repository/id", "/issue/number"] },
+        prompt: { literal: "Develop this issue", includeEvent: "data" },
+        workspace: { type: "empty" },
+      },
+      id: randomUUID(),
+      triggerId,
+      version: 1,
+    });
+    expect(singletonBinding.definition).toMatchObject({
+      activeSingleton: { name: "developer-issue", key: ["/repository/id", "/issue/number"] },
+    });
+    const singletonCommand = (issue: number) => {
+      const eventId = randomUUID();
+      return withAdmissionHash({
+        admittedAt: new Date().toISOString(),
+        event: {
+          specversion: "1.0" as const,
+          id: eventId,
+          source: "/test/issues",
+          type: "dev.agentbay.issue.ready",
+          datacontenttype: "application/json",
+          data: { repository: { id: 42 }, issue: { number: issue } },
+        },
+        internalEventId: randomUUID(),
+        sourceDeduplicationKey: eventId,
+        tenantId: "default",
+        triggerId,
+      });
+    };
+    const firstCommand = singletonCommand(7);
+    const secondCommand = singletonCommand(7);
+    const [first, second] = await Promise.all([store.admitEvent(firstCommand), store.admitEvent(secondCommand)]);
+    const owner = [...first.executions, ...second.executions];
+    const suppressed = first.executions.length === 0 ? firstCommand : secondCommand;
+
+    expect(owner).toHaveLength(1);
+    expect([first.executions.length, second.executions.length].sort()).toEqual([0, 1]);
+    expect((await store.admitEvent(suppressed)).executions).toEqual([]);
+    expect((await pool.query(
+      "select count(*)::int as count from agentbay_executions where active_singleton_name = 'developer-issue' and state not in ('COMPLETED','CANCELLED','TIMED_OUT','FAILED','DEAD_LETTERED')",
+    )).rows[0]).toEqual({ count: 1 });
+
+    await pool.query("update agentbay_executions set state = 'COMPLETED', completed_at = now() where id = $1", [owner[0]!.id]);
+    expect((await store.admitEvent(suppressed)).executions).toEqual([]);
+    const replacement = await store.admitEvent(singletonCommand(7));
+    const otherIssue = await store.admitEvent(singletonCommand(8));
+    expect(replacement.executions).toHaveLength(1);
+    expect(otherIssue.executions).toHaveLength(1);
+  });
+
   it("returns canonical publication lifecycle and rejects duplicate versions", async () => {
     const createdAt = new Date().toISOString();
     const requested = {

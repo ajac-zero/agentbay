@@ -129,9 +129,18 @@ const commonPayloadShape = {
 const issuesPayloadSchema = z.object({ ...commonPayloadShape, issue: issueSchema });
 const pullRequestPayloadSchema = z.object({ ...commonPayloadShape, pull_request: pullRequestSchema });
 const issueCommentPayloadSchema = z.object({ ...commonPayloadShape, issue: issueSchema, comment: commentSchema });
-const pullRequestReviewPayloadSchema = z.object({ ...commonPayloadShape, pull_request: pullRequestSchema, review: reviewSchema });
+const pullRequestReviewPayloadSchema = z.object({
+  ...commonPayloadShape,
+  pull_request: pullRequestSchema.extend({ merged: z.boolean().default(false) }),
+  review: reviewSchema,
+});
 const pullRequestReviewCommentPayloadSchema = z.object({ ...commonPayloadShape, pull_request: pullRequestSchema, comment: reviewCommentSchema });
 const envelopeSchema = z.object({ action: bounded(64) });
+
+function agentbayReviewVerdict(body: string | null): "approved" | "changes_requested" | undefined {
+  const match = body?.match(/^Agentbay-Verdict:[ \t]*(approved|changes_requested)[ \t]*(?:\r?\n|$)/i);
+  return match?.[1] as "approved" | "changes_requested" | undefined;
+}
 
 export type GitHubEventName = "issues" | "issue_comment" | "pull_request" | "pull_request_review" | "pull_request_review_comment";
 
@@ -299,6 +308,7 @@ export function normalizeGitHubEvent(input: NormalizeGitHubEventInput): Normaliz
         : event === "pull_request_review"
           ? (() => {
               const value = payload as z.infer<typeof pullRequestReviewPayloadSchema>;
+              const agentbayVerdict = agentbayReviewVerdict(value.review.body);
               subject = `pulls/${value.pull_request.number}`;
               return {
                 ...common,
@@ -306,6 +316,7 @@ export function normalizeGitHubEvent(input: NormalizeGitHubEventInput): Normaliz
                 review: {
                   id: value.review.id,
                   ...truncateBody(value.review.body),
+                  ...(agentbayVerdict ? { agentbayVerdict } : {}),
                   user: actor(value.review.user),
                   state: value.review.state.toLowerCase(),
                   commitSha: value.review.commit_id,

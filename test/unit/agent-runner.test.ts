@@ -45,6 +45,20 @@ describe("runExecutionAttempt", () => {
     expect(result.output).toBe("a");
   });
 
+  it("completes when OpenCode reports idle through session status", async () => {
+    const client = fakeClient([
+      textEvent("session-1", "done"),
+      sessionStatusEvent("session-1", "idle"),
+    ]);
+
+    await expect(runExecutionAttempt({
+      agent: "coder",
+      endpoint,
+      prompt: "do work",
+      title: "attempt",
+    }, client)).resolves.toEqual({ output: "done", sessionId: "session-1" });
+  });
+
   it("rejects permission requests and fails the attempt", async () => {
     const client = fakeClient([permissionEvent("session-1", "permission-1")]);
 
@@ -278,6 +292,10 @@ function textEvent(sessionID: string, delta: string): Event {
 
 function sessionEvent(type: "session.idle", sessionID: string): Event {
   return { type, properties: { sessionID } };
+}
+
+function sessionStatusEvent(sessionID: string, type: "idle" | "busy" | "retry"): Event {
+  return { type: "session.status", properties: { sessionID, status: { type } } } as Event;
 }
 
 function permissionEvent(sessionID: string, id: string): Event {

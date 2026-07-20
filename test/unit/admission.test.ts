@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { matchesBinding, matchesFilterClause, planAdmission, planExecution, projectWakeCorrelation, renderBindingInput, renderPromptInput, UNTRUSTED_EVENT_BEGIN, UNTRUSTED_EVENT_END } from "../../src/control/admission.js";
-import type { PublishedBindingVersion, WakeBindingDefinition } from "../../src/control/binding.js";
+import { matchesBinding, matchesFilterClause, planAdmission, planExecution, projectActiveSingleton, projectWakeCorrelation, renderBindingInput, renderPromptInput, UNTRUSTED_EVENT_BEGIN, UNTRUSTED_EVENT_END } from "../../src/control/admission.js";
+import type { CreateBindingDefinition, PublishedBindingVersion, WakeBindingDefinition } from "../../src/control/binding.js";
 import type { NormalizedCloudEvent } from "../../src/execution/events.js";
 
 const event: NormalizedCloudEvent = {
@@ -103,6 +103,16 @@ describe("rendering and event-level planning", () => {
       repository: { url: "https://git.example.test/acme/repo" },
       revision: { type: "commit", commit: "a".repeat(40) },
     });
+  });
+
+  it("projects exact bounded primitive active singleton values", () => {
+    const definition: CreateBindingDefinition = {
+      ...binding.definition,
+      activeSingleton: { name: "review-target", key: ["/count", "/active"] },
+    } as CreateBindingDefinition;
+    expect(projectActiveSingleton(definition, event)).toEqual({ name: "review-target", values: [2, false] });
+    expect(() => projectActiveSingleton({ ...definition, activeSingleton: { name: "review-target", key: ["/nested"] } }, event)).toThrow(/bounded JSON primitive/);
+    expect(() => projectActiveSingleton({ ...definition, activeSingleton: { name: "review-target", key: ["/missing"] } }, event)).toThrow(/bounded JSON primitive/);
   });
 
   it("returns the event summary, all matching executions, and replay status", () => {

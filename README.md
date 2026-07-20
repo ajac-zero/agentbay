@@ -190,11 +190,22 @@ For example, a V1 binding-version request body is:
     "filter": {
       "all": [{ "path": "/action", "op": "eq", "value": "opened" }]
     },
+    "activeSingleton": {
+      "name": "developer-issue",
+      "key": ["/repository/id", "/issue/number"]
+    },
     "prompt": { "literal": "Handle this issue.", "includeEvent": "data" },
     "workspace": { "type": "empty" }
   }
 }
 ```
+
+Create bindings may declare an `activeSingleton` name and one to 16 JSON
+pointers into normalized event `data`. The ordered bounded primitive values form
+a tenant-scoped key. A distinct event matching the same name and key is durably
+admitted but creates no execution while an existing execution is nonterminal.
+Exact replay preserves that original decision, even after the owner terminates;
+a later distinct event can create the next execution after terminal release.
 
 A Git workspace selects a repository URL and commit from normalized event
 `data`, then persists their resolved values on the execution:
