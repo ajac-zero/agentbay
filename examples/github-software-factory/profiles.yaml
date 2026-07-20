@@ -26,8 +26,8 @@ definition:
   permissions: { onRequest: fail }
   timeoutSeconds: 900
 ---
-# developer-easy; publish equivalent versions for developer-medium and
-# developer-hard with operator-approved models and capability ceilings.
+# developer-easy. Publish equivalent developer-medium and developer-hard
+# versions using gateway/claude-opus-4-7 and gateway/claude-fable-5.
 version: 1
 definition:
   schemaVersion: 1
@@ -35,7 +35,7 @@ definition:
     type: opencode
     agent: develop
     opencodeConfig:
-      model: anthropic/claude-haiku
+      model: gateway/claude-sonnet-5
       mcp:
         github: { type: remote, url: "http://127.0.0.1:8083/", enabled: true, oauth: false }
       permission: { "github_*": deny }
