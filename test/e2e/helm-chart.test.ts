@@ -78,6 +78,26 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/secretName: "github-app"/);
     });
 
+    it("renders optional observability resources", () => {
+      const result = helm([
+        "template", "demo", CHART_PATH, "--namespace", NAMESPACE,
+        "--set", "observability.podAnnotations.enabled=true",
+        "--set", "observability.serviceMonitor.enabled=true",
+        "--set", "observability.prometheusRule.enabled=true",
+        "--set", "observability.dashboard.enabled=true",
+      ]);
+      expect(result.status, formatStderr(result)).toBe(0);
+      expect(result.stdout).toMatch(/kind: ServiceMonitor/);
+      expect(result.stdout).toMatch(/kind: PrometheusRule/);
+      expect(result.stdout).toMatch(/kind: ConfigMap/);
+      expect(result.stdout).toMatch(/grafana_dashboard: "1"/);
+      expect(result.stdout).toMatch(/prometheus\.io\/path: \/metrics/);
+      expect(result.stdout).toMatch(/AgentbayOutboxStuck/);
+      expect(result.stdout).toMatch(/AgentbayExecutionOverdue/);
+      expect(result.stdout).toMatch(/AgentbayScheduleStopped/);
+      expect(result.stdout).toMatch(/agentbay-software-factory\.json/);
+    });
+
     it("renders SandboxTemplates with a NetworkPolicy ingress selector that matches the orchestrator", () => {
       const result = helm([
         "template",

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ClaimedOutboxMessage, OutboxEnvelope, OutboxStore, OutboxTransport } from "./types.js";
+import { outboxAttempts, outboxPublishDuration } from "../observability/metrics.js";
 
 export type PublishAccounting = {
   claimed: number;
@@ -79,6 +80,7 @@ export class OutboxPublisher {
 
     for (const message of messages) {
       signal?.throwIfAborted();
+      const startedAt = process.hrtime.bigint();
       try {
         await this.#publishWithTimeout(toEnvelope(message), signal);
       } catch (error) {
@@ -89,12 +91,18 @@ export class OutboxPublisher {
           error: sanitizeError(error, this.#maxErrorLength),
           retryDelayMs: this.#retryDelay(message.publishAttempts),
         });
+        const result = marked ? "failed" : "lost_claim";
+        outboxAttempts.inc({ topic: message.topic, result });
+        outboxPublishDuration.observe({ topic: message.topic, result }, elapsedSeconds(startedAt));
         if (marked) accounting.failed += 1;
         else accounting.lostClaims += 1;
         continue;
       }
 
       const marked = await this.#store.markPublished({ id: message.id, claimToken });
+      const result = marked ? "published" : "lost_claim";
+      outboxAttempts.inc({ topic: message.topic, result });
+      outboxPublishDuration.observe({ topic: message.topic, result }, elapsedSeconds(startedAt));
       if (marked) accounting.published += 1;
       else accounting.lostClaims += 1;
     }
@@ -147,6 +155,10 @@ export class OutboxPublisher {
     const random = Math.max(0, Math.min(1, this.#random()));
     return Math.floor(cappedDelay / 2 + random * cappedDelay / 2);
   }
+}
+
+function elapsedSeconds(startedAt: bigint): number {
+  return Number(process.hrtime.bigint() - startedAt) / 1_000_000_000;
 }
 
 function toEnvelope(message: ClaimedOutboxMessage): OutboxEnvelope {

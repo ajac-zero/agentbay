@@ -1,0 +1,82 @@
+{{- if .Values.observability.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "agentbay.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- with .Values.observability.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "agentbay.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace | quote }}]
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.observability.serviceMonitor.interval | quote }}
+      scrapeTimeout: {{ .Values.observability.serviceMonitor.scrapeTimeout | quote }}
+---
+{{- end }}
+{{- if .Values.observability.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "agentbay.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- with .Values.observability.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: agentbay.factory
+      rules:
+        - alert: AgentbayOutboxStuck
+          expr: max by (tenant, topic) (agentbay_outbox_oldest_pending_age_seconds) > {{ .Values.observability.prometheusRule.outboxMaxAgeSeconds }}
+          for: {{ .Values.observability.prometheusRule.for | quote }}
+          labels: { severity: critical }
+          annotations:
+            summary: Agentbay outbox publication is stuck
+            description: "The oldest pending message for topic {{ "{{ $labels.topic }}" }} is older than the configured threshold."
+        - alert: AgentbayExecutionOverdue
+          expr: sum by (tenant) (agentbay_executions_overdue) > 0
+          for: {{ .Values.observability.prometheusRule.for | quote }}
+          labels: { severity: critical }
+          annotations:
+            summary: Agentbay execution exceeded its persisted timeout
+            description: "At least one active execution is overdue for tenant {{ "{{ $labels.tenant }}" }}."
+        - alert: AgentbayScheduleStopped
+          expr: max by (tenant, trigger_id) (agentbay_schedule_missed_intervals) >= {{ .Values.observability.prometheusRule.scheduleMissedIntervals }}
+          for: {{ .Values.observability.prometheusRule.for | quote }}
+          labels: { severity: critical }
+          annotations:
+            summary: Agentbay schedule stopped firing
+            description: "Schedule {{ "{{ $labels.trigger_id }}" }} is past its expected next fire time."
+        - alert: AgentbayObservabilityCollectorDown
+          expr: max(agentbay_observability_collector_up) == 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: Agentbay PostgreSQL metric collection is failing
+            description: Agentbay is serving the last successful durable-state snapshot.
+---
+{{- end }}
+{{- if .Values.observability.dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentbay.fullname" . }}-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- toYaml .Values.observability.dashboard.labels | nindent 4 }}
+data:
+  agentbay-software-factory.json: |-
+{{ .Files.Get "dashboards/agentbay-software-factory.json" | indent 4 }}
+{{- end }}

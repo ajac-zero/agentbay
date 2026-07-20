@@ -1,6 +1,7 @@
 import { logger } from "../logger.js";
 import type { RevisionResolutionStore } from "./types.js";
 import type { GitHubAppRevisionResolver } from "./github.js";
+import { revisionResolutions } from "../observability/metrics.js";
 
 export class RevisionResolutionWorker {
   constructor(private readonly options: {
@@ -30,7 +31,7 @@ export class RevisionResolutionWorker {
         ? AbortSignal.any([signal, AbortSignal.timeout(this.options.requestTimeoutMs)])
         : AbortSignal.timeout(this.options.requestTimeoutMs);
       const commit = await this.options.resolver.resolve(claimed, requestSignal);
-      await this.options.store.completeRevisionResolution({
+      const completed = await this.options.store.completeRevisionResolution({
         eventId: claimed.eventId,
         tenantId: claimed.tenantId,
         leaseOwner: claimed.leaseOwner,
@@ -38,10 +39,11 @@ export class RevisionResolutionWorker {
         commit,
         resolvedAt: new Date().toISOString(),
       });
+      if (completed) revisionResolutions.inc({ tenant: claimed.tenantId, provider: claimed.provider, result: "succeeded" });
     } catch (error) {
       if (signal?.aborted) throw error;
       const failedAt = new Date();
-      await this.options.store.failRevisionResolution({
+      const failed = await this.options.store.failRevisionResolution({
         eventId: claimed.eventId,
         tenantId: claimed.tenantId,
         leaseOwner: claimed.leaseOwner,
@@ -51,6 +53,7 @@ export class RevisionResolutionWorker {
         retryAt: new Date(failedAt.getTime() + this.options.retryDelayMs).toISOString(),
         maxAttempts: this.options.maxAttempts,
       });
+      if (failed) revisionResolutions.inc({ tenant: claimed.tenantId, provider: claimed.provider, result: "failed" });
     }
     return true;
   }
