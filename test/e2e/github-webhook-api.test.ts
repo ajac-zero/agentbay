@@ -44,6 +44,7 @@ describe("GitHub webhook API", () => {
     expect(response.status).toBe(202);
     expect(store.lastAdmission).toMatchObject({
       githubIssueAcknowledgment: {
+        subjectType: "issue",
         installationId: 10,
         repositoryId: 20,
         repositoryFullName: "acme/widgets",
@@ -65,6 +66,7 @@ describe("GitHub webhook API", () => {
     expect(store.lastAdmission).toMatchObject({
       event: { type: "com.github.pull_request.opened" },
       githubIssueAcknowledgment: {
+        subjectType: "pull_request",
         installationId: 10,
         repositoryId: 20,
         repositoryFullName: "acme/widgets",
