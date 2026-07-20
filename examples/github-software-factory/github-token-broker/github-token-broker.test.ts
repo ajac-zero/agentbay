@@ -4,11 +4,11 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // @ts-expect-error The broker intentionally ships as dependency-free Node ESM.
-import { parseStartupConfig, readGitHubAppCredentials } from "../../github-token-broker/config.mjs";
+import { parseStartupConfig, readGitHubAppCredentials } from "./config.mjs";
 // @ts-expect-error The broker intentionally ships as dependency-free Node ESM.
-import { startBroker } from "../../github-token-broker/server.mjs";
+import { startBroker } from "./server.mjs";
 // @ts-expect-error The broker intentionally ships as dependency-free Node ESM.
-import { createGitHubAppJwt, InstallationTokenProvider } from "../../github-token-broker/token.mjs";
+import { createGitHubAppJwt, InstallationTokenProvider } from "./token.mjs";
 
 const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();

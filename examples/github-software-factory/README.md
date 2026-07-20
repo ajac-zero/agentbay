@@ -134,6 +134,33 @@ Replaying the `agentbay/state:ready` label while a developer lifecycle is alread
 
 ## Capabilities
 
+Build the example's dependency-free GitHub token broker from its self-contained
+directory, publish it, and replace the illustrative broker digest in
+`sandbox-templates.values.yaml`:
+
+```bash
+docker build \
+  -t ghcr.io/your-org/github-token-broker:v1 \
+  examples/github-software-factory/github-token-broker
+docker push ghcr.io/your-org/github-token-broker:v1
+docker inspect --format='{{index .RepoDigests 0}}' \
+  ghcr.io/your-org/github-token-broker:v1
+```
+
+The broker runs as UID/GID 65532 on a pinned distroless Node 24 image, is
+compatible with a read-only root filesystem, and exposes `/readyz` and `/livez`
+on loopback port 8083. It reads the GitHub App ID, installation ID, and RSA
+private key from mounted files, mints short-lived repository-scoped installation
+tokens, and forwards only the fixed root endpoint to the official GitHub MCP
+server on loopback port 8082. It does not replay failed requests because a
+mutation outcome may be ambiguous.
+
+The official GitHub MCP sidecar and broker sidecar are both part of this example,
+not the generic Agentbay deployment. `sandbox-templates.values.yaml` owns their
+pinned images, exact role-specific `--tools`, probes, security contexts, App
+permissions, and credential mounts. Mount App credentials only into the broker;
+OpenCode and the official MCP server receive neither key nor token.
+
 Profiles authorize `github-token-broker`, which injects short-lived,
 repository-scoped installation tokens while proxying to the unmodified official
 GitHub MCP server. OpenCode denies `github_*` globally and each selected agent
