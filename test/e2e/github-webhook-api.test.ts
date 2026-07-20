@@ -355,7 +355,7 @@ function workflowRunPayload() {
       conclusion: "success",
       head_sha: "a".repeat(40),
       head_branch: "feature",
-      head_repository: { id: 21, full_name: "contributor/widgets", clone_url: "https://github.com/contributor/widgets.git" },
+      head_repository: { id: 21, full_name: "contributor/widgets" },
       pull_requests: [{ id: 700, number: 7, head: { ref: "feature", sha: "a".repeat(40) }, base: { ref: "main", sha: "b".repeat(40) } }],
     },
   };
