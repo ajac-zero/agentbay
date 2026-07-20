@@ -66,6 +66,8 @@ import type { ClaimedRevisionResolution, RevisionAwareAdmissionCommand, Revision
 import { matchesBinding } from "../control/admission.js";
 import { resolvedWorkspaceSchema } from "../workspace/schema.js";
 import { resolveWorkspace } from "../workspace/resolver.js";
+import { nextCronOccurrence } from "../schedule/cron.js";
+import type { ClaimedScheduleOccurrence, ScheduleStore } from "../schedule/types.js";
 import * as schema from "./schema.js";
 import {
   agentProfileVersions,
@@ -133,7 +135,7 @@ export async function migratePostgresRuntimeStore(options: PostgresRuntimeStoreO
   }
 }
 
-export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, BindingStore, ConnectionStore, EventAdmissionStore, OutboxStore, DispatcherExecutionStore, RevisionResolutionStore {
+export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, BindingStore, ConnectionStore, EventAdmissionStore, OutboxStore, DispatcherExecutionStore, RevisionResolutionStore, ScheduleStore {
   constructor(
     private readonly pool: pg.Pool,
     private readonly db: RuntimeDatabase,
@@ -285,13 +287,97 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
 
   async createTrigger(value: Trigger): Promise<Trigger> {
     const trigger = triggerSchema.parse(value);
-    const result = await this.pool.query<TriggerSqlRow>(`INSERT INTO agentbay_triggers
-      (id, tenant_id, type, config, enabled, created_at, disabled_at)
-      VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7) ON CONFLICT (id) DO NOTHING RETURNING *`,
-    [trigger.id, trigger.tenantId, trigger.type, JSON.stringify(trigger.config), trigger.enabled, new Date(trigger.createdAt),
-      trigger.disabledAt ? new Date(trigger.disabledAt) : null]);
-    if (!result.rows[0]) throw new TriggerAlreadyExistsError(trigger.id);
-    return triggerFromRow(result.rows[0]);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query<TriggerSqlRow>(`INSERT INTO agentbay_triggers
+        (id, tenant_id, type, config, enabled, created_at, disabled_at)
+        VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7) ON CONFLICT (id) DO NOTHING RETURNING *`,
+      [trigger.id, trigger.tenantId, trigger.type, JSON.stringify(trigger.config), trigger.enabled, new Date(trigger.createdAt),
+        trigger.disabledAt ? new Date(trigger.disabledAt) : null]);
+      if (!result.rows[0]) throw new TriggerAlreadyExistsError(trigger.id);
+      if (trigger.type === "schedule.cron") {
+        await client.query(`INSERT INTO agentbay_schedule_states (tenant_id, trigger_id, next_fire_at, updated_at)
+          VALUES ($1,$2,$3,$4)`, [trigger.tenantId, trigger.id,
+          nextCronOccurrence(trigger.config.expression, new Date(trigger.createdAt)), new Date(trigger.createdAt)]);
+      }
+      await client.query("COMMIT");
+      return triggerFromRow(result.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async materializeDueScheduleOccurrences(input: { now: string; limit: number }): Promise<number> {
+    const now = new Date(input.now);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const due = await client.query<{ tenant_id: string; trigger_id: string; next_fire_at: Date; config: unknown }>(`
+        SELECT schedule.tenant_id, schedule.trigger_id, schedule.next_fire_at, trigger.config
+        FROM agentbay_schedule_states AS schedule
+        JOIN agentbay_triggers AS trigger ON trigger.id = schedule.trigger_id AND trigger.tenant_id = schedule.tenant_id
+        WHERE trigger.enabled AND trigger.type = 'schedule.cron' AND schedule.next_fire_at <= $1
+        ORDER BY schedule.next_fire_at, schedule.trigger_id FOR UPDATE OF schedule SKIP LOCKED LIMIT $2`, [now, input.limit]);
+      for (const row of due.rows) {
+        const trigger = triggerSchema.parse({ id: row.trigger_id, tenantId: row.tenant_id, type: "schedule.cron", config: row.config,
+          enabled: true, createdAt: now.toISOString(), disabledAt: null });
+        if (trigger.type !== "schedule.cron") throw new Error("Persisted schedule trigger is invalid");
+        await client.query(`INSERT INTO agentbay_schedule_occurrences
+          (id, tenant_id, trigger_id, scheduled_at, state, available_at, created_at, updated_at)
+          VALUES ($1,$2,$3,$4,'PENDING',$5,$5,$5) ON CONFLICT (tenant_id, trigger_id, scheduled_at) DO NOTHING`,
+        [randomUUID(), row.tenant_id, row.trigger_id, row.next_fire_at, now]);
+        await client.query(`UPDATE agentbay_schedule_states SET next_fire_at=$3, updated_at=$4
+          WHERE tenant_id=$1 AND trigger_id=$2`, [row.tenant_id, row.trigger_id,
+          nextCronOccurrence(trigger.config.expression, now), now]);
+      }
+      await client.query("COMMIT");
+      return due.rowCount ?? 0;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async claimScheduleOccurrence(input: { leaseOwner: string; leaseDurationMs: number }): Promise<ClaimedScheduleOccurrence | undefined> {
+    const leaseToken = randomUUID();
+    const result = await this.pool.query<ScheduleOccurrenceRow>(`WITH candidate AS (
+      SELECT occurrence.id FROM agentbay_schedule_occurrences AS occurrence
+      JOIN agentbay_triggers AS trigger ON trigger.id=occurrence.trigger_id AND trigger.tenant_id=occurrence.tenant_id
+      WHERE trigger.enabled AND ((occurrence.state IN ('PENDING','RETRY_WAIT') AND occurrence.available_at <= now())
+        OR (occurrence.state='LEASED' AND occurrence.lease_expires_at <= now()))
+      ORDER BY occurrence.available_at, occurrence.scheduled_at FOR UPDATE OF occurrence SKIP LOCKED LIMIT 1
+    ) UPDATE agentbay_schedule_occurrences AS occurrence SET state='LEASED', lease_owner=$1, lease_token=$2,
+      lease_expires_at=now()+($3*interval '1 millisecond'), attempt=attempt+1, updated_at=now()
+      FROM candidate WHERE occurrence.id=candidate.id RETURNING occurrence.*`, [input.leaseOwner, leaseToken, input.leaseDurationMs]);
+    const row = result.rows[0];
+    if (!row) return undefined;
+    const trigger = await this.getTrigger(row.tenant_id, row.trigger_id);
+    if (!trigger || trigger.type !== "schedule.cron") throw new Error("Claimed schedule trigger is unavailable");
+    return { id: row.id, tenantId: row.tenant_id, triggerId: row.trigger_id, scheduledAt: row.scheduled_at.toISOString(),
+      leaseOwner: row.lease_owner!, leaseToken: row.lease_token!, attempt: row.attempt, config: trigger.config };
+  }
+
+  async completeScheduleOccurrence(input: { id: string; leaseOwner: string; leaseToken: string; completedAt: string }): Promise<boolean> {
+    const result = await this.pool.query(`UPDATE agentbay_schedule_occurrences SET state='SUCCEEDED', completed_at=$4,
+      lease_owner=NULL, lease_token=NULL, lease_expires_at=NULL, last_error=NULL, updated_at=$4
+      WHERE id=$1 AND state='LEASED' AND lease_owner=$2 AND lease_token=$3 AND lease_expires_at>$4`,
+    [input.id, input.leaseOwner, input.leaseToken, new Date(input.completedAt)]);
+    return result.rowCount === 1;
+  }
+
+  async failScheduleOccurrence(input: { id: string; leaseOwner: string; leaseToken: string; error: string; failedAt: string; retryAt: string; maxAttempts: number }): Promise<boolean> {
+    const result = await this.pool.query(`UPDATE agentbay_schedule_occurrences SET
+      state=CASE WHEN attempt >= $7 THEN 'DEAD_LETTERED' ELSE 'RETRY_WAIT' END, available_at=$6, last_error=$5,
+      lease_owner=NULL, lease_token=NULL, lease_expires_at=NULL, updated_at=$4
+      WHERE id=$1 AND state='LEASED' AND lease_owner=$2 AND lease_token=$3 AND lease_expires_at>$4`,
+    [input.id, input.leaseOwner, input.leaseToken, new Date(input.failedAt), input.error, new Date(input.retryAt), input.maxAttempts]);
+    return result.rowCount === 1;
   }
 
   async getTrigger(tenantId: string, triggerId: string): Promise<Trigger | undefined> {
@@ -2293,6 +2379,19 @@ type TriggerSqlRow = {
   id: string;
   tenant_id: string;
   type: string;
+};
+
+type ScheduleOccurrenceRow = {
+  id: string;
+  tenant_id: string;
+  trigger_id: string;
+  scheduled_at: Date;
+  state: string;
+  attempt: number;
+  available_at: Date;
+  lease_owner: string | null;
+  lease_token: string | null;
+  lease_expires_at: Date | null;
 };
 
 type ExecutionJoinedRow = {

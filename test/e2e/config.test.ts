@@ -72,6 +72,18 @@ describe("loadConfig", () => {
     })).toMatchObject({ githubIssueAcknowledgmentEnabled: true });
   });
 
+  it("provides disabled schedule worker defaults", () => {
+    expect(loadConfig({ HOSTNAME: "worker-1" })).toMatchObject({
+      scheduleWorkerEnabled: false,
+      scheduleWorkerIdlePollMs: 1_000,
+      scheduleWorkerLeaseDurationMs: 60_000,
+      scheduleWorkerRetryDelayMs: 30_000,
+      scheduleWorkerMaxAttempts: 5,
+      scheduleWorkerMaterializeBatchSize: 100,
+      scheduleWorkerId: "worker-1",
+    });
+  });
+
   it("requires dispatcher renewal before lease expiry", () => {
     expect(() => loadConfig({
       AGENTBAY_DISPATCHER_LEASE_DURATION_MS: "1000",

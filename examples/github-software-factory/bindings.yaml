@@ -1,5 +1,24 @@
 # Request body for POST /v1/bindings/triage-issues/versions.
 ---
+# POST /v1/bindings/hourly-bug-finder/versions
+version: 1
+triggerId: hourly-bug-finder
+profile: { id: bug-finder, version: 1 }
+definition:
+  schemaVersion: 1
+  eventTypes: [dev.agentbay.schedule.triggered]
+  filter:
+    all:
+      - { path: /repository/fullName, op: eq, value: acme/agentbay }
+  activeSingleton:
+    name: scheduled-bug-finder
+    key: [/repository/id]
+  prompt: { literal: Audit this exact scheduled repository revision for one novel concrete bug., includeEvent: data }
+  workspace:
+    type: git
+    repository: { url: { path: /repository/cloneUrl } }
+    revision: { commit: { path: /repository/defaultBranchRevision/commit } }
+---
 version: 1
 triggerId: engineering-github
 profile: { id: triager, version: 1 }

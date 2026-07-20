@@ -9,8 +9,9 @@ import type { BindingStore } from "../control/binding.js";
 import type { ConnectionStore } from "../connection/index.js";
 import type { RevisionResolutionStore } from "../revision/types.js";
 import type { GitHubEffectStore } from "../connectors/github/effects-api.js";
+import type { ScheduleStore } from "../schedule/types.js";
 
-export type RuntimeStore = ExecutionStore & TriggerStore & BindingStore & ConnectionStore & EventAdmissionStore & OutboxStore & DispatcherExecutionStore & RevisionResolutionStore & GitHubEffectStore & {
+export type RuntimeStore = ExecutionStore & TriggerStore & BindingStore & ConnectionStore & EventAdmissionStore & OutboxStore & DispatcherExecutionStore & RevisionResolutionStore & GitHubEffectStore & ScheduleStore & {
   close: () => Promise<void>;
 };
 

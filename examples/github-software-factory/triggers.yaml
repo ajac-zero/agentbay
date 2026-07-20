@@ -1,0 +1,14 @@
+# Request body for POST /v1/triggers.
+# Pick a minute offset that distributes scheduled load across the hour.
+id: hourly-bug-finder
+type: schedule.cron
+config:
+  schemaVersion: 1
+  expression: "17 * * * *"
+  timezone: UTC
+  misfirePolicy: skip
+  repository:
+    installationId: 12345678
+    id: 123456789
+    fullName: acme/agentbay
+    defaultBranch: main

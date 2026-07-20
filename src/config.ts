@@ -34,6 +34,13 @@ export type Config = {
   githubIssueAcknowledgmentLeaseDurationMs: number;
   githubIssueAcknowledgmentRequestTimeoutMs: number;
   githubIssueAcknowledgmentRetryDelayMs: number;
+  scheduleWorkerEnabled: boolean;
+  scheduleWorkerIdlePollMs: number;
+  scheduleWorkerLeaseDurationMs: number;
+  scheduleWorkerRetryDelayMs: number;
+  scheduleWorkerMaxAttempts: number;
+  scheduleWorkerMaterializeBatchSize: number;
+  scheduleWorkerId: string;
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -65,6 +72,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     githubIssueAcknowledgmentLeaseDurationMs: readPositiveInteger(env.AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS, 60_000),
     githubIssueAcknowledgmentRequestTimeoutMs: readTimerDelay(env.AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS, 30_000),
     githubIssueAcknowledgmentRetryDelayMs: readNonnegativeInteger(env.AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_RETRY_DELAY_MS, 5_000),
+    scheduleWorkerEnabled: readStrictBoolean(env.AGENTBAY_SCHEDULE_WORKER_ENABLED, false),
+    scheduleWorkerIdlePollMs: readTimerDelay(env.AGENTBAY_SCHEDULE_WORKER_IDLE_POLL_MS, 1_000),
+    scheduleWorkerLeaseDurationMs: readPositiveInteger(env.AGENTBAY_SCHEDULE_WORKER_LEASE_DURATION_MS, 60_000),
+    scheduleWorkerRetryDelayMs: readNonnegativeInteger(env.AGENTBAY_SCHEDULE_WORKER_RETRY_DELAY_MS, 30_000),
+    scheduleWorkerMaxAttempts: readPositiveInteger(env.AGENTBAY_SCHEDULE_WORKER_MAX_ATTEMPTS, 5),
+    scheduleWorkerMaterializeBatchSize: readPositiveInteger(env.AGENTBAY_SCHEDULE_WORKER_MATERIALIZE_BATCH_SIZE, 100),
+    scheduleWorkerId: env.AGENTBAY_SCHEDULE_WORKER_ID ?? env.HOSTNAME ?? `agentbay-${process.pid}`,
     kubeNamespace: env.AGENTBAY_KUBE_NAMESPACE ?? env.POD_NAMESPACE ?? "agents",
     opencodeDirectory: env.AGENTBAY_OPENCODE_DIRECTORY ?? "/workspace",
     opencodePort: readNumber(env.AGENTBAY_OPENCODE_PORT, 4096),
