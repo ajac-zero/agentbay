@@ -133,6 +133,16 @@ describe("binding schemas", () => {
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, activeSingleton: { ...activeSingleton, key: ["/bad~2pointer"] } }).success).toBe(false);
   });
 
+  it("accepts checkpoints only on one-shot create bindings", () => {
+    const checkpoint = { name: "repository-audit", key: ["/repository/id"], value: { path: "/revision" },
+      advanceOn: "succeeded", unchanged: "skip" } as const;
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, checkpoint }).success).toBe(true);
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, checkpoint: { ...checkpoint, key: [] } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, checkpoint, afterTurn: {
+      disposition: "wait", wait: { name: "lifecycle", correlation: [{ name: "id", path: "/id" }], deadlineSeconds: 60 },
+    } }).success).toBe(false);
+  });
+
   it("accepts bounded wake continuation and terminal policies", () => {
     const wake = {
       disposition: "wake",

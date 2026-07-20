@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import type { Connection } from "../connection/index.js";
 import type { BindingDefinition, TriggerConfig, TriggerDefinition } from "../control/types.js";
+import type { JsonPrimitive } from "../json.js";
 import {
   boolean,
   check,
@@ -276,6 +277,44 @@ export const executions = pgTable("agentbay_executions", {
   index("agentbay_executions_dispatch_idx")
     .on(table.availableAt, table.createdAt, table.id)
     .where(sql`${table.state} = 'QUEUED'`),
+]);
+
+export const executionCheckpoints = pgTable("agentbay_execution_checkpoints", {
+  tenantID: text("tenant_id").notNull(),
+  bindingID: text("binding_id").notNull(),
+  checkpointName: text("checkpoint_name").notNull(),
+  checkpointKeyHash: text("checkpoint_key_hash").notNull(),
+  checkpointKeyValues: jsonb("checkpoint_key_values").$type<JsonPrimitive[]>().notNull(),
+  value: jsonb("value").$type<JsonPrimitive>().notNull(),
+  advancedByExecutionID: text("advanced_by_execution_id").notNull(),
+  advancedAt: timestamp("advanced_at", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.tenantID, table.bindingID, table.checkpointName, table.checkpointKeyHash], name: "agentbay_execution_checkpoints_pk" }),
+  foreignKey({ columns: [table.advancedByExecutionID, table.tenantID], foreignColumns: [executions.id, executions.tenantID], name: "agentbay_execution_checkpoints_execution_fk" }),
+  check("agentbay_execution_checkpoints_key_hash_valid", sql`${table.checkpointKeyHash} ~ '^[0-9a-f]{64}$'`),
+]);
+
+export const executionCheckpointAdvances = pgTable("agentbay_execution_checkpoint_advances", {
+  executionID: text("execution_id").primaryKey(),
+  tenantID: text("tenant_id").notNull(),
+  bindingID: text("binding_id").notNull(),
+  checkpointName: text("checkpoint_name").notNull(),
+  checkpointKeyHash: text("checkpoint_key_hash").notNull(),
+  checkpointKeyValues: jsonb("checkpoint_key_values").$type<JsonPrimitive[]>().notNull(),
+  expectedPreviousExists: boolean("expected_previous_exists").notNull(),
+  expectedPreviousValue: jsonb("expected_previous_value").$type<JsonPrimitive>(),
+  targetValue: jsonb("target_value").$type<JsonPrimitive>().notNull(),
+  state: text("state").notNull().default("PENDING"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+  appliedAt: timestamp("applied_at", { withTimezone: true }),
+}, (table) => [
+  foreignKey({ columns: [table.executionID, table.tenantID], foreignColumns: [executions.id, executions.tenantID], name: "agentbay_execution_checkpoint_advances_execution_fk" }).onDelete("cascade"),
+  check("agentbay_execution_checkpoint_advances_state", sql`${table.state} IN ('PENDING','APPLIED','SUPERSEDED')`),
+  check("agentbay_execution_checkpoint_advances_expected_consistent", sql`${table.expectedPreviousExists} = (${table.expectedPreviousValue} IS NOT NULL)`),
+  check("agentbay_execution_checkpoint_advances_key_hash_valid", sql`${table.checkpointKeyHash} ~ '^[0-9a-f]{64}$'`),
+  index("agentbay_execution_checkpoint_advances_identity_idx").on(table.tenantID, table.bindingID, table.checkpointName, table.checkpointKeyHash),
 ]);
 
 export const githubPullRequestEffects = pgTable("agentbay_github_pull_request_effects", {

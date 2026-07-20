@@ -1145,6 +1145,8 @@ Later, one global control plane may route to multiple execution clusters. Each c
 5. A binding invokes a one-shot maintenance or audit agent against that immutable revision. An active singleton may suppress overlapping executions without losing occurrence audit history.
 6. Crash recovery re-leases the same occurrence; admission idempotency prevents duplicate events or executions. Disabled triggers stop both future materialization and pending occurrence delivery.
 7. No sandbox exists between occurrences. Per-tenant and provider quotas continue to control execution fan-out.
+8. Create bindings may define a stable binding-level checkpoint projected from event data. Admission locks its identity, skips unchanged values before execution creation, and injects the previous/current range into execution input.
+9. A one-shot execution reaching `SUCCEEDED` conditionally advances its pending checkpoint in the same transaction. Failure leaves the previous value intact, and compare-and-set semantics prevent stale executions from moving a checkpoint backward.
 
 ### 19.4 Chat request
 

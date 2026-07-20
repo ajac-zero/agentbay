@@ -270,6 +270,85 @@ describe("dispatcher persistence", () => {
     ]);
   });
 
+  it("skips unchanged checkpoints and prevents stale successful executions from moving them backward", async () => {
+    const token = randomUUID();
+    const bindingId = `checkpoint-${token}`;
+    const eventType = `dev.agentbay.checkpoint.${token}`;
+    const createdAt = new Date().toISOString();
+    const definition = {
+      schemaVersion: 1 as const, eventTypes: [eventType], filter: { all: [] },
+      prompt: { includeEvent: "none" as const, literal: "Audit range" }, workspace: { type: "empty" as const },
+      checkpoint: {
+        name: "repository-audit", key: ["/repository/id"], value: { path: "/revision" },
+        advanceOn: "succeeded" as const, unchanged: "skip" as const,
+      },
+    };
+    await store.publishBindingVersion({
+      bindingId, createdAt, disabledAt: null, enabled: true, id: randomUUID(), profile: { id: profileId, version: 1 },
+      tenantId: "default", triggerId: "dispatcher-test", version: 1,
+      definition,
+    });
+    const admit = async (revision: string) => {
+      const eventId = randomUUID();
+      const event = { data: { repository: { id: 42 }, revision }, datacontenttype: "application/json",
+        id: eventId, source: "/test/checkpoint", specversion: "1.0" as const, type: eventType };
+      return store.admitEvent({ admittedAt: new Date().toISOString(),
+        admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId: "dispatcher-test", event }), event,
+        internalEventId: randomUUID(), sourceDeduplicationKey: eventId, tenantId: "default", triggerId: "dispatcher-test" });
+    };
+    const complete = async (executionId: string, worker: string) => {
+      const claimed = await startRunningExecution(executionId, worker);
+      return store.completeLeasedExecutionTurn({ actor: worker, attempt: claimed.lease.attempt, executionId,
+        fencingToken: claimed.lease.fencingToken, leaseOwner: claimed.lease.leaseOwner,
+        reason: "audit completed", result: { ok: true }, tenantId: "default" });
+    };
+
+    const first = await admit("a".repeat(40));
+    expect(first.executions[0]?.input).toMatchObject({
+      text: expect.stringContaining(`"current":"${"a".repeat(40)}"`),
+      context: { incremental: { checkpoint: "repository-audit", previous: null, current: "a".repeat(40), initial: true } },
+    });
+    await expect(complete(first.executions[0]!.id, "checkpoint-a")).resolves.toMatchObject({ executionState: "SUCCEEDED" });
+    expect((await pool.query("select value from agentbay_execution_checkpoints where binding_id=$1", [bindingId])).rows).toEqual([{ value: "a".repeat(40) }]);
+    await store.publishBindingVersion({ bindingId, createdAt: new Date().toISOString(), disabledAt: null, enabled: true,
+      id: randomUUID(), profile: { id: profileId, version: 1 }, tenantId: "default", triggerId: "dispatcher-test",
+      version: 2, definition });
+    expect((await admit("a".repeat(40))).executions).toEqual([]);
+
+    const failed = await admit("d".repeat(40));
+    const failedClaim = await startRunningExecution(failed.executions[0]!.id, "checkpoint-failed");
+    await expect(store.transitionLeasedExecution({ executionId: failed.executions[0]!.id, tenantId: "default",
+      attempt: failedClaim.lease.attempt, fencingToken: failedClaim.lease.fencingToken,
+      leaseOwner: failedClaim.lease.leaseOwner, expectedExecutionState: "RUNNING", expectedAttemptState: "RUNNING",
+      targetExecutionState: "FAILED", targetAttemptState: "FAILED", actor: "checkpoint-failed", reason: "audit failed" }))
+      .resolves.toMatchObject({ applied: true, executionState: "FAILED", attemptState: "FAILED" });
+    expect((await pool.query("select value from agentbay_execution_checkpoints where binding_id=$1", [bindingId])).rows).toEqual([{ value: "a".repeat(40) }]);
+    expect((await pool.query("select state from agentbay_execution_checkpoint_advances where execution_id=$1", [failed.executions[0]!.id])).rows)
+      .toEqual([{ state: "PENDING" }]);
+
+    const older = await admit("b".repeat(40));
+    const olderClaim = await startRunningExecution(older.executions[0]!.id, "checkpoint-b");
+    const newer = await admit("c".repeat(40));
+    expect(newer.executions[0]?.input.context?.incremental).toEqual({
+      checkpoint: "repository-audit", previous: "a".repeat(40), current: "c".repeat(40), initial: false,
+    });
+    await expect(complete(newer.executions[0]!.id, "checkpoint-c")).resolves.toMatchObject({ executionState: "SUCCEEDED" });
+    await expect(store.completeLeasedExecutionTurn({ actor: "checkpoint-b", attempt: olderClaim.lease.attempt,
+      executionId: older.executions[0]!.id, fencingToken: olderClaim.lease.fencingToken,
+      leaseOwner: olderClaim.lease.leaseOwner, reason: "older audit completed", result: { ok: true }, tenantId: "default" }))
+      .resolves.toMatchObject({ executionState: "SUCCEEDED" });
+
+    expect((await pool.query("select value,advanced_by_execution_id from agentbay_execution_checkpoints where binding_id=$1", [bindingId])).rows)
+      .toEqual([{ value: "c".repeat(40), advanced_by_execution_id: newer.executions[0]!.id }]);
+    expect((await pool.query("select execution_id,state from agentbay_execution_checkpoint_advances where binding_id=$1 order by execution_id", [bindingId])).rows)
+      .toEqual(expect.arrayContaining([
+        { execution_id: first.executions[0]!.id, state: "APPLIED" },
+        { execution_id: older.executions[0]!.id, state: "SUPERSEDED" },
+        { execution_id: newer.executions[0]!.id, state: "APPLIED" },
+      ]));
+    expect((await admit("c".repeat(40))).executions).toEqual([]);
+  });
+
   it("takes over an expired checkpointed running attempt without changing its identity or history", async () => {
     const executionId = await queueExecution();
     const original = await startRunningExecution(executionId, "dispatcher-stale", {

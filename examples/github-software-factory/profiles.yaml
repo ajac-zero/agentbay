@@ -15,8 +15,10 @@ definition:
       agent:
         audit:
           prompt: >-
-            Audit the exact checked-out revision for one concrete correctness bug. Focus on recently changed code and
-            reachable failure paths. Search open and recently closed issues and open pull requests before reporting.
+            Audit the exact checked-out revision for one concrete correctness bug. Use the trusted incremental audit
+            range appended to the execution prompt: inspect changes from previous to current, or one bounded subsystem
+            when initial is true. Inspect surrounding code as needed to prove reachable failure paths. Search open and
+            recently closed issues and open pull requests before reporting.
             Create at most one issue, and only when you have strong mechanical evidence, a reproduction, or a precise
             failing-test design. Do not report style, refactoring, documentation, or speculative performance concerns.
             The issue must include affected paths and symbols, failure path, expected and actual behavior, reproduction
