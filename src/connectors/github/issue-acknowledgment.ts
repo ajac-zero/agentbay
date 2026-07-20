@@ -13,6 +13,7 @@ const payloadSchema = z.object({
   repositoryId: z.number().int().positive(),
   repositoryFullName: z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9_.-]+$/),
   issueNumber: z.number().int().positive(),
+  subjectType: z.enum(["issue", "pull_request"]).default("issue"),
   content: z.literal("eyes"),
 }).strict();
 
@@ -41,6 +42,7 @@ export class GitHubIssueAcknowledgmentTransport implements OutboxTransport {
     );
     const fetch = this.options.fetch ?? globalThis.fetch;
     const apiBaseUrl = this.options.apiBaseUrl ?? "https://api.github.com";
+    const permission = payload.subjectType === "pull_request" ? "pull_requests" : "issues";
     const headers = {
       Accept: "application/vnd.github+json",
       "User-Agent": "agentbay-issue-acknowledgment/1.0",
@@ -49,7 +51,7 @@ export class GitHubIssueAcknowledgmentTransport implements OutboxTransport {
     const tokenResponse = await fetch(`${apiBaseUrl}/app/installations/${payload.installationId}/access_tokens`, {
       method: "POST",
       headers: { ...headers, Authorization: `Bearer ${appJwt(credentials, this.options.now ?? Date.now)}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ repository_ids: [payload.repositoryId], permissions: { issues: "write" } }),
+      body: JSON.stringify({ repository_ids: [payload.repositoryId], permissions: { [permission]: "write" } }),
       redirect: "error",
       signal: options.signal,
     });
@@ -63,8 +65,8 @@ export class GitHubIssueAcknowledgmentTransport implements OutboxTransport {
       || (tokenData.repository_selection !== undefined && tokenData.repository_selection !== "selected")) {
       throw new Error("GitHub installation token repository scope mismatch");
     }
-    if (tokenData.permissions?.issues !== "write"
-      || Object.entries(tokenData.permissions ?? {}).some(([name, access]) => name !== "issues" && !(name === "metadata" && access === "read"))) {
+    if (tokenData.permissions?.[permission] !== "write"
+      || Object.entries(tokenData.permissions ?? {}).some(([name, access]) => name !== permission && !(name === "metadata" && access === "read"))) {
       throw new Error("GitHub installation token permissions mismatch");
     }
 

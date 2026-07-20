@@ -158,6 +158,7 @@ function issueAcknowledgment(data: JsonValue, subjectKey: "issue" | "pullRequest
     || typeof repository.fullName !== "string"
     || typeof subject.number !== "number" || !Number.isSafeInteger(subject.number) || subject.number < 1) return undefined;
   return {
+    subjectType: subjectKey === "issue" ? "issue" as const : "pull_request" as const,
     installationId,
     repositoryId: repository.id,
     repositoryFullName: repository.fullName,
