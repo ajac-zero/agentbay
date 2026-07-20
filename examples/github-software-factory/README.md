@@ -65,6 +65,8 @@ pull_request.closed
   -> cancel all active waits for that correlation key
 ```
 
+A single GitHub App posts all COMMENT-type reviews and embeds the `Agentbay-Verdict` marker in the review body so the connector can unambiguously distinguish orchestrator signals from ordinary human review comments.
+
 The wait resource policy should default to `release`; deployments with a
 PVC-backed Agent Sandbox may choose `suspend` after claim-owned Sandbox
 suspend/resume is validated against the pinned `v1beta1` controller.
