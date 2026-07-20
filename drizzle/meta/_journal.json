@@ -85,6 +85,13 @@
       "when": 1784569000000,
       "tag": "0011_durable_schedule_occurrences",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1784571600000,
+      "tag": "0012_release_succeeded_singletons",
+      "breakpoints": true
     }
   ]
 }
