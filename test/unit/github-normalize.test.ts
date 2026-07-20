@@ -150,7 +150,7 @@ describe("normalizeGitHubEvent", () => {
     });
   });
 
-  it("normalizes pull request reviews and review comments", () => {
+  it("normalizes native pull request review states independently of body syntax", () => {
     const pullRequest = {
       ...issue,
       draft: false,
@@ -166,7 +166,7 @@ describe("normalizeGitHubEvent", () => {
       pull_request: pullRequest,
       review: {
         id: 92,
-        body: "Agentbay-Verdict: changes_requested\n\nNeeds changes",
+        body: "Needs changes",
         user: actor(8, "reviewer"),
         state: "CHANGES_REQUESTED",
         commit_id: "a".repeat(40),
@@ -176,7 +176,24 @@ describe("normalizeGitHubEvent", () => {
     expect(review).toMatchObject({
       type: "com.github.pull_request_review.submitted",
       subject: "pulls/7",
-      data: { review: { id: 92, state: "changes_requested", agentbayVerdict: "changes_requested", commitSha: "a".repeat(40) } },
+      data: { review: { id: 92, state: "changes_requested", commitSha: "a".repeat(40) } },
+    });
+    expect(review).not.toHaveProperty("data.review.agentbayVerdict");
+
+    expect(normalizeGitHubEvent(input({
+      ...common,
+      action: "submitted",
+      pull_request: pullRequest,
+      review: {
+        id: 93,
+        body: "Looks good",
+        user: actor(9, "reviewer-app[bot]"),
+        state: "APPROVED",
+        commit_id: "a".repeat(40),
+        submitted_at: "2026-07-03T11:01:00Z",
+      },
+    }, "pull_request_review"))).toMatchObject({
+      data: { review: { id: 93, state: "approved", user: { id: 9, login: "reviewer-app[bot]" } } },
     });
 
     const { merged: _merged, ...reviewPullRequest } = pullRequest;

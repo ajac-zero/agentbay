@@ -500,12 +500,12 @@ differs from the base repository. Public Git workspace bindings therefore use
 `/pullRequest/head/repository/cloneUrl` and `/pullRequest/head/sha`, not mutable
 refs or top-level convenience fields.
 
-The GitHub connector roadmap also normalizes `issue_comment`,
-`pull_request_review`, and `pull_request_review_comment` deliveries. These
-events project bounded comment or review data, sender, repository, issue or pull
-request identity, and exact commit identity where GitHub supplies it. They are
-ordinary normalized events: only bindings decide whether they begin work, wake
-waiting work, or are ignored.
+The GitHub connector also normalizes `issue_comment`, `pull_request_review`, and
+`pull_request_review_comment` deliveries. Reviews project native `review.state`,
+`review.user`, bounded body data, and exact commit identity where GitHub supplies
+it. Bindings use native review state for routing and add an actor-ID predicate
+when review provenance is authoritative. These are ordinary normalized events:
+only bindings decide whether they begin work, wake waiting work, or are ignored.
 
 Rules for event data:
 
