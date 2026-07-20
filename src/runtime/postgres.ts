@@ -690,7 +690,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       if (singleton) {
         const owner = await client.query(`SELECT 1 FROM agentbay_executions
           WHERE tenant_id = $1 AND active_singleton_name = $2 AND active_singleton_key = $3
-            AND state NOT IN ('COMPLETED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')
+            AND state NOT IN ('SUCCEEDED', 'COMPLETED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')
           LIMIT 1`, [command.tenantId, singleton.name, singleton.key]);
         if (owner.rowCount) continue;
       }
