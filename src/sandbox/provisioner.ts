@@ -286,6 +286,11 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
         { containerName: "github-token-broker", name: "AGENTBAY_EXECUTION_ID", value: input.executionId },
         { containerName: "github-token-broker", name: "AGENTBAY_EFFECT_TOKEN", value: input.fencingToken },
       );
+      if (input.githubMergeCapability) env.push({
+        containerName: "github-token-broker",
+        name: "AGENTBAY_GITHUB_MERGE_CAPABILITY",
+        value: canonicalJson({ schemaVersion: 1, ...input.githubMergeCapability }),
+      });
     }
 
     const connectionAnnotations = authorizationAnnotations(input);

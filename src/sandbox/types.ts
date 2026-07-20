@@ -80,6 +80,13 @@ export type ExecutionAttemptProvisioningInput = {
   timeoutAt: Date;
   ttlSecondsAfterFinished: number;
   controlPlaneUrl?: string;
+  githubMergeCapability?: {
+    commitSha: string;
+    pullRequestNumber: number;
+    repositoryFullName: string;
+    repositoryId: number;
+    reviewerId: number;
+  };
 };
 
 export type ExecutionAttemptIdentity = Pick<ExecutionAttemptProvisioningInput, "executionId" | "attempt">;

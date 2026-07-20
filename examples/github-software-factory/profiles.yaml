@@ -92,3 +92,30 @@ definition:
   connections: [{ id: github-reviewer, sidecar: github-token-broker }]
   permissions: { onRequest: fail }
   timeoutSeconds: 1800
+---
+version: 1
+definition:
+  schemaVersion: 1
+  runtime:
+    type: opencode
+    agent: merge
+    opencodeConfig:
+      model: gateway/claude-sonnet-5
+      mcp:
+        github: { type: remote, url: "http://127.0.0.1:8083/", enabled: true, oauth: false }
+      permission: { "github_*": deny }
+      agent:
+        merge:
+          prompt: >-
+            Merge only the pull request identified by the trusted event. Read the pull request and its reviews first.
+            Require it to be open and non-draft, require its current head SHA to equal review.commitSha, and require the
+            review from review.user.id to be APPROVED for that exact SHA. Then call github_merge_pull_request with
+            merge_method=merge. Do not modify the pull request or repository. If any invariant fails or GitHub rejects
+            the merge because repository protection is not satisfied, stop without merging.
+          permission:
+            github_pull_request_read: allow
+            github_merge_pull_request: allow
+  sandbox: { templateName: opencode-merger-template, warmPool: opencode-merger-pool }
+  connections: [{ id: github-production, sidecar: github-token-broker }]
+  permissions: { onRequest: fail }
+  timeoutSeconds: 900

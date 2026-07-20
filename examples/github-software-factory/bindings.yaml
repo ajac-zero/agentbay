@@ -156,3 +156,20 @@ definition:
       - { name: repositoryId, path: /repository/id }
       - { name: pullRequestNumber, path: /pullRequest/number }
     action: { type: complete }
+---
+version: 1
+triggerId: engineering-github
+profile: { id: merger, version: 1 }
+definition:
+  schemaVersion: 1
+  eventTypes: [com.github.pull_request_review.submitted]
+  filter:
+    all:
+      - { path: /repository/fullName, op: eq, value: acme/agentbay }
+      - { path: /review/state, op: eq, value: approved }
+      # Replace with the numeric bot user ID from the reviewer App's signed review webhook.
+      - { path: /review/user/id, op: eq, value: 987654321 }
+      - { path: /review/commitSha, op: exists, value: true }
+      - { path: /pullRequest/merged, op: eq, value: false }
+  prompt: { literal: Validate the approved revision and merge it through repository protection., includeEvent: data }
+  workspace: { type: empty }

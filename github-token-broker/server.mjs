@@ -119,6 +119,47 @@ function createPullRequestArguments(body) {
   return { args, id: message.id };
 }
 
+function mergePullRequestArguments(body) {
+  let message;
+  try { message = JSON.parse(body.toString("utf8")); } catch { return undefined; }
+  if (Array.isArray(message)) throw new Error("JSON_RPC_BATCH_NOT_SUPPORTED");
+  if (message?.method !== "tools/call" || message?.params?.name !== "merge_pull_request") return undefined;
+  if (message.jsonrpc !== "2.0" || !(typeof message.id === "string" || typeof message.id === "number")) throw new Error("INVALID_MERGE_PULL_REQUEST");
+  const args = message.params.arguments;
+  if (!args || typeof args !== "object" || Array.isArray(args)
+    || typeof args.owner !== "string" || typeof args.repo !== "string"
+    || !Number.isSafeInteger(args.pullNumber) || args.pullNumber < 1
+    || (args.merge_method !== undefined && !["merge", "squash", "rebase"].includes(args.merge_method))) throw new Error("INVALID_MERGE_PULL_REQUEST");
+  return { args, id: message.id };
+}
+
+function mcpResult(id, value, isError = false) {
+  return Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(value) }], ...(isError ? { isError: true } : {}) } }));
+}
+
+async function executeFencedMerge(call, config, provider) {
+  const capability = config.mergeCapability;
+  if (!capability) throw new Error("MERGE_CAPABILITY_MISSING");
+  const [owner, repo] = capability.repositoryFullName.split("/");
+  if (call.args.owner.toLowerCase() !== owner.toLowerCase() || call.args.repo.toLowerCase() !== repo.toLowerCase()
+    || call.args.pullNumber !== capability.pullRequestNumber) throw new Error("MERGE_CAPABILITY_MISMATCH");
+  const token = await provider.getToken();
+  const headers = { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "x-github-api-version": "2022-11-28" };
+  const endpoint = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${capability.pullRequestNumber}`;
+  const current = await fetch(endpoint, { headers, redirect: "manual" });
+  if (current.status === 401) provider.invalidate(token);
+  if (!current.ok) return { status: 200, bytes: mcpResult(call.id, { error: "Unable to verify pull request" }, true) };
+  const pullRequest = await current.json();
+  if (pullRequest?.state !== "open" || pullRequest?.draft === true || pullRequest?.head?.sha !== capability.commitSha) {
+    return { status: 200, bytes: mcpResult(call.id, { error: "Pull request no longer matches the approved revision" }, true) };
+  }
+  const merged = await fetch(`${endpoint}/merge`, { method: "PUT", headers: { ...headers, "content-type": "application/json" }, redirect: "manual",
+    body: JSON.stringify({ merge_method: call.args.merge_method ?? "merge", sha: capability.commitSha }) });
+  if (merged.status === 401) provider.invalidate(token);
+  const result = await merged.json().catch(() => ({}));
+  return { status: 200, bytes: mcpResult(call.id, merged.ok && result?.merged === true ? result : { error: "GitHub rejected the protected merge", details: result }, !(merged.ok && result?.merged === true)) };
+}
+
 async function effectRequest(config, path, body) {
   if (!config.effect) throw new Error("EFFECT_CAPABILITY_MISSING");
   const response = await fetch(new URL(path, config.effect.endpoint), {
@@ -181,6 +222,12 @@ export function startBroker(config, provider) {
         return;
       }
       const body = await readRequest(request);
+      const mergeCall = request.method === "POST" ? mergePullRequestArguments(body) : undefined;
+      if (mergeCall) {
+        const merged = await executeFencedMerge(mergeCall, config, provider);
+        response.writeHead(merged.status, { "content-type": "application/json" }).end(merged.bytes);
+        return;
+      }
       const createCall = request.method === "POST" ? createPullRequestArguments(body) : undefined;
       const createArguments = createCall?.args;
       let effect;
