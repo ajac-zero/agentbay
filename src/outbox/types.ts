@@ -32,6 +32,7 @@ export interface OutboxStore {
     claimToken: string;
     limit: number;
     leaseDurationMs: number;
+    topics?: readonly string[];
     signal?: AbortSignal;
   }): Promise<ClaimedOutboxMessage[]>;
 

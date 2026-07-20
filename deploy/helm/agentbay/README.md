@@ -151,6 +151,23 @@ default-branch commit, and only then admits bindings selecting
 attempt, and request timeout bounds under `orchestrator.revisionResolver`.
 Resolver credentials are not mounted into migrations or the reconciler.
 
+To acknowledge newly opened issues immediately after durable admission, enable
+the issue acknowledgment worker using the same App credential Secret:
+
+```yaml
+orchestrator:
+  revisionResolver:
+    credentialsSecret: agentbay-github-app
+  githubIssueAcknowledgment:
+    enabled: true
+```
+
+The worker mints a selected-repository token with only `issues:write`, verifies
+the repository identity, and adds an `eyes` reaction. The reaction request is
+stored transactionally with the webhook event, retried through the outbox, and
+must publish before any execution for that event can begin provisioning.
+GitHub webhook replay and duplicate reaction responses are idempotent.
+
 ## Replicas and maintenance
 
 API replicas share durable state in PostgreSQL, so `replicaCount` can be greater

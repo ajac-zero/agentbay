@@ -1,5 +1,6 @@
 {{- $secretName := include "agentbay.secretName" . -}}
 {{- $useChartSecret := or .Values.secrets.create .Values.secrets.existingSecret -}}
+{{- $githubWorkerEnabled := or .Values.orchestrator.revisionResolver.enabled .Values.orchestrator.githubIssueAcknowledgment.enabled -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -97,7 +98,17 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            {{- if .Values.orchestrator.revisionResolver.enabled }}
+            - name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED
+              value: {{ .Values.orchestrator.githubIssueAcknowledgment.enabled | quote }}
+            - name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_IDLE_POLL_MS
+              value: {{ .Values.orchestrator.githubIssueAcknowledgment.idlePollMs | quote }}
+            - name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS
+              value: {{ .Values.orchestrator.githubIssueAcknowledgment.leaseDurationMs | quote }}
+            - name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_RETRY_DELAY_MS
+              value: {{ .Values.orchestrator.githubIssueAcknowledgment.retryDelayMs | quote }}
+            - name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS
+              value: {{ .Values.orchestrator.githubIssueAcknowledgment.requestTimeoutMs | quote }}
+            {{- if $githubWorkerEnabled }}
             - name: AGENTBAY_GITHUB_APP_ID_FILE
               value: {{ printf "%s/app-id" .Values.orchestrator.revisionResolver.mountPath | quote }}
             - name: AGENTBAY_GITHUB_PRIVATE_KEY_FILE
@@ -107,7 +118,7 @@ spec:
             {{- with .Values.orchestrator.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if .Values.orchestrator.revisionResolver.enabled }}
+          {{- if $githubWorkerEnabled }}
           volumeMounts:
             - name: github-app-revision-resolver
               mountPath: {{ .Values.orchestrator.revisionResolver.mountPath | quote }}
@@ -134,11 +145,11 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-      {{- if .Values.orchestrator.revisionResolver.enabled }}
+      {{- if $githubWorkerEnabled }}
       volumes:
         - name: github-app-revision-resolver
           secret:
-            secretName: {{ required "orchestrator.revisionResolver.credentialsSecret is required when revision resolution is enabled" .Values.orchestrator.revisionResolver.credentialsSecret | quote }}
+            secretName: {{ required "orchestrator.revisionResolver.credentialsSecret is required when a GitHub control-plane worker is enabled" .Values.orchestrator.revisionResolver.credentialsSecret | quote }}
             defaultMode: 0440
             items:
               - key: app-id

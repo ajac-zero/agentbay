@@ -26,8 +26,8 @@ definition:
   permissions: { onRequest: fail }
   timeoutSeconds: 900
 ---
-# developer-easy; publish equivalent versions for developer-medium and
-# developer-hard with operator-approved models and capability ceilings.
+# developer-easy. Publish equivalent developer-medium and developer-hard
+# versions using gateway/claude-opus-4-7 and gateway/claude-fable-5.
 version: 1
 definition:
   schemaVersion: 1
@@ -35,7 +35,7 @@ definition:
     type: opencode
     agent: develop
     opencodeConfig:
-      model: anthropic/claude-haiku
+      model: gateway/claude-sonnet-5
       mcp:
         github: { type: remote, url: "http://127.0.0.1:8083/", enabled: true, oauth: false }
       permission: { "github_*": deny }
@@ -74,9 +74,10 @@ definition:
       agent:
         review:
           prompt: >-
-            Review the pull request for correctness and regressions and publish the review through GitHub MCP tools.
-            Because one GitHub App authors and reviews the PR, submit a COMMENT review whose first line is exactly
-            `Agentbay-Verdict: approved` or `Agentbay-Verdict: changes_requested`.
+            Review the pull request for correctness and regressions. Submit a native GitHub review through
+            github_pull_request_review_write with method=create. Use event=APPROVE when no blocking changes remain,
+            or event=REQUEST_CHANGES with a substantive body when changes are required. Set commitID to the exact
+            pull request head SHA being reviewed. Do not submit COMMENT as the final verdict.
           permission:
             github_pull_request_read: allow
             github_get_file_contents: allow
@@ -88,6 +89,6 @@ definition:
             github_actions_list: allow
             github_get_job_logs: allow
   sandbox: { templateName: opencode-reviewer-template, warmPool: opencode-reviewer-pool }
-  connections: [{ id: github-production, sidecar: github-token-broker }]
+  connections: [{ id: github-reviewer, sidecar: github-token-broker }]
   permissions: { onRequest: fail }
   timeoutSeconds: 1800

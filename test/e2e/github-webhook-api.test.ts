@@ -38,6 +38,20 @@ describe("GitHub webhook API", () => {
     });
   });
 
+  it("registers an eyes acknowledgment for opened issues when enabled", async () => {
+    const store = new FakeStore();
+    const response = await webhook(testApp(store, { [SECRET_ENV]: SECRET }, verifyGitHubSignature, true), issuePayload());
+    expect(response.status).toBe(202);
+    expect(store.lastAdmission).toMatchObject({
+      githubIssueAcknowledgment: {
+        installationId: 10,
+        repositoryId: 20,
+        repositoryFullName: "acme/widgets",
+        issueNumber: 7,
+      },
+    });
+  });
+
   it("admits issue comments as normalized events", async () => {
     const store = new FakeStore();
     const payload = issuePayload();
@@ -245,9 +259,10 @@ function testApp(
   store: GitHubWebhookApiStore = new FakeStore(),
   env: Record<string, string> = { [SECRET_ENV]: SECRET },
   verifier: typeof verifyGitHubSignature = verifyGitHubSignature,
+  issueAcknowledgmentEnabled = false,
 ) {
   const app = createOpenApiApp();
-  mountGitHubWebhookApi(app, store, (name) => env[name], verifier);
+  mountGitHubWebhookApi(app, store, (name) => env[name], verifier, issueAcknowledgmentEnabled);
   return app;
 }
 

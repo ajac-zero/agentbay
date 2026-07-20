@@ -48,6 +48,7 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/name: AGENTBAY_DISPATCHER_IDLE_POLL_MS\n\s+value: "500"/);
       expect(result.stdout).toMatch(/name: AGENTBAY_DISPATCHER_LEASE_DURATION_MS\n\s+value: "60000"/);
       expect(result.stdout).toMatch(/name: AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS\n\s+value: "20000"/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED\n\s+value: "false"/);
       expect(result.stdout).toMatch(
         /name: AGENTBAY_DISPATCHER_WORKER_ID\n\s+valueFrom:\n\s+fieldRef:\n\s+fieldPath: metadata\.name/,
       );
@@ -63,6 +64,18 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/command: \["node", "dist\/reconcile\.js"\]/);
       expect(result.stdout).toMatch(/name: demo-agentbay-reconciler/);
       expect(result.stdout).toMatch(/name: AGENTBAY_RECONCILER_GRACE_MINUTES/);
+    });
+
+    it("renders durable GitHub issue acknowledgment independently of revision resolution", () => {
+      const result = helm([
+        "template", "demo", CHART_PATH, "--namespace", NAMESPACE,
+        "--set", "orchestrator.githubIssueAcknowledgment.enabled=true",
+        "--set", "orchestrator.revisionResolver.credentialsSecret=github-app",
+      ]);
+      expect(result.status, formatStderr(result)).toBe(0);
+      expect(result.stdout).toMatch(/name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED\n\s+value: "true"/);
+      expect(result.stdout).toMatch(/name: AGENTBAY_GITHUB_APP_ID_FILE/);
+      expect(result.stdout).toMatch(/secretName: "github-app"/);
     });
 
     it("renders SandboxTemplates with a NetworkPolicy ingress selector that matches the orchestrator", () => {

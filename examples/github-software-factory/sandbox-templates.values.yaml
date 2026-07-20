@@ -1,5 +1,7 @@
 # Helm values for revision resolution and the three role-isolated templates referenced by profiles.yaml.
 # Replace both illustrative images and repository/App settings before deployment.
+# The reviewer App installation needs Contents: read and write for its native
+# approvals to satisfy required-review rules; its broker token remains read-only.
 orchestrator:
   revisionResolver:
     enabled: true
@@ -119,11 +121,16 @@ sandboxTemplates:
         - <<: *developerBroker
           env:
             - { name: AGENTBAY_GITHUB_TENANT, value: default }
-            - { name: AGENTBAY_GITHUB_CONNECTION, value: github-production }
+            - { name: AGENTBAY_GITHUB_CONNECTION, value: github-reviewer }
             - { name: AGENTBAY_GITHUB_REPOSITORY_ID, value: "123456789" }
             - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "contents:read,pull_requests:write,actions:read" }
-          volumeMounts: *credentialMount
-      extraVolumes: *credentialVolume
+          volumeMounts:
+            - { name: github-reviewer-app-credentials, mountPath: /var/run/agentbay/github-app, readOnly: true }
+      extraVolumes:
+        - name: github-reviewer-app-credentials
+          secret:
+            secretName: example-github-reviewer-app-credentials
+            defaultMode: 0440
 
 sandboxWarmPools:
   enabled: true

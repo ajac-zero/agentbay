@@ -42,6 +42,27 @@ function setup(messages: ClaimedOutboxMessage[], publish: OutboxTransport["publi
   return { publisher, store };
 }
 
+it("limits claims to configured topics", async () => {
+  const store: OutboxStore = {
+    claimAvailable: vi.fn().mockResolvedValue([]),
+    markPublished: vi.fn().mockResolvedValue(true),
+    markFailed: vi.fn().mockResolvedValue(true),
+  };
+  const publisher = new OutboxPublisher({
+    store,
+    transport: { publish: vi.fn() },
+    batchSize: 1,
+    leaseDurationMs: 60_000,
+    transportTimeoutMs: 10_000,
+    baseRetryDelayMs: 1_000,
+    maxRetryDelayMs: 8_000,
+    topics: ["github.issue-reaction.requested"],
+    uuid: () => "claim-1",
+  });
+  await publisher.publishAvailable();
+  expect(store.claimAvailable).toHaveBeenCalledWith(expect.objectContaining({ topics: ["github.issue-reaction.requested"] }));
+});
+
 describe("OutboxPublisher", () => {
   it("claims a batch and publishes stable envelopes before token-CAS completion", async () => {
     const publish = vi.fn<OutboxTransport["publish"]>().mockResolvedValue(undefined);

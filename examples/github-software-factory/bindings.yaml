@@ -54,7 +54,9 @@ definition:
   filter:
     all:
       - { path: /repository/fullName, op: eq, value: acme/agentbay }
-      - { path: /review/agentbayVerdict, op: eq, value: changes_requested }
+      - { path: /review/state, op: eq, value: changes_requested }
+      # Replace with the numeric bot user ID from the reviewer App's signed review webhook.
+      - { path: /review/user/id, op: eq, value: 987654321 }
   wake:
     waitName: developer-pr-lifecycle
     delivery: active-or-coalesced
