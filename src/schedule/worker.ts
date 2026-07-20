@@ -4,6 +4,7 @@ import { logger } from "../logger.js";
 import type { EventAdmissionStore } from "../execution/store.js";
 import type { ScheduleStore } from "./types.js";
 import type { ScheduleCronTriggerConfig } from "./types.js";
+import { scheduleAdmissionDelay, scheduleOccurrences } from "../observability/metrics.js";
 
 export class ScheduleWorker {
   constructor(private readonly options: {
@@ -63,11 +64,15 @@ export class ScheduleWorker {
           branch: repository.defaultBranch,
         },
       });
-      await this.options.store.completeScheduleOccurrence({ id: occurrence.id, leaseOwner: occurrence.leaseOwner, leaseToken: occurrence.leaseToken, completedAt: new Date().toISOString() });
+      const completed = await this.options.store.completeScheduleOccurrence({ id: occurrence.id, leaseOwner: occurrence.leaseOwner, leaseToken: occurrence.leaseToken, completedAt: new Date().toISOString() });
+      if (completed) {
+        scheduleOccurrences.inc({ tenant: occurrence.tenantId, trigger_id: occurrence.triggerId, result: "succeeded" });
+        scheduleAdmissionDelay.observe({ tenant: occurrence.tenantId, trigger_id: occurrence.triggerId }, Math.max(0, (Date.now() - Date.parse(occurrence.scheduledAt)) / 1_000));
+      }
     } catch (error) {
       if (signal?.aborted) throw error;
       const failedAt = new Date();
-      await this.options.store.failScheduleOccurrence({
+      const marked = await this.options.store.failScheduleOccurrence({
         id: occurrence.id,
         leaseOwner: occurrence.leaseOwner,
         leaseToken: occurrence.leaseToken,
@@ -76,6 +81,7 @@ export class ScheduleWorker {
         retryAt: new Date(failedAt.getTime() + this.options.retryDelayMs).toISOString(),
         maxAttempts: this.options.maxAttempts,
       });
+      if (marked) scheduleOccurrences.inc({ tenant: occurrence.tenantId, trigger_id: occurrence.triggerId, result: "failed" });
     }
     return true;
   }

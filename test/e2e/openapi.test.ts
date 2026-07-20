@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Config } from "../../src/config.js";
-import { createOpenApiApp, mountHealthRoute, mountOpenApiDocs } from "../../src/openapi.js";
+import { Registry } from "prom-client";
+import { createOpenApiApp, mountHealthRoute, mountMetricsRoute, mountOpenApiDocs } from "../../src/openapi.js";
 import { mountControlApi, type ControlApiStore } from "../../src/control/api.js";
 import { mountGitHubWebhookApi } from "../../src/connectors/github/api.js";
 
@@ -111,6 +112,15 @@ describe("OpenAPI docs", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, service: "agentbay" });
+  });
+
+  it("serves Prometheus metrics without adding the endpoint to OpenAPI", async () => {
+    const app = createTestApp();
+    const registry = new Registry();
+    mountMetricsRoute(app, registry);
+    const response = await app.request("/metrics");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/plain");
   });
 });
 

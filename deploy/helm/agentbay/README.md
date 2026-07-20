@@ -281,6 +281,53 @@ By default, the materializer uses the template's `image.repository`, `tag`, and
 `pullPolicy`. If it is published as a separate image, override any of those
 fields under `workspaceMaterializer.image`.
 
+## Observability
+
+Agentbay serves Prometheus metrics at `/metrics` on the separate internal metrics
+Service port (9090 by default). The Ingress exposes only the API port. Counters and histograms record
+committed lifecycle outcomes; restart-safe gauges are projected from PostgreSQL,
+which remains authoritative. PostgreSQL collection uses one aggregate query, a
+five-second process cache, and a two-second timeout. A failed collection leaves
+the last successful business snapshot available while
+`agentbay_observability_collector_up` becomes `0` and
+`agentbay_observability_snapshot_age_seconds` continues increasing.
+
+Metric labels are intentionally bounded: tenant, state, result, event type,
+profile ID, binding ID, trigger ID, topic, operation, and component. Execution
+IDs, event IDs, pull request numbers, commit SHAs, claim names, and error messages
+are never metric labels; use structured logs and PostgreSQL for those identities.
+
+Enable portable scrape annotations, Prometheus Operator resources, and the
+Grafana sidecar dashboard independently:
+
+```yaml
+observability:
+  podAnnotations:
+    enabled: true
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+  prometheusRule:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+  dashboard:
+    enabled: true
+```
+
+The initial rules alert when the oldest pending outbox message exceeds ten
+minutes, an active execution exceeds its persisted timeout, or an enabled
+schedule has missed two expected cron intervals past `next_fire_at`. They also warn when the
+PostgreSQL collector has failed for five minutes. Tune these values under
+`observability.prometheusRule` after observing normal production behavior.
+
+`ServiceMonitor` and `PrometheusRule` require the Prometheus Operator CRDs and
+are disabled by default. Annotation-based collectors can use
+`observability.podAnnotations`. Static collectors must add the Agentbay Service
+as an explicit `/metrics` scrape target. The dashboard ConfigMap is labeled
+`grafana_dashboard=1` by default for common Grafana sidecar discovery.
+
 ## Envoy AI Gateway authorization
 
 Enable `aiGatewayAuthz` when sandbox Pods should reach model providers through

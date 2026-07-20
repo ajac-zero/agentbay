@@ -1,0 +1,29 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {"type":"stat","title":"Active Executions","gridPos":{"h":4,"w":6,"x":0,"y":0},"targets":[{"expr":"sum(agentbay_executions{state!~\"SUCCEEDED|COMPLETED|CANCELLED|TIMED_OUT|FAILED|DEAD_LETTERED\"})"}]},
+    {"type":"stat","title":"Overdue Executions","gridPos":{"h":4,"w":6,"x":6,"y":0},"targets":[{"expr":"sum(agentbay_executions_overdue)"}]},
+    {"type":"stat","title":"Pending Outbox","gridPos":{"h":4,"w":6,"x":12,"y":0},"targets":[{"expr":"sum(agentbay_outbox_pending)"}]},
+    {"type":"stat","title":"Active Sandbox Workloads","gridPos":{"h":4,"w":6,"x":18,"y":0},"targets":[{"expr":"sum(agentbay_sandbox_claims_active)"}]},
+    {"type":"timeseries","title":"Execution Outcomes","gridPos":{"h":8,"w":12,"x":0,"y":4},"targets":[{"expr":"sum by (profile_id, result) (rate(agentbay_execution_outcomes_total[1h]))","legendFormat":"{{profile_id}} {{result}}"}]},
+    {"type":"timeseries","title":"Execution Duration p95","gridPos":{"h":8,"w":12,"x":12,"y":4},"targets":[{"expr":"histogram_quantile(0.95, sum by (le, profile_id) (rate(agentbay_execution_duration_seconds_bucket[1h])))","legendFormat":"{{profile_id}}"}]},
+    {"type":"timeseries","title":"Outbox Oldest Pending Age","gridPos":{"h":8,"w":12,"x":0,"y":12},"targets":[{"expr":"max by (topic) (agentbay_outbox_oldest_pending_age_seconds)","legendFormat":"{{topic}}"}]},
+    {"type":"timeseries","title":"Outbox Publication Outcomes","gridPos":{"h":8,"w":12,"x":12,"y":12},"targets":[{"expr":"sum by (topic, result) (rate(agentbay_outbox_publish_attempts_total[15m]))","legendFormat":"{{topic}} {{result}}"}]},
+    {"type":"timeseries","title":"Schedule Missed Intervals","gridPos":{"h":8,"w":12,"x":0,"y":20},"targets":[{"expr":"max by (trigger_id) (agentbay_schedule_missed_intervals)","legendFormat":"{{trigger_id}}"}]},
+    {"type":"timeseries","title":"Checkpoint Age","gridPos":{"h":8,"w":12,"x":12,"y":20},"targets":[{"expr":"max by (binding_id) (agentbay_checkpoint_age_seconds)","legendFormat":"{{binding_id}}"}]},
+    {"type":"timeseries","title":"Sandbox Provisioning p95","gridPos":{"h":8,"w":12,"x":0,"y":28},"targets":[{"expr":"histogram_quantile(0.95, sum by (le, profile_id) (rate(agentbay_sandbox_provision_duration_seconds_bucket[1h])))","legendFormat":"{{profile_id}}"}]},
+    {"type":"timeseries","title":"GitHub Effect Outcomes","gridPos":{"h":8,"w":6,"x":12,"y":28},"targets":[{"expr":"sum by (effect_type, result) (rate(agentbay_github_effects_total[1h]))","legendFormat":"{{effect_type}} {{result}}"}]},
+    {"type":"timeseries","title":"Collector Health and Snapshot Age","gridPos":{"h":8,"w":6,"x":18,"y":28},"targets":[{"expr":"agentbay_observability_collector_up","legendFormat":"collector up"},{"expr":"agentbay_observability_snapshot_age_seconds","legendFormat":"snapshot age"}]}
+  ],
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "tags": ["agentbay", "software-factory"],
+  "templating": {"list": [{"name":"DS_PROMETHEUS","type":"datasource","query":"prometheus","current":{}}]},
+  "time": {"from":"now-24h","to":"now"},
+  "timezone": "browser",
+  "title": "Agentbay Software Factory",
+  "uid": "agentbay-software-factory",
+  "version": 1
+}

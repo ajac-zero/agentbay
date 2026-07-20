@@ -6,7 +6,7 @@ import { mountGitHubWebhookApi } from "./connectors/github/api.js";
 import { mountGitHubEffectsApi } from "./connectors/github/effects-api.js";
 import { runExecutionMaintenanceLoop } from "./dispatch/maintenance.js";
 import { DispatcherWorker, OpenCodeExecutionAttemptRunner } from "./dispatch/worker.js";
-import { createOpenApiApp, mountHealthRoute, mountOpenApiDocs } from "./openapi.js";
+import { createOpenApiApp, mountHealthRoute, mountMetricsRoute, mountOpenApiDocs } from "./openapi.js";
 import { createRuntimeStore } from "./runtime/store.js";
 import { createKubeConfig } from "./sandbox/client.js";
 import { SandboxClaimExecutionAttemptProvisioner } from "./sandbox/provisioner.js";
@@ -16,9 +16,11 @@ import { GitHubIssueAcknowledgmentTransport, GITHUB_ISSUE_REACTION_TOPIC } from 
 import { OutboxPublisher } from "./outbox/publisher.js";
 import { runOutboxPublisherLoop } from "./outbox/worker.js";
 import { ScheduleWorker } from "./schedule/worker.js";
+import { metricsRegistry, registerDatabaseMetrics, workerLoopFailures } from "./observability/metrics.js";
 
 const config = loadConfig();
 const runtimeStore = await createRuntimeStore();
+registerDatabaseMetrics(runtimeStore);
 const provisioner = config.executionMaintenanceEnabled || config.dispatcherEnabled
   ? new SandboxClaimExecutionAttemptProvisioner(createKubeConfig(), config)
   : undefined;
@@ -39,6 +41,7 @@ const scheduleTask = config.scheduleWorkerEnabled
     }).run(scheduleController.signal)
   : Promise.resolve();
 const scheduler = scheduleTask.catch((error: unknown) => {
+  workerLoopFailures.inc({ component: "schedule" });
   logger.error("schedule worker stopped unexpectedly", { error });
 });
 const acknowledgmentTask = config.githubIssueAcknowledgmentEnabled
@@ -61,6 +64,7 @@ const acknowledgmentTask = config.githubIssueAcknowledgmentEnabled
     })
   : Promise.resolve();
 const acknowledgment = acknowledgmentTask.catch((error: unknown) => {
+  workerLoopFailures.inc({ component: "github-acknowledgment" });
   logger.error("GitHub issue acknowledgment worker stopped unexpectedly", { error });
 });
 const revisionTask = config.revisionResolverEnabled
@@ -79,6 +83,7 @@ const revisionTask = config.revisionResolverEnabled
     }).run(revisionController.signal)
   : Promise.resolve();
 const revisionResolver = revisionTask.catch((error: unknown) => {
+  workerLoopFailures.inc({ component: "revision-resolution" });
   logger.error("revision resolution worker stopped unexpectedly", { error });
 });
 const maintenanceTask = config.executionMaintenanceEnabled
@@ -93,6 +98,7 @@ const maintenanceTask = config.executionMaintenanceEnabled
     })
   : Promise.resolve();
 const maintenance = maintenanceTask.catch((error: unknown) => {
+  workerLoopFailures.inc({ component: "execution-maintenance" });
   logger.error("execution maintenance loop stopped unexpectedly", { error });
 });
 const dispatcherTask = config.dispatcherEnabled
@@ -114,11 +120,14 @@ const dispatcherTask = config.dispatcherEnabled
     }).run(dispatcherController.signal)
   : Promise.resolve();
 const dispatcher = dispatcherTask.catch((error: unknown) => {
+  workerLoopFailures.inc({ component: "dispatcher" });
   logger.error("dispatcher worker stopped unexpectedly", { error });
 });
 const app = createOpenApiApp();
+const metricsApp = createOpenApiApp();
 
 mountHealthRoute(app);
+mountMetricsRoute(metricsApp, metricsRegistry);
 mountControlApi(app, config, runtimeStore);
 mountGitHubWebhookApi(app, runtimeStore, undefined, undefined, config.githubIssueAcknowledgmentEnabled);
 mountGitHubEffectsApi(app, runtimeStore);
@@ -126,6 +135,9 @@ mountOpenApiDocs(app);
 
 const server = serve({ fetch: (request) => app.fetch(request), port: config.port }, (info) => {
   logger.info("agentbay listening", { port: info.port });
+});
+const metricsServer = serve({ fetch: (request) => metricsApp.fetch(request), port: config.metricsPort ?? 9090 }, (info) => {
+  logger.info("agentbay metrics listening", { port: info.port });
 });
 
 let shutdownPromise: Promise<void> | undefined;
@@ -143,7 +155,8 @@ async function performShutdown(signal: string): Promise<void> {
   acknowledgmentController.abort();
   scheduleController.abort();
   const serverClosed = new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  await serverClosed;
+  const metricsServerClosed = new Promise<void>((resolve, reject) => metricsServer.close((error) => error ? reject(error) : resolve()));
+  await Promise.all([serverClosed, metricsServerClosed]);
   await Promise.all([maintenance, dispatcher, revisionResolver, acknowledgment, scheduler]);
   await runtimeStore.close();
 }

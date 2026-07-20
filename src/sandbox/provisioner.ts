@@ -4,6 +4,7 @@ import { buildOpencodeConfigContent } from "../agent/config.js";
 import type { Config } from "../config.js";
 import type { RequestedCancellationCleanup } from "../dispatch/types.js";
 import { logger } from "../logger.js";
+import { sandboxClaims } from "../observability/metrics.js";
 import { claimNameForExecutionAttempt } from "./naming.js";
 import type {
   ExecutionAttemptEndpoint,
@@ -81,8 +82,12 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
           plural: PLURAL,
           body: this.buildClaim(input, claimName, password, ownership),
         })) as SandboxClaim;
+        sandboxClaims.inc({ tenant: input.tenantId, profile_id: input.profileVersion.profileId, operation: "created", result: "succeeded" });
       } catch (error) {
-        if (!isConflict(error)) throw error;
+        if (!isConflict(error)) {
+          sandboxClaims.inc({ tenant: input.tenantId, profile_id: input.profileVersion.profileId, operation: "created", result: "failed" });
+          throw error;
+        }
         claim = await this.getClaim(claimName);
         if (!claim) throw error;
         assertOwnership(claim, ownership);
@@ -205,7 +210,13 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
       if (!isNotFound(error)) throw error;
       return;
     }
-    await this.waitForDeleted(claimName, signal);
+    try {
+      await this.waitForDeleted(claimName, signal);
+      sandboxClaims.inc({ tenant: input.tenantId, profile_id: input.profileVersion.profileId, operation: "released", result: "succeeded" });
+    } catch (error) {
+      sandboxClaims.inc({ tenant: input.tenantId, profile_id: input.profileVersion.profileId, operation: "released", result: "failed" });
+      throw error;
+    }
   }
 
   async releaseCancelledExecution(candidate: RequestedCancellationCleanup, signal: AbortSignal): Promise<void> {

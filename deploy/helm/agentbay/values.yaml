@@ -58,6 +58,32 @@ service:
   type: ClusterIP
   # -- Service port exposed in front of the orchestrator HTTP listener.
   port: 80
+  # -- Internal metrics Service port. This port is not added to the Ingress.
+  metricsPort: 9090
+
+observability:
+  # -- Add Prometheus scrape annotations to the orchestrator Pod.
+  podAnnotations:
+    enabled: false
+    interval: 30s
+  serviceMonitor:
+    # -- Create a monitoring.coreos.com ServiceMonitor when the CRD is installed.
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+  prometheusRule:
+    # -- Create initial actionable alerts when the CRD is installed.
+    enabled: false
+    labels: {}
+    outboxMaxAgeSeconds: 600
+    scheduleMissedIntervals: 2
+    for: 5m
+  dashboard:
+    # -- Create a Grafana sidecar-discovered dashboard ConfigMap.
+    enabled: false
+    labels:
+      grafana_dashboard: "1"
 
 ingress:
   # -- Whether to create an Ingress for the execution API.
