@@ -82,6 +82,8 @@ The triager must apply the difficulty label before the final ready label. Each
 developer binding requires both, preventing dispatch from an intermediate
 label event.
 
+Replaying the `agentbay/state:ready` label while a developer lifecycle is already active does not create another execution or pull request.
+
 ## Capabilities
 
 Profiles authorize `github-token-broker`, which injects short-lived,
