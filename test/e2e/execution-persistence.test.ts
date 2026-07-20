@@ -114,6 +114,7 @@ describe("execution persistence", () => {
     const command = {
       ...freshAdmissionCommand(),
       githubIssueAcknowledgment: {
+        subjectType: "issue" as const,
         installationId: 44,
         repositoryId: 10,
         repositoryFullName: "acme/widgets",
@@ -133,7 +134,7 @@ describe("execution persistence", () => {
     expect(reaction).toMatchObject({
       aggregateId: command.internalEventId,
       aggregateType: "github-issue-reaction",
-      payload: expect.objectContaining({ content: "eyes", issueNumber: 7 }),
+      payload: expect.objectContaining({ content: "eyes", issueNumber: 7, subjectType: "issue" }),
     });
     expect(await store.markPublished({ id: reaction!.id, claimToken: reaction!.claimToken })).toBe(true);
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: "ready-worker", leaseDurationMs: 60_000 });
