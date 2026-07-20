@@ -22,6 +22,7 @@ const supportedActions: Record<GitHubEventName, ReadonlySet<string>> = {
   ]),
   pull_request_review: new Set(["submitted", "edited", "dismissed"]),
   pull_request_review_comment: new Set(["created", "edited", "deleted"]),
+  workflow_run: new Set(["completed"]),
 } as const;
 
 const bounded = (limit: number) => z.string().min(1).refine((value) => Buffer.byteLength(value, "utf8") <= limit);
@@ -135,6 +136,25 @@ const pullRequestReviewPayloadSchema = z.object({
   review: reviewSchema,
 });
 const pullRequestReviewCommentPayloadSchema = z.object({ ...commonPayloadShape, pull_request: pullRequestSchema, comment: reviewCommentSchema });
+const workflowRunPayloadSchema = z.object({
+  ...commonPayloadShape,
+  workflow_run: z.object({
+    id,
+    name: bounded(255),
+    event: bounded(64),
+    status: z.literal("completed"),
+    conclusion: z.enum(["action_required", "cancelled", "failure", "neutral", "skipped", "stale", "startup_failure", "success", "timed_out"]),
+    head_sha: sha,
+    head_branch: bounded(255).nullable(),
+    head_repository: gitRepositorySchema,
+    pull_requests: z.array(z.object({
+      id,
+      number: z.number().int().positive(),
+      head: z.object({ ref: bounded(255), sha }),
+      base: z.object({ ref: bounded(255), sha }),
+    })).max(100),
+  }),
+});
 const envelopeSchema = z.object({ action: bounded(64) });
 
 function agentbayReviewVerdict(body: string | null): "approved" | "changes_requested" | undefined {
@@ -142,7 +162,7 @@ function agentbayReviewVerdict(body: string | null): "approved" | "changes_reque
   return match?.[1] as "approved" | "changes_requested" | undefined;
 }
 
-export type GitHubEventName = "issues" | "issue_comment" | "pull_request" | "pull_request_review" | "pull_request_review_comment";
+export type GitHubEventName = "issues" | "issue_comment" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "workflow_run";
 
 export type NormalizeGitHubEventInput = {
   event: GitHubEventName;
@@ -245,7 +265,7 @@ function normalizedPullRequest(pullRequest: z.infer<typeof pullRequestSchema>) {
 }
 
 export function normalizeGitHubEvent(input: NormalizeGitHubEventInput): NormalizedCloudEvent | null {
-  const event = z.enum(["issues", "issue_comment", "pull_request", "pull_request_review", "pull_request_review_comment"]).parse(input.event);
+  const event = z.enum(["issues", "issue_comment", "pull_request", "pull_request_review", "pull_request_review_comment", "workflow_run"]).parse(input.event);
   const action = envelopeSchema.parse(input.payload).action;
   if (!supportedActions[event].has(action)) return null;
 
@@ -257,7 +277,9 @@ export function normalizeGitHubEvent(input: NormalizeGitHubEventInput): Normaliz
         ? pullRequestPayloadSchema.parse(input.payload)
         : event === "pull_request_review"
           ? pullRequestReviewPayloadSchema.parse(input.payload)
-          : pullRequestReviewCommentPayloadSchema.parse(input.payload);
+          : event === "pull_request_review_comment"
+            ? pullRequestReviewCommentPayloadSchema.parse(input.payload)
+            : workflowRunPayloadSchema.parse(input.payload);
   if (payload.action !== action) throw new Error("GitHub payload action changed during normalization");
 
   const repository = {
@@ -276,7 +298,7 @@ export function normalizeGitHubEvent(input: NormalizeGitHubEventInput): Normaliz
     sender: actor(payload.sender),
   };
 
-  let subject: string;
+  let subject: string | undefined;
   const data = event === "issues"
     ? (() => {
         const issue = (payload as z.infer<typeof issuesPayloadSchema>).issue;
@@ -324,7 +346,8 @@ export function normalizeGitHubEvent(input: NormalizeGitHubEventInput): Normaliz
                 },
               };
             })()
-          : (() => {
+          : event === "pull_request_review_comment"
+            ? (() => {
               const value = payload as z.infer<typeof pullRequestReviewCommentPayloadSchema>;
               subject = `pulls/${value.pull_request.number}`;
               return {
@@ -344,7 +367,44 @@ export function normalizeGitHubEvent(input: NormalizeGitHubEventInput): Normaliz
                   updatedAt: value.comment.updated_at,
                 },
               };
-            })();
+            })()
+            : (() => {
+                const value = payload as z.infer<typeof workflowRunPayloadSchema>;
+                const run = value.workflow_run;
+                if (run.pull_requests.length !== 1) return null;
+                const pullRequest = run.pull_requests[0]!;
+                if (pullRequest.head.sha !== run.head_sha) return null;
+                subject = `pulls/${pullRequest.number}`;
+                return {
+                  ...common,
+                  pullRequest: {
+                    id: pullRequest.id,
+                    number: pullRequest.number,
+                    head: {
+                      ref: pullRequest.head.ref,
+                      sha: pullRequest.head.sha,
+                      repository: {
+                        id: run.head_repository.id,
+                        fullName: run.head_repository.full_name,
+                        cloneUrl: cloneUrl(run.head_repository),
+                      },
+                    },
+                    base: { ref: pullRequest.base.ref, sha: pullRequest.base.sha },
+                  },
+                  workflowRun: {
+                    id: run.id,
+                    name: run.name,
+                    event: run.event,
+                    status: run.status,
+                    conclusion: run.conclusion,
+                    headSha: run.head_sha,
+                    headBranch: run.head_branch,
+                  },
+                };
+              })();
+
+  if (data === null) return null;
+  if (!subject) throw new Error("GitHub event subject was not projected");
 
   return normalizedCloudEventSchema.parse({
     specversion: "1.0",

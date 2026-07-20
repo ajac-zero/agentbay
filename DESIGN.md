@@ -1116,16 +1116,16 @@ Later, one global control plane may route to multiple execution clusters. Each c
 
 ### 19.1 Pull-request review
 
-1. GitHub sends `pull_request.opened`.
-2. The GitHub connector verifies the signature and normalizes a CloudEvent.
-3. A binding matches the repository and action.
-4. The planner resolves `security-reviewer@12`, renders input, and writes an execution plus outbox event.
-5. A dispatcher admits the execution under tenant and GitHub connection quotas.
-6. The workspace provider clones the exact head SHA with read-only credentials.
-7. OpenCode reviews the repository in an isolated sandbox.
-8. The result collector stores findings and a report artifact.
-9. A GitHub destination publishes a Check Run with inline annotations.
-10. A later `synchronize` event supersedes any queued review of the previous SHA.
+1. GitHub sends `pull_request.opened`; CI starts, but Agentbay creates no reviewer execution or sandbox.
+2. The canonical CI workflow reaches a terminal state and GitHub sends `workflow_run.completed` for one pull request and exact head SHA.
+3. The GitHub connector verifies the signature and normalizes a CloudEvent containing the workflow conclusion, PR number, and immutable head revision.
+4. A binding matches the repository, workflow name, and pull-request event source. Its active singleton is keyed by repository ID, PR number, and head SHA.
+5. The planner resolves `security-reviewer@12`, renders input, and writes one one-shot execution plus outbox event.
+6. A dispatcher admits the execution under tenant and GitHub connection quotas.
+7. The workspace provider clones the exact workflow head SHA with read-only credentials.
+8. OpenCode reviews the repository and completed CI evidence in an isolated sandbox, then submits a SHA-bound native review.
+9. A later push runs CI again and can create a distinct reviewer only after that revision's terminal workflow event; stale workflow events remain bound to their old SHA.
+10. A native approval starts a separate fenced merger execution, and GitHub branch protection remains the final merge authority.
 
 ### 19.2 Grafana alert diagnosis
 

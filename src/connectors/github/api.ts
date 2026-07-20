@@ -22,6 +22,7 @@ const supportedEvents = new Set<GitHubEventName>([
   "pull_request",
   "pull_request_review",
   "pull_request_review_comment",
+  "workflow_run",
 ]);
 
 export type GitHubWebhookApiStore = TriggerStore & EventAdmissionStore;

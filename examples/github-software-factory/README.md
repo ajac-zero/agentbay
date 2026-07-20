@@ -15,13 +15,14 @@ the generic `contains` array predicate. They demonstrate:
 3. `issues.labeled` selects exactly one developer profile.
 4. All difficulty bindings share an active singleton keyed by repository ID and issue number, so later ready-label deliveries cannot create a second developer lifecycle while the first is nonterminal.
 5. The broker attributes the developer's primary PR through a fenced mutation receipt and matching signed webhook.
-6. `pull_request.opened` starts one separate reviewer lifecycle.
-7. A separate reviewer GitHub App submits a native `APPROVED` or `CHANGES_REQUESTED` review.
-8. A native change request from that reviewer App wakes the developer at the reviewed head SHA.
-9. `pull_request.synchronize` coalesces the latest revision into the reviewer lifecycle.
-10. An approval from the pinned reviewer App starts a least-privilege merger execution.
-11. The merger verifies the reviewed SHA is still the PR head, then asks GitHub to merge through repository protection.
-12. A merged `pull_request.closed` event terminally completes both independent lifecycles.
+6. `pull_request.opened` starts CI but does not provision a reviewer sandbox.
+7. The canonical `CI` workflow's terminal event starts one one-shot reviewer execution for its exact head SHA.
+8. A separate reviewer GitHub App submits a native `APPROVED` or `CHANGES_REQUESTED` review after considering code and CI.
+9. A native change request from that reviewer App wakes the developer at the reviewed head SHA.
+10. A new push starts CI again; only that revision's terminal workflow event can resume review.
+11. An approval from the pinned reviewer App starts a least-privilege merger execution.
+12. The merger verifies the reviewed SHA is still the PR head, then asks GitHub to merge through repository protection.
+13. A merged `pull_request.closed` event terminally completes the developer lifecycle.
 
 The GitHub connector also normalizes issue comments, pull-request reviews, and
 pull-request review comments for later continuation matching.
@@ -40,15 +41,13 @@ and the default branch, and persists its exact commit before creating any
 execution. The binding selects `/repository/defaultBranchRevision/commit`; it
 never uses a mutable branch name.
 
-## Durable Reviewer Continuations
+## Deferred One-Shot Reviews
 
-Durable wake bindings consume active waits atomically during normal event
-admission. GitHub PR events provide safe repository ID plus pull request number
-correlation. A PR opened event creates one reviewer lifecycle. Synchronize
-events received while its turn is queued or running are durably coalesced, and
-the latest event's exact head SHA becomes the next immutable turn workspace.
-A merged close event dominates pending synchronize events and completes the
-lifecycle after the current fenced turn reaches a successful boundary.
+PR open and synchronize events never create reviewer executions. A terminal
+canonical CI workflow event creates a one-shot reviewer for its exact head SHA.
+The active singleton key includes repository ID, PR number, and SHA, preventing
+concurrent duplicate review executions for one revision. A later revision runs
+CI again and creates a distinct one-shot reviewer only after that run completes.
 
 The developer and reviewer remain separate executions. The issue-origin
 developer context starts with repository ID and an empty supplied PR-number
@@ -74,11 +73,11 @@ pull_request_review.submitted where review.state=approved
   and review.commitSha exists
   -> create a merger execution that validates the current head and calls GitHub's merge API
 
-pull_request.synchronize or issue_comment.created
-  -> wake the reviewer wait correlated by repository ID and PR number
+workflow_run.completed where workflowRun.name=CI
+  -> create a one-shot reviewer execution for repository ID, PR number, and head SHA
 
 pull_request.closed
-  -> cancel all active waits for that correlation key
+  -> complete the developer wait for that correlation key
 ```
 
 The developer and reviewer use separate GitHub Apps. The developer App authors
