@@ -113,6 +113,15 @@ allows only its exact role tools:
 | Developer | Read issue/PR, create branch, write content, create/update PR, comment |
 | Reviewer | Read PR/diff/checks, create review and review comments |
 
+The deployed developer tiers may use distinct models while retaining separate
+immutable profiles and a common capability ceiling:
+
+| Difficulty | Model |
+|---|---|
+| Easy | `gateway/claude-sonnet-5` |
+| Medium | `gateway/claude-opus-4-7` |
+| Hard | `gateway/claude-fable-5` |
+
 `sandbox-templates.values.yaml` supplies one template per role with only that role's exact official-server
 `--tools` allow-list. This is required, not optional: containers in one Pod
 share loopback, so OpenCode permissions alone cannot prevent a process from
