@@ -58,9 +58,29 @@ jobs:
         id: checks
         continue-on-error: true
         env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           GH_TOKEN: ${{ github.token }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr checks "$PR_URL" --required --watch --fail-fast --interval 10
+        run: |
+          set -euo pipefail
+          required=(CI 'Dependency Review' CodeQL)
+          for _ in {1..90}; do
+            checks="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${EXPECTED_HEAD}/check-runs?per_page=100")"
+            waiting=false
+            for name in "${required[@]}"; do
+              state="$(jq -r --arg name "$name" '[.check_runs[] | select(.name == $name)] | if length == 0 then "missing" elif any(.conclusion == "success") then "success" elif any(.status != "completed") then "pending" else "failed" end' <<<"$checks")"
+              if [[ "$state" == failed ]]; then
+                exit 1
+              fi
+              if [[ "$state" != success ]]; then
+                waiting=true
+              fi
+            done
+            if [[ "$waiting" == false ]]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
 
       - name: Revalidate and approve exact head
         if: steps.classify.outcome == 'success' && steps.classify.outputs.eligible == 'true' && steps.checks.outcome == 'success'
