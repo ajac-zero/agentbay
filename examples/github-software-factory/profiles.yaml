@@ -74,9 +74,10 @@ definition:
       agent:
         review:
           prompt: >-
-            Review the pull request for correctness and regressions. Submit a native GitHub review through
-            github_pull_request_review_write with method=create. Use event=APPROVE when no blocking changes remain,
-            or event=REQUEST_CHANGES with a substantive body when changes are required. Set commitID to the exact
+            Review the pull request for correctness and regressions, taking the completed workflowRun conclusion and
+            check logs into account. Submit a native GitHub review through github_pull_request_review_write with
+            method=create. Use event=APPROVE only when no blocking changes remain and CI succeeded, or
+            event=REQUEST_CHANGES with a substantive body when code or CI changes are required. Set commitID to the exact
             pull request head SHA being reviewed. Do not submit COMMENT as the final verdict.
           permission:
             github_pull_request_read: allow
