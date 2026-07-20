@@ -35,6 +35,8 @@ const config: Config = {
   githubIssueAcknowledgmentLeaseDurationMs: 60_000,
   githubIssueAcknowledgmentRequestTimeoutMs: 30_000,
   githubIssueAcknowledgmentRetryDelayMs: 5_000,
+  scheduleWorkerEnabled: false, scheduleWorkerIdlePollMs: 1_000, scheduleWorkerLeaseDurationMs: 60_000,
+  scheduleWorkerRetryDelayMs: 30_000, scheduleWorkerMaxAttempts: 5, scheduleWorkerMaterializeBatchSize: 100, scheduleWorkerId: "test-worker",
   revisionResolverEnabled: false,
   revisionResolverIdlePollMs: 500,
   revisionResolverLeaseDurationMs: 60_000,

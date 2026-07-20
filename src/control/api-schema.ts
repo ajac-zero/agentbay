@@ -1,6 +1,7 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { bindingDefinitionSchema } from "./binding.js";
 import { executionSchema, idempotencyKeySchema, profileRefSchema, simpleIdSchema, versionSchema } from "../execution/api-schema.js";
+import { scheduleCronTriggerConfigSchema } from "./trigger.js";
 
 const errorSchema = z.object({ error: z.string().min(1) }).strict();
 const workspaceResolutionErrorSchema = z.object({
@@ -21,10 +22,12 @@ const triggerFields = {
 const triggerSchema = z.discriminatedUnion("type", [
   z.object({ ...triggerFields, type: z.literal("cloudevents.http"), config: cloudEventsHttpTriggerConfigSchema }).strict(),
   z.object({ ...triggerFields, type: z.literal("github.app.webhook"), config: githubAppWebhookTriggerConfigSchema }).strict(),
+  z.object({ ...triggerFields, type: z.literal("schedule.cron"), config: scheduleCronTriggerConfigSchema }).strict(),
 ]).openapi("Trigger");
 const createTriggerRequestSchema = z.discriminatedUnion("type", [
   z.object({ id: simpleIdSchema, type: z.literal("cloudevents.http"), config: cloudEventsHttpTriggerConfigSchema }).strict(),
   z.object({ id: simpleIdSchema, type: z.literal("github.app.webhook"), config: githubAppWebhookTriggerConfigSchema }).strict(),
+  z.object({ id: simpleIdSchema, type: z.literal("schedule.cron"), config: scheduleCronTriggerConfigSchema }).strict(),
 ]);
 const githubWebhookSecretUnavailableSchema = z.object({
   error: z.literal("GitHub webhook secret unavailable"),

@@ -15,6 +15,7 @@ import { RevisionResolutionWorker } from "./revision/worker.js";
 import { GitHubIssueAcknowledgmentTransport, GITHUB_ISSUE_REACTION_TOPIC } from "./connectors/github/issue-acknowledgment.js";
 import { OutboxPublisher } from "./outbox/publisher.js";
 import { runOutboxPublisherLoop } from "./outbox/worker.js";
+import { ScheduleWorker } from "./schedule/worker.js";
 
 const config = loadConfig();
 const runtimeStore = await createRuntimeStore();
@@ -25,6 +26,21 @@ const dispatcherController = new AbortController();
 const maintenanceController = new AbortController();
 const revisionController = new AbortController();
 const acknowledgmentController = new AbortController();
+const scheduleController = new AbortController();
+const scheduleTask = config.scheduleWorkerEnabled
+  ? new ScheduleWorker({
+      store: runtimeStore,
+      workerId: config.scheduleWorkerId,
+      leaseDurationMs: config.scheduleWorkerLeaseDurationMs,
+      idlePollMs: config.scheduleWorkerIdlePollMs,
+      retryDelayMs: config.scheduleWorkerRetryDelayMs,
+      maxAttempts: config.scheduleWorkerMaxAttempts,
+      materializeBatchSize: config.scheduleWorkerMaterializeBatchSize,
+    }).run(scheduleController.signal)
+  : Promise.resolve();
+const scheduler = scheduleTask.catch((error: unknown) => {
+  logger.error("schedule worker stopped unexpectedly", { error });
+});
 const acknowledgmentTask = config.githubIssueAcknowledgmentEnabled
   ? runOutboxPublisherLoop({
       publisher: new OutboxPublisher({
@@ -125,9 +141,10 @@ async function performShutdown(signal: string): Promise<void> {
   dispatcherController.abort();
   revisionController.abort();
   acknowledgmentController.abort();
+  scheduleController.abort();
   const serverClosed = new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   await serverClosed;
-  await Promise.all([maintenance, dispatcher, revisionResolver, acknowledgment]);
+  await Promise.all([maintenance, dispatcher, revisionResolver, acknowledgment, scheduler]);
   await runtimeStore.close();
 }
 

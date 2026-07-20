@@ -80,6 +80,40 @@ export const triggers = pgTable("agentbay_triggers", {
   index("agentbay_triggers_tenant_type_enabled_idx").on(table.tenantID, table.type, table.enabled),
 ]);
 
+export const scheduleStates = pgTable("agentbay_schedule_states", {
+  tenantID: text("tenant_id").notNull(),
+  triggerID: text("trigger_id").notNull(),
+  nextFireAt: timestamp("next_fire_at", { withTimezone: true }).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ columns: [table.tenantID, table.triggerID], name: "agentbay_schedule_states_pk" }),
+  foreignKey({ columns: [table.triggerID, table.tenantID], foreignColumns: [triggers.id, triggers.tenantID], name: "agentbay_schedule_states_trigger_fk" }).onDelete("cascade"),
+  index("agentbay_schedule_states_due_idx").on(table.nextFireAt),
+]);
+
+export const scheduleOccurrences = pgTable("agentbay_schedule_occurrences", {
+  id: text("id").primaryKey(),
+  tenantID: text("tenant_id").notNull(),
+  triggerID: text("trigger_id").notNull(),
+  scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
+  state: text("state").notNull().default("PENDING"),
+  attempt: integer("attempt").notNull().default(0),
+  availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+  leaseOwner: text("lease_owner"),
+  leaseToken: text("lease_token"),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  lastError: text("last_error"),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  foreignKey({ columns: [table.triggerID, table.tenantID], foreignColumns: [triggers.id, triggers.tenantID], name: "agentbay_schedule_occurrences_trigger_fk" }).onDelete("cascade"),
+  uniqueIndex("agentbay_schedule_occurrences_trigger_time_unique").on(table.tenantID, table.triggerID, table.scheduledAt),
+  index("agentbay_schedule_occurrences_available_idx").on(table.state, table.availableAt),
+  check("agentbay_schedule_occurrences_state", sql`${table.state} IN ('PENDING','LEASED','RETRY_WAIT','SUCCEEDED','DEAD_LETTERED')`),
+  check("agentbay_schedule_occurrences_attempt_nonnegative", sql`${table.attempt} >= 0`),
+]);
+
 export const bindingVersions = pgTable("agentbay_binding_versions", {
   bindingID: text("binding_id").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
