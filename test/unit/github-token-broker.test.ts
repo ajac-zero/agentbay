@@ -133,6 +133,25 @@ describe("GitHub token broker", () => {
     expect(provider.invalidate).toHaveBeenCalledWith("ghs_1");
   });
 
+  it("forwards only the fixed MCP root endpoint", async () => {
+    let upstreamCalls = 0;
+    const upstream = await listen(http.createServer((_request, response) => {
+      upstreamCalls += 1;
+      response.writeHead(200).end();
+    }));
+    running.push(upstream);
+    const broker = await startBroker(
+      { upstream: `http://127.0.0.1:${upstream.port}/`, host: "127.0.0.1", port: 0 },
+      { getToken: async () => "ghs", invalidate: () => {} },
+    );
+    running.push(broker);
+    const port = (broker.server.address() as AddressInfo).port;
+
+    expect((await fetch(`http://127.0.0.1:${port}/other`)).status).toBe(502);
+    expect((await fetch(`http://127.0.0.1:${port}//127.0.0.1:1/`)).status).toBe(502);
+    expect(upstreamCalls).toBe(0);
+  });
+
   it("creates a signed GitHub App JWT", () => {
     const jwt = createGitHubAppJwt({ appId: 10, privateKey: pem, now: () => Date.parse("2026-07-19T01:00:00Z") });
     expect(jwt.split(".")).toHaveLength(3);
