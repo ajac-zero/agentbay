@@ -191,6 +191,8 @@ export const eventRevisionResolutions = pgTable("agentbay_event_revision_resolut
 
 export const executions = pgTable("agentbay_executions", {
   availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+  activeSingletonKey: text("active_singleton_key"),
+  activeSingletonName: text("active_singleton_name"),
   bindingVersionID: text("binding_version_id").notNull(),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   currentInputSequence: integer("current_input_sequence").notNull().default(1),
@@ -211,6 +213,7 @@ export const executions = pgTable("agentbay_executions", {
 }, (table) => [
   check("agentbay_executions_state_valid", sql`${table.state} IN ('RECEIVED', 'PLANNED', 'QUEUED', 'PROVISIONING', 'RUNNING', 'WAITING', 'SUCCEEDED', 'DELIVERING', 'COMPLETED', 'RETRY_WAIT', 'AWAITING_APPROVAL', 'CANCEL_REQUESTED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')`),
   check("agentbay_executions_current_input_sequence_positive", sql`${table.currentInputSequence} > 0`),
+  check("agentbay_executions_active_singleton_pair", sql`(${table.activeSingletonName} IS NULL) = (${table.activeSingletonKey} IS NULL)`),
   foreignKey({
     columns: [table.bindingVersionID, table.tenantID],
     foreignColumns: [bindingVersions.id, bindingVersions.tenantID],
@@ -228,6 +231,9 @@ export const executions = pgTable("agentbay_executions", {
   }),
   uniqueIndex("agentbay_executions_tenant_idempotency_unique").on(table.tenantID, table.idempotencyKey),
   uniqueIndex("agentbay_executions_tenant_event_binding_unique").on(table.tenantID, table.eventID, table.bindingVersionID),
+  uniqueIndex("agentbay_executions_active_singleton_unique")
+    .on(table.tenantID, table.activeSingletonName, table.activeSingletonKey)
+    .where(sql`${table.activeSingletonKey} IS NOT NULL AND ${table.state} NOT IN ('COMPLETED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')`),
   unique("agentbay_executions_id_tenant_unique").on(table.id, table.tenantID),
   index("agentbay_executions_tenant_binding_created_idx").on(table.tenantID, table.bindingVersionID, table.createdAt),
   index("agentbay_executions_tenant_event_idx").on(table.tenantID, table.eventID),

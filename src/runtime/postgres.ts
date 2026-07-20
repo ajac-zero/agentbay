@@ -48,7 +48,7 @@ import {
   type RequestExecutionCancellationCommand,
   type RequestExecutionCancellationResult,
 } from "../execution/types.js";
-import { planExecution, projectWakeCorrelation, renderPromptInput, type AdmissionCommand, type AdmissionResult, type AdmissionWakeResult, type PendingWakeResult } from "../control/admission.js";
+import { planExecution, projectActiveSingleton, projectWakeCorrelation, renderPromptInput, type AdmissionCommand, type AdmissionResult, type AdmissionWakeResult, type PendingWakeResult } from "../control/admission.js";
 import {
   ConnectionAlreadyExistsError,
   ConnectionNotFoundError,
@@ -334,7 +334,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
             schemaVersion: definition.schemaVersion,
             ...("disposition" in definition
               ? { disposition: definition.disposition, wake: definition.wake }
-              : { workspace: definition.workspace, prompt: definition.prompt, afterTurn: definition.afterTurn }),
+              : { workspace: definition.workspace, prompt: definition.prompt, afterTurn: definition.afterTurn, activeSingleton: definition.activeSingleton }),
           }), definition.eventTypes, publishedAt],
       });
       if (inserted.rowCount !== 1) throw new BindingVersionAlreadyExistsError(binding.bindingId, binding.version);
@@ -571,21 +571,40 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
 
   private async createExecutions(client: pg.PoolClient, command: AdmissionCommand, rows: BindingProfileRow[]): Promise<Execution[]> {
     const created: Execution[] = [];
-    for (const row of rows) {
+    const plans = rows.flatMap((row) => {
       const binding = bindingFromRow(row);
       const planned = planExecution(binding, command);
-      if (!planned) continue;
+      if (!planned || "disposition" in binding.definition) return [];
+      const singleton = projectActiveSingleton(binding.definition, command.event);
+      return [{ row, binding, planned, singleton: singleton ? { ...singleton, key: hashCanonicalJson(singleton.values) } : undefined }];
+    });
+    const singletonLocks = [...new Set(plans.flatMap((plan) => plan.singleton
+      ? [`active-execution-singleton:${command.tenantId}:${plan.singleton.name}:${plan.singleton.key}`]
+      : []))].sort();
+    for (const lock of singletonLocks) {
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lock]);
+    }
+    for (const { row, binding, planned, singleton } of plans) {
+      if (singleton) {
+        const owner = await client.query(`SELECT 1 FROM agentbay_executions
+          WHERE tenant_id = $1 AND active_singleton_name = $2 AND active_singleton_key = $3
+            AND state NOT IN ('COMPLETED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')
+          LIMIT 1`, [command.tenantId, singleton.name, singleton.key]);
+        if (owner.rowCount) continue;
+      }
       const now = new Date(command.admittedAt);
       const executionId = randomUUID();
       const execution = await client.query<ExecutionJoinedRow>({
         text: `INSERT INTO agentbay_executions
-          (id, tenant_id, event_id, binding_version_id, profile_version_id, idempotency_key, request_hash, input,
+          (id, tenant_id, event_id, binding_version_id, profile_version_id, idempotency_key, request_hash,
+           active_singleton_name, active_singleton_key, input,
            workspace, resolved_policy, state, timeout_at, created_at, updated_at, available_at)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,'QUEUED',$11,$12,$12,$12)
-          RETURNING *, $13::text AS binding_id, $14::integer AS binding_version,
-            $15::text AS profile_id, $16::integer AS profile_version`,
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,'QUEUED',$13,$14,$14,$14)
+          RETURNING *, $15::text AS binding_id, $16::integer AS binding_version,
+            $17::text AS profile_id, $18::integer AS profile_version`,
         values: [executionId, command.tenantId, command.internalEventId, row.id, row.profile_version_id,
-          planned.id, command.admissionHash, JSON.stringify(planned.input), JSON.stringify(planned.workspace),
+          planned.id, command.admissionHash, singleton?.name ?? null, singleton?.key ?? null,
+          JSON.stringify(planned.input), JSON.stringify(planned.workspace),
           JSON.stringify(row.profile_definition), new Date(now.getTime() + profileTimeoutSeconds(row.profile_definition) * 1_000), now,
           row.binding_id, row.version, planned.profile.id, planned.profile.version],
       });
@@ -2484,7 +2503,7 @@ function bindingFromRow(row: BindingRow): PublishedBindingVersion {
     eventTypes: row.event_types,
     ...(persisted.disposition === "wake"
       ? { disposition: persisted.disposition, wake: persisted.wake }
-      : { afterTurn: persisted.afterTurn, prompt: persisted.prompt, workspace: persisted.workspace }),
+      : { activeSingleton: persisted.activeSingleton, afterTurn: persisted.afterTurn, prompt: persisted.prompt, workspace: persisted.workspace }),
   });
   return {
     bindingId: row.binding_id,

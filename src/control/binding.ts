@@ -44,6 +44,11 @@ const eventMatchSchema = {
   filter: z.object({ all: z.array(filterClauseSchema).max(16) }).strict(),
 };
 
+const activeSingletonSchema = z.object({
+  name: simpleIdSchema,
+  key: z.array(jsonPointerSchema).min(1).max(16),
+}).strict();
+
 export const promptSchema = z
   .object({
     literal: z.string().refine((value) => Buffer.byteLength(value, "utf8") <= MAX_PROMPT_BYTES, `must be at most ${MAX_PROMPT_BYTES} bytes`),
@@ -57,6 +62,7 @@ export const createBindingDefinitionSchema = z
     prompt: promptSchema,
     workspace: bindingWorkspaceSchema,
     afterTurn: afterTurnSchema.optional(),
+    activeSingleton: activeSingletonSchema.optional(),
   })
   .strict();
 

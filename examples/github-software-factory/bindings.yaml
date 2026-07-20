@@ -26,6 +26,9 @@ definition:
       - { path: /repository/fullName, op: eq, value: acme/agentbay }
       - { path: /issue/labels, op: contains, value: "agentbay/state:ready" }
       - { path: /issue/labels, op: contains, value: "agentbay/difficulty:easy" }
+  activeSingleton:
+    name: developer-issue
+    key: [/repository/id, /issue/number]
   prompt: { literal: Implement the ready issue and open a pull request., includeEvent: data }
   workspace:
     type: git
