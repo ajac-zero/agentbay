@@ -127,10 +127,31 @@ definition:
       - { path: /workflowRun/name, op: eq, value: CI }
       - { path: /workflowRun/event, op: eq, value: pull_request }
       - { path: /workflowRun/status, op: eq, value: completed }
+      # Verified Dependabot npm patch/minor updates use the deterministic fast lane.
+      - { path: /workflowRun/headBranch, op: notStartsWith, value: "dependabot/" }
   activeSingleton:
     name: reviewer-revision
     key: [/repository/id, /pullRequest/number, /pullRequest/head/sha]
   prompt: { literal: Review this pull request revision and its completed CI result., includeEvent: data }
+  workspace:
+    type: git
+    repository: { url: { path: /pullRequest/head/repository/cloneUrl } }
+    revision: { commit: { path: /pullRequest/head/sha } }
+---
+version: 1
+triggerId: engineering-github
+profile: { id: reviewer, version: 1 }
+definition:
+  schemaVersion: 1
+  eventTypes: [com.github.pull_request.labeled]
+  filter:
+    all:
+      - { path: /repository/fullName, op: eq, value: acme/agentbay }
+      - { path: /pullRequest/labels, op: contains, value: agentbay-review }
+  activeSingleton:
+    name: reviewer-revision
+    key: [/repository/id, /pullRequest/number, /pullRequest/head/sha]
+  prompt: { literal: Review this dependency pull request because it was ineligible for deterministic approval., includeEvent: data }
   workspace:
     type: git
     repository: { url: { path: /pullRequest/head/repository/cloneUrl } }
@@ -147,7 +168,8 @@ definition:
       - { path: /repository/fullName, op: eq, value: acme/agentbay }
       - { path: /review/state, op: eq, value: approved }
       # Replace with the numeric bot user ID from the reviewer App's signed review webhook.
-      - { path: /review/user/id, op: eq, value: 987654321 }
+      # Reviewer App bot and github-actions[bot] deterministic fast-lane actor IDs.
+      - { path: /review/user/id, op: in, values: [987654321, 41898282] }
       - { path: /review/commitSha, op: exists, value: true }
       - { path: /pullRequest/merged, op: eq, value: false }
   prompt: { literal: Validate the approved revision and merge it through repository protection., includeEvent: data }
