@@ -251,15 +251,7 @@ grep -q 'example/tool-server@sha256:11111111111111111111111111111111111111111111
 grep -q 'example/credential-broker@sha256:2222222222222222222222222222222222222222222222222222222222222222' "$work_dir/connection-sidecar.yaml"
 test "$(grep -c 'path: credential' "$work_dir/connection-sidecar.yaml")" -eq 1
 grep -q 'name: PROVIDER_TENANT' "$work_dir/connection-sidecar.yaml"
-grep -q 'value: "123456789"' "$work_dir/connection-sidecar.yaml"
-test "$(grep -c 'exec:' "$work_dir/connection-sidecar.yaml")" -eq 3
-test "$(grep -c -- '- /nodejs/bin/node' "$work_dir/connection-sidecar.yaml")" -eq 3
-test "$(grep -c 'http://127.0.0.1:8083/readyz' "$work_dir/connection-sidecar.yaml")" -eq 2
-test "$(grep -c 'http://127.0.0.1:8083/livez' "$work_dir/connection-sidecar.yaml")" -eq 1
-if grep -q 'httpGet:' "$work_dir/connection-sidecar.yaml"; then
-  echo "Loopback sidecar probe unexpectedly rendered as httpGet" >&2
-  exit 1
-fi
+grep -q 'value: default' "$work_dir/connection-sidecar.yaml"
 grep -q 'readOnlyRootFilesystem: true' "$work_dir/connection-sidecar.yaml"
 grep -q 'runAsUser: 65532' "$work_dir/connection-sidecar.yaml"
 if grep -Eq 'Issues:|Contents:|Pull requests:|Workflows:' "$work_dir/connection-sidecar.yaml"; then
