@@ -21,7 +21,7 @@ definition:
             github_add_issue_comment: allow
             github_get_label: allow
             github_list_label: allow
-  sandbox: { templateName: opencode-triager-template, warmPool: none }
+  sandbox: { templateName: opencode-triager-template, warmPool: opencode-triager-pool }
   connections: [{ id: github-production, sidecar: github-token-broker }]
   permissions: { onRequest: fail }
   timeoutSeconds: 900
@@ -55,7 +55,7 @@ definition:
             github_actions_list: allow
             github_actions_get: allow
             github_get_job_logs: allow
-  sandbox: { templateName: opencode-developer-template, warmPool: none }
+  sandbox: { templateName: opencode-developer-template, warmPool: opencode-developer-pool }
   connections: [{ id: github-production, sidecar: github-token-broker }]
   permissions: { onRequest: fail }
   timeoutSeconds: 3600
@@ -84,7 +84,7 @@ definition:
             github_actions_get: allow
             github_actions_list: allow
             github_get_job_logs: allow
-  sandbox: { templateName: opencode-reviewer-template, warmPool: none }
+  sandbox: { templateName: opencode-reviewer-template, warmPool: opencode-reviewer-pool }
   connections: [{ id: github-production, sidecar: github-token-broker }]
   permissions: { onRequest: fail }
   timeoutSeconds: 1800

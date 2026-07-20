@@ -3,11 +3,11 @@ import { loadConfig } from "../../src/config.js";
 
 describe("loadConfig", () => {
   it("defaults to the released agent-sandbox API version", () => {
-    expect(loadConfig({}).sandboxClaimApiVersion).toBe("v1alpha1");
+    expect(loadConfig({}).sandboxClaimApiVersion).toBe("v1beta1");
   });
 
-  it("allows beta agent-sandbox API version opt-in", () => {
-    expect(loadConfig({ AGENTBAY_SANDBOX_CLAIM_API_VERSION: "v1beta1" }).sandboxClaimApiVersion).toBe("v1beta1");
+  it("allows deprecated alpha agent-sandbox API compatibility", () => {
+    expect(loadConfig({ AGENTBAY_SANDBOX_CLAIM_API_VERSION: "v1alpha1" }).sandboxClaimApiVersion).toBe("v1alpha1");
   });
 
   it("rejects unsupported agent-sandbox API versions", () => {

@@ -25,6 +25,10 @@ pull-request review comments for later continuation matching.
 Replace `acme/agentbay`, profile models, connection IDs, and template names
 before publishing these request bodies through the management API.
 
+The profiles name concrete `v1beta1` pools. The supplied Helm values create one
+zero-replica pool per role, providing cold-start allocation while satisfying the
+native `v1beta1` claim contract.
+
 Issue deliveries are durably ingested before admission. When the developer
 binding matches, the revision resolver uses the delivery's installation ID to
 mint a selected-repository, contents-read token, verifies repository identity

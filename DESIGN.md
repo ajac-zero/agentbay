@@ -147,7 +147,7 @@ definition:
           prompt: Review the supplied event for security and correctness.
   sandbox:
     templateName: opencode
-    warmPool: none
+    warmPool: opencode-developer-pool
   connections:
     - id: github-production
       sidecar: github-token-broker

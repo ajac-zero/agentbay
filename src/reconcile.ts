@@ -19,7 +19,7 @@ const PLURAL = "sandboxclaims";
 const LABEL_SELECTOR = "app.kubernetes.io/managed-by=agentbay";
 
 export function readApiVersion(value: string | undefined): SandboxClaimAPIVersion {
-  if (value === undefined || value === "") return "v1alpha1";
+  if (value === undefined || value === "") return "v1beta1";
   if (value === "v1alpha1" || value === "v1beta1") return value;
   throw new Error(
     `Expected AGENTBAY_SANDBOX_CLAIM_API_VERSION to be v1alpha1 or v1beta1, got ${value}`,

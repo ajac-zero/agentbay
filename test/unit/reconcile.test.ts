@@ -27,12 +27,12 @@ import type { SandboxClaim } from "../../src/sandbox/types.js";
 // ---------------------------------------------------------------------------
 
 describe("readApiVersion", () => {
-  it("defaults to v1alpha1 when undefined", () => {
-    expect(readApiVersion(undefined)).toBe("v1alpha1");
+  it("defaults to v1beta1 when undefined", () => {
+    expect(readApiVersion(undefined)).toBe("v1beta1");
   });
 
-  it("defaults to v1alpha1 when empty string", () => {
-    expect(readApiVersion("")).toBe("v1alpha1");
+  it("defaults to v1beta1 when empty string", () => {
+    expect(readApiVersion("")).toBe("v1beta1");
   });
 
   it("accepts v1alpha1", () => {

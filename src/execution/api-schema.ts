@@ -47,7 +47,7 @@ export const agentProfileDefinitionSchema: z.ZodType<AgentProfileDefinition> = z
     sandbox: z
       .object({
         templateName: dnsLabelSchema,
-        warmPool: dnsLabelSchema.default("none"),
+        warmPool: dnsLabelSchema,
       })
       .strict(),
     connections: z.array(profileConnectionSchema).max(32).default([]),
@@ -75,13 +75,6 @@ export const agentProfileDefinitionSchema: z.ZodType<AgentProfileDefinition> = z
       }
       connectionIds.add(connection.id);
     });
-    if (definition.connections.length > 0 && definition.sandbox.warmPool !== "none") {
-      context.addIssue({
-        code: "custom",
-        message: "must be none when connections are configured",
-        path: ["sandbox", "warmPool"],
-      });
-    }
     if (definition.connections.some(({ sidecar }) => sidecar === "github-token-broker")) {
       const config = definition.runtime.opencodeConfig;
       const mcp = config.mcp;

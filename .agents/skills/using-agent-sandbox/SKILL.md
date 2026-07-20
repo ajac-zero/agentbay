@@ -9,8 +9,9 @@ The `kubernetes-sigs/agent-sandbox` project provides four CRDs for running isola
 
 ## API Groups
 
-- `agents.x-k8s.io/v1alpha1` — core: `Sandbox`
-- `extensions.agents.x-k8s.io/v1alpha1` — extensions: `SandboxTemplate`, `SandboxWarmPool`, `SandboxClaim`
+- `agents.x-k8s.io/v1beta1` — core: `Sandbox`
+- `extensions.agents.x-k8s.io/v1beta1` — extensions: `SandboxTemplate`, `SandboxWarmPool`, `SandboxClaim`
+- `v1alpha1` remains served by `v0.5.2` only as a deprecated compatibility API.
 
 ## Consumer / Admin Divide
 
@@ -34,7 +35,7 @@ Consumers should **not** create `Sandbox` objects directly unless they need full
 
 ## CRD Quick Reference
 
-### Sandbox (`agents.x-k8s.io/v1alpha1`)
+### Sandbox (`agents.x-k8s.io/v1beta1`)
 Singleton Pod wrapper. Replicas must be `0` or `1`. Key fields:
 - `spec.podTemplate.spec` — full PodSpec (required)
 - `spec.volumeClaimTemplates[]` — PVC templates
@@ -44,7 +45,7 @@ Singleton Pod wrapper. Replicas must be `0` or `1`. Key fields:
 
 Status surfaces: `conditions[]` (`Ready`, `Finished`), `podIPs[]`, `serviceFQDN`.
 
-### SandboxTemplate (`extensions.agents.x-k8s.io/v1alpha1`)
+### SandboxTemplate (`extensions.agents.x-k8s.io/v1beta1`)
 Reusable blueprint. Key fields:
 - `spec.podTemplate.spec` — PodSpec (required; `automountServiceAccountToken` defaults to `false`)
 - `spec.networkPolicyManagement` — `Managed` (default) | `Unmanaged`
@@ -52,16 +53,15 @@ Reusable blueprint. Key fields:
 - `spec.envVarsInjectionPolicy` — `Disallowed` (default) | `Allowed` | `Overrides`
 - `spec.service` — `*bool` for headless Service on derived Sandboxes
 
-### SandboxWarmPool (`extensions.agents.x-k8s.io/v1alpha1`)
+### SandboxWarmPool (`extensions.agents.x-k8s.io/v1beta1`)
 Pre-warmed pool. Key fields:
 - `spec.replicas` — desired warm standby count (HPA-compatible via scale subresource)
 - `spec.sandboxTemplateRef.name` — required template reference
 - `spec.updateStrategy.type` — `OnReplenish` (default) | `Recreate`
 
-### SandboxClaim (`extensions.agents.x-k8s.io/v1alpha1`)
+### SandboxClaim (`extensions.agents.x-k8s.io/v1beta1`)
 Consumer request. Key fields:
-- `spec.sandboxTemplateRef.name` — required
-- `spec.warmpool` — `"default"` (any matching pool) | `"none"` (always fresh) | specific pool name
+- `spec.warmPoolRef.name` — required concrete `SandboxWarmPool` name
 - `spec.lifecycle.shutdownTime` — absolute expiry
 - `spec.lifecycle.ttlSecondsAfterFinished` — auto-cleanup delay
 - `spec.lifecycle.shutdownPolicy` — `Retain` (default) | `Delete` | `DeleteForeground`
@@ -75,7 +75,7 @@ Status: `status.sandbox.name`, `status.sandbox.podIPs[]`, mirrored `conditions[]
 1. Confirm a `SandboxTemplate` exists: `kubectl get sandboxtemplate -n <ns>`.
 2. Check its `envVarsInjectionPolicy` — if `Disallowed`, do not set `spec.env[]` on the claim.
 3. (Optional) Check for a matching `SandboxWarmPool`: `kubectl get swp -n <ns>`.
-4. Create the `SandboxClaim` (set `warmpool: default` for fast path).
+4. Create the `SandboxClaim` referencing the selected pool. Use a zero-replica pool for cold starts.
 5. Wait for `status.conditions[type=Ready]=True`; read `status.sandbox.podIPs[0]` (or use the headless Service FQDN) to connect.
 6. On session end, delete the claim or let `lifecycle.shutdownTime` / `ttlSecondsAfterFinished` expire it.
 
@@ -83,7 +83,7 @@ Status: `status.sandbox.name`, `status.sandbox.podIPs[]`, mirrored `conditions[]
 
 ### Admin: SandboxTemplate
 ```yaml
-apiVersion: extensions.agents.x-k8s.io/v1alpha1
+apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxTemplate
 metadata:
   name: python-sandbox-template
@@ -102,7 +102,7 @@ spec:
 
 ### Admin: SandboxWarmPool
 ```yaml
-apiVersion: extensions.agents.x-k8s.io/v1alpha1
+apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxWarmPool
 metadata:
   name: python-sdk-warmpool
@@ -117,15 +117,14 @@ spec:
 
 ### Consumer: SandboxClaim
 ```yaml
-apiVersion: extensions.agents.x-k8s.io/v1alpha1
+apiVersion: extensions.agents.x-k8s.io/v1beta1
 kind: SandboxClaim
 metadata:
   name: agent-session-abc123
   namespace: agents
 spec:
-  sandboxTemplateRef:
-    name: python-sandbox-template
-  warmpool: default
+  warmPoolRef:
+    name: python-sdk-warmpool
   lifecycle:
     ttlSecondsAfterFinished: 300
     shutdownPolicy: Delete
@@ -136,7 +135,7 @@ spec:
 
 ### Direct Sandbox (advanced / no template)
 ```yaml
-apiVersion: agents.x-k8s.io/v1alpha1
+apiVersion: agents.x-k8s.io/v1beta1
 kind: Sandbox
 metadata:
   name: hello-world
@@ -153,7 +152,7 @@ spec:
 
 - **`SandboxClaim.spec.env` ignored / rejected** — the referenced `SandboxTemplate` has `envVarsInjectionPolicy: Disallowed`. Ask the admin to switch to `Allowed` or `Overrides`.
 - **Sandbox can't reach external services** — Managed NetworkPolicy default-denies RFC1918 and metadata-server egress. Either add explicit `egress` rules to the template or set `networkPolicyManagement: Unmanaged`.
-- **Slow sandbox startup** — no matching `SandboxWarmPool`, or claim used `warmpool: none`. Create a warm pool sized for peak concurrency.
+- **Slow sandbox startup** — the selected `SandboxWarmPool` has no ready replicas, or claim env/PVC injection forces a cold start. Size the pool for workloads that can safely adopt prewarmed Pods.
 - **Replicas validation error on Sandbox** — `spec.replicas` only accepts `0` or `1`. Use multiple `Sandbox` objects (or a `SandboxWarmPool` of claims) for parallelism.
 - **Sandbox not deleted after session** — `shutdownPolicy` defaults to `Retain`. Set `Delete` (or `DeleteForeground`) on the claim or sandbox.
 - **Confusing Sandbox with StatefulSet** — Sandbox is singleton + finite-lifetime + claim-driven; StatefulSet is N coordinated replicas + indefinite. Do not migrate StatefulSet workloads without rethinking the topology.
@@ -171,4 +170,4 @@ kubectl get sandbox <name> -n <ns> -o jsonpath='{.status.serviceFQDN}'
 
 - Repository: https://github.com/kubernetes-sigs/agent-sandbox
 - Core types: `api/v1alpha1/sandbox_types.go`
-- Extension types: `extensions/api/v1alpha1/{sandboxtemplate,sandboxwarmpool,sandboxclaim}_types.go`
+- Extension types: `extensions/api/v1beta1/{sandboxtemplate,sandboxwarmpool,sandboxclaim}_types.go`

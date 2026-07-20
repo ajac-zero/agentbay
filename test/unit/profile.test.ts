@@ -7,7 +7,7 @@ describe("parseExecutionAttemptProfile", () => {
     const claimed = claimedExecution({
       schemaVersion: 1,
       runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: {} } } },
-      sandbox: { templateName: "opencode" },
+      sandbox: { templateName: "opencode", warmPool: "opencode-pool" },
       permissions: { onRequest: "fail" },
       timeoutSeconds: 3_600,
       retention: {},
@@ -18,7 +18,7 @@ describe("parseExecutionAttemptProfile", () => {
     expect(profile.profileVersion.definition).toEqual({
       schemaVersion: 1,
       runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: {} } } },
-      sandbox: { templateName: "opencode", warmPool: "none" },
+      sandbox: { templateName: "opencode", warmPool: "opencode-pool" },
       connections: [],
       permissions: { onRequest: "fail" },
       timeoutSeconds: 3_600,
@@ -47,7 +47,7 @@ describe("parseExecutionAttemptProfile", () => {
 
   it("rejects invalid sandbox and retention bounds", () => {
     expect(() =>
-      parseExecutionAttemptProfile(claimedExecution({ ...validDefinition(), sandbox: { templateName: "Not_DNS" } })),
+      parseExecutionAttemptProfile(claimedExecution({ ...validDefinition(), sandbox: { templateName: "Not_DNS", warmPool: "opencode-pool" } })),
     ).toThrow();
     expect(() =>
       parseExecutionAttemptProfile(claimedExecution({
@@ -70,12 +70,12 @@ describe("parseExecutionAttemptProfile", () => {
     }
   });
 
-  it("requires warm pool none when connections are configured", () => {
-    expect(() => parseExecutionAttemptProfile(claimedExecution({
+  it("allows a concrete v1beta1 pool when connections force a cold start", () => {
+    expect(parseExecutionAttemptProfile(claimedExecution({
       ...validDefinition(),
       sandbox: { templateName: "opencode", warmPool: "shared" },
       connections: [{ id: "github", sidecar: "github-api" }],
-    }))).toThrow();
+    }))).toBeDefined();
   });
 
   it("requires a fixed deny-by-default official GitHub MCP config for the token broker", () => {
@@ -140,7 +140,7 @@ function validDefinition() {
   return {
     schemaVersion: 1,
     runtime: { type: "opencode", agent: "coder", opencodeConfig: { agent: { coder: {} } } },
-    sandbox: { templateName: "opencode" },
+    sandbox: { templateName: "opencode", warmPool: "opencode-pool" },
     permissions: { onRequest: "fail" },
     timeoutSeconds: 3_600,
   };

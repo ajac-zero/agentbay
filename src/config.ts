@@ -74,7 +74,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 }
 
 function readSandboxClaimApiVersion(value: string | undefined): SandboxClaimAPIVersion {
-  if (value === undefined || value === "") return "v1alpha1";
+  if (value === undefined || value === "") return "v1beta1";
   if (value === "v1alpha1" || value === "v1beta1") return value;
   throw new Error(`Expected AGENTBAY_SANDBOX_CLAIM_API_VERSION to be v1alpha1 or v1beta1, got ${value}`);
 }
