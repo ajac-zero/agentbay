@@ -31,6 +31,7 @@ export function mountGitHubWebhookApi(
   store: GitHubWebhookApiStore,
   readEnvironmentVariable: (name: string) => string | undefined = (name) => process.env[name],
   verifySignature: typeof verifyGitHubSignature = verifyGitHubSignature,
+  issueAcknowledgmentEnabled = false,
 ): void {
   app.use("/hooks/github/:triggerID", bodyLimit({
     maxSize: MAX_BODY_BYTES,
@@ -99,6 +100,7 @@ export function mountGitHubWebhookApi(
     if (!event) return trigger.enabled ? context.body(null, 204) : context.json({ error: "Trigger not found" }, 404);
 
     const revisionResolution = eventName === "issues" ? githubRevisionResolution(event.data) : undefined;
+    const githubIssueAcknowledgment = issueAcknowledgmentEnabled && event.type === "com.github.issues.opened" ? issueAcknowledgment(event.data) : undefined;
     await store.admitEvent({
       tenantId: TENANT_ID,
       triggerId: triggerID,
@@ -108,6 +110,7 @@ export function mountGitHubWebhookApi(
       admissionHash: hashCanonicalJson({ schemaVersion: 1, triggerId: triggerID, event } as JsonValue),
       admittedAt: new Date().toISOString(),
       ...(revisionResolution ? { revisionResolution } : {}),
+      ...(githubIssueAcknowledgment ? { githubIssueAcknowledgment } : {}),
     });
     if (eventName === "pull_request" && event.type === "com.github.pull_request.opened" && "reconcileGitHubPullRequestEffects" in store) {
       const data = event.data as { repository: { id: number }; pullRequest: { id: number; number: number } };
@@ -136,6 +139,25 @@ function githubRevisionResolution(data: JsonValue) {
     repositoryFullName: repository.fullName,
     cloneUrl: repository.cloneUrl,
     branch: repository.defaultBranch,
+  };
+}
+
+function issueAcknowledgment(data: JsonValue) {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return undefined;
+  const repository = data.repository;
+  const issue = data.issue;
+  const installationId = data.installationId;
+  if (repository === null || typeof repository !== "object" || Array.isArray(repository)
+    || issue === null || typeof issue !== "object" || Array.isArray(issue)
+    || typeof installationId !== "number" || !Number.isSafeInteger(installationId) || installationId < 1
+    || typeof repository.id !== "number" || !Number.isSafeInteger(repository.id) || repository.id < 1
+    || typeof repository.fullName !== "string"
+    || typeof issue.number !== "number" || !Number.isSafeInteger(issue.number) || issue.number < 1) return undefined;
+  return {
+    installationId,
+    repositoryId: repository.id,
+    repositoryFullName: repository.fullName,
+    issueNumber: issue.number,
   };
 }
 

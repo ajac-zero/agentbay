@@ -16,8 +16,8 @@ the generic `contains` array predicate. They demonstrate:
 4. All difficulty bindings share an active singleton keyed by repository ID and issue number, so later ready-label deliveries cannot create a second developer lifecycle while the first is nonterminal.
 5. The broker attributes the developer's primary PR through a fenced mutation receipt and matching signed webhook.
 6. `pull_request.opened` starts one separate reviewer lifecycle.
-7. The reviewer submits a comment review beginning with `Agentbay-Verdict: approved` or `Agentbay-Verdict: changes_requested`.
-8. A `changes_requested` Agentbay verdict wakes the developer at the reviewed head SHA.
+7. A separate reviewer GitHub App submits a native `APPROVED` or `CHANGES_REQUESTED` review.
+8. A native change request from that reviewer App wakes the developer at the reviewed head SHA.
 9. `pull_request.synchronize` coalesces the latest revision into the reviewer lifecycle.
 10. A merged `pull_request.closed` event terminally completes both independent lifecycles.
 
@@ -63,7 +63,8 @@ future delivery.
 The reciprocal policy is:
 
 ```text
-pull_request_review.submitted where review.agentbayVerdict=changes_requested
+pull_request_review.submitted where review.state=changes_requested
+  and review.user.id=<reviewer App bot user ID>
   -> wake the developer wait correlated by repository ID and PR number
 
 pull_request.synchronize or issue_comment.created
@@ -73,7 +74,14 @@ pull_request.closed
   -> cancel all active waits for that correlation key
 ```
 
-A single GitHub App posts all COMMENT-type reviews and embeds the `Agentbay-Verdict` marker in the review body so the connector can unambiguously distinguish orchestrator signals from ordinary human review comments.
+The developer and reviewer use separate GitHub Apps. The developer App authors
+branches and pull requests; the reviewer App submits native reviews through a
+broker token with read-only code access. The reviewer App uses its own
+installation, private key, logical `github-reviewer` connection, and broker
+credential Secret. The native
+change-request wake filters on its stable numeric bot user ID so unrelated human
+or bot reviews cannot resume the developer lifecycle. Repository protection may
+still allow an eligible human approval to satisfy the merge requirement.
 
 The wait resource policy should default to `release`; deployments with a
 PVC-backed Agent Sandbox may choose `suspend` after claim-owned Sandbox
@@ -105,9 +113,28 @@ allows only its exact role tools:
 | Developer | Read issue/PR, create branch, write content, create/update PR, comment |
 | Reviewer | Read PR/diff/checks, create review and review comments |
 
+The deployed developer tiers may use distinct models while retaining separate
+immutable profiles and a common capability ceiling:
+
+| Difficulty | Model |
+|---|---|
+| Easy | `gateway/claude-sonnet-5` |
+| Medium | `gateway/claude-opus-4-7` |
+| Hard | `gateway/claude-fable-5` |
+
 `sandbox-templates.values.yaml` supplies one template per role with only that role's exact official-server
 `--tools` allow-list. This is required, not optional: containers in one Pod
 share loopback, so OpenCode permissions alone cannot prevent a process from
 calling the broker directly. `deploy/examples/sandbox-template.yaml` is the raw
 developer-template equivalent. Never place the installation token or App private
 key inside OpenCode configuration.
+
+The reviewer template deliberately mounts a different App Secret from the
+developer and triager templates. Role tool restrictions are not identity
+separation: native GitHub approval requires an identity other than the pull
+request author. GitHub counts required approvals only from reviewers with
+repository write access. The reviewer App installation therefore needs
+`Contents: read and write`, even though the broker deliberately narrows each
+reviewer sandbox token back to `contents:read,pull_requests:write,actions:read`.
+This preserves native approval eligibility without granting the review agent a
+content-writing token.

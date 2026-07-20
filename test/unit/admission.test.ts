@@ -59,6 +59,31 @@ describe("binding matcher", () => {
     expect(matchesFilterClause({ labels: ["difficulty:easy"] }, { path: "/labels", op: "contains", value: "state:ready" })).toBe(false);
     expect(matchesFilterClause({ labels: [{ name: "state:ready" }] }, { path: "/labels", op: "contains", value: "state:ready" })).toBe(false);
   });
+
+  it("matches native change requests only from the configured reviewer App", () => {
+    const reviewerId = 987654321;
+    const nativeReviewBinding: PublishedBindingVersion = {
+      ...binding,
+      definition: {
+        ...binding.definition,
+        eventTypes: ["com.github.pull_request_review.submitted"],
+        filter: { all: [
+          { path: "/review/state", op: "eq", value: "changes_requested" },
+          { path: "/review/user/id", op: "eq", value: reviewerId },
+        ] },
+      },
+    };
+    const reviewEvent = (state: string, actorId: number): NormalizedCloudEvent => ({
+      ...event,
+      type: "com.github.pull_request_review.submitted",
+      data: { review: { state, user: { id: actorId } } },
+    });
+
+    expect(matchesBinding(nativeReviewBinding, reviewEvent("changes_requested", reviewerId))).toBe(true);
+    expect(matchesBinding(nativeReviewBinding, reviewEvent("approved", reviewerId))).toBe(false);
+    expect(matchesBinding(nativeReviewBinding, reviewEvent("commented", reviewerId))).toBe(false);
+    expect(matchesBinding(nativeReviewBinding, reviewEvent("changes_requested", 42))).toBe(false);
+  });
 });
 
 describe("rendering and event-level planning", () => {

@@ -13,7 +13,7 @@ describe("official GitHub MCP through token broker", () => {
 
   beforeAll(async () => {
     official = await new GenericContainer(IMAGE)
-      .withCommand(["http", "--listen-host=0.0.0.0", "--port=8082", "--tools=issue_read,issue_write"])
+      .withCommand(["http", "--listen-host=0.0.0.0", "--port=8082", "--tools=issue_read,issue_write,pull_request_review_write"])
       .withExposedPorts(8082)
       .withWaitStrategy(Wait.forLogMessage(/HTTP server listening/))
       .start();
@@ -42,7 +42,11 @@ describe("official GitHub MCP through token broker", () => {
     expect(initialized.result.serverInfo).toMatchObject({ name: "github-mcp-server", version: "v1.6.0" });
 
     const listed = await rpc(url, 2, "tools/list", {});
-    expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["issue_read", "issue_write"]);
+    expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toEqual(["issue_read", "issue_write", "pull_request_review_write"]);
+    const reviewTool = listed.result.tools.find((tool: { name: string }) => tool.name === "pull_request_review_write");
+    expect(reviewTool.inputSchema.properties.method.enum).toEqual(expect.arrayContaining(["create", "submit_pending"]));
+    expect(reviewTool.inputSchema.properties.event.enum).toEqual(expect.arrayContaining(["APPROVE", "REQUEST_CHANGES", "COMMENT"]));
+    expect(reviewTool.inputSchema.properties).toHaveProperty("commitID");
   });
 });
 
