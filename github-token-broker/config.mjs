@@ -74,6 +74,9 @@ export function parseStartupConfig(env = process.env) {
     upstream: upstream.toString(),
     host,
     port: port(env.AGENTBAY_GITHUB_BROKER_PORT ?? "8083", "AGENTBAY_GITHUB_BROKER_PORT"),
+    maxIssuesCreated: env.AGENTBAY_GITHUB_MAX_ISSUES_CREATED === undefined
+      ? undefined
+      : positiveInteger(required(env, "AGENTBAY_GITHUB_MAX_ISSUES_CREATED"), "AGENTBAY_GITHUB_MAX_ISSUES_CREATED"),
     mergeCapability: env.AGENTBAY_GITHUB_MERGE_CAPABILITY ? mergeCapability(
       env.AGENTBAY_GITHUB_MERGE_CAPABILITY,
       repositoryId,

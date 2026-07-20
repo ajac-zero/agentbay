@@ -236,6 +236,14 @@ orchestrator:
     leaseDurationMs: 60000
     retryDelayMs: 5000
     requestTimeoutMs: 30000
+  scheduleWorker:
+    # -- Materialize and deliver durable schedule.cron occurrences.
+    enabled: false
+    idlePollMs: 1000
+    leaseDurationMs: 60000
+    retryDelayMs: 30000
+    maxAttempts: 5
+    materializeBatchSize: 100
   # -- Extra orchestrator env vars expressed as a Kubernetes `env` list. For
   # -- sensitive values, use `valueFrom.secretKeyRef`; for example, expose a
   # -- GitHub webhook secret here so it is available only to the orchestrator

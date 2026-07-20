@@ -24,6 +24,14 @@ the generic `contains` array predicate. They demonstrate:
 12. The merger verifies the reviewed SHA is still the PR head, then asks GitHub to merge through repository protection.
 13. A merged `pull_request.closed` event terminally completes the developer lifecycle.
 
+`triggers.yaml` adds a durable hourly `schedule.cron` ingress. Each due time is
+materialized in PostgreSQL before the schedule advances, then leased and admitted
+through the same event boundary as webhooks. The matching bug-finder audits an
+exact resolved default-branch SHA with read-only code access and may create at
+most one evidence-backed issue. That `issues.opened` webhook enters step 1 above.
+Missed intervals use `skip` semantics, and the repository singleton prevents
+overlapping audits without retaining a sandbox between runs.
+
 The GitHub connector also normalizes issue comments, pull-request reviews, and
 pull-request review comments for later continuation matching.
 
