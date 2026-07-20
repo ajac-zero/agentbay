@@ -20,7 +20,7 @@
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
-      "version": "11.1.2",
+      "version": "11.8.0",
       "onFail": "download"
     }
   },
@@ -32,7 +32,7 @@
     "@kubernetes/client-node": "^1.4.0",
     "@opencode-ai/sdk": "^1.14.50",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.12.18",
+    "hono": "^4.12.25",
     "pg": "^8.20.0",
     "zod": "^4.4.3"
   },
