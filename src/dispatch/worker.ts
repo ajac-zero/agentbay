@@ -185,6 +185,7 @@ export class DispatcherWorker {
         controlPlaneUrl: this.#options.controlPlaneUrl,
         executionId: execution.executionId,
         fencingToken: execution.lease.fencingToken,
+        githubMergeCapability: profile.profileVersion.profileId === "merger" ? githubMergeCapability(execution.input) : undefined,
         opencodeConfig: profile.resolvedPolicy.runtime.opencodeConfig,
         profileVersion: {
           id: profile.profileVersion.id,
@@ -355,6 +356,26 @@ export class DispatcherWorker {
       return false;
     }
   }
+}
+
+function githubMergeCapability(input: import("../execution/types.js").ExecutionInput): import("../sandbox/types.js").ExecutionAttemptProvisioningInput["githubMergeCapability"] {
+  const event = input.context?.event;
+  if (!event || typeof event !== "object" || Array.isArray(event)) return undefined;
+  const repository = event.repository;
+  const pullRequest = event.pullRequest;
+  const review = event.review;
+  if (!repository || typeof repository !== "object" || Array.isArray(repository)
+    || !pullRequest || typeof pullRequest !== "object" || Array.isArray(pullRequest)
+    || !review || typeof review !== "object" || Array.isArray(review)) return undefined;
+  const user = review.user;
+  if (!user || typeof user !== "object" || Array.isArray(user)
+    || review.state !== "approved" || typeof review.commitSha !== "string" || !/^[0-9a-f]{40}$/.test(review.commitSha)
+    || typeof repository.id !== "number" || !Number.isSafeInteger(repository.id) || repository.id < 1
+    || typeof repository.fullName !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(repository.fullName)
+    || typeof pullRequest.number !== "number" || !Number.isSafeInteger(pullRequest.number) || pullRequest.number < 1
+    || typeof user.id !== "number" || !Number.isSafeInteger(user.id) || user.id < 1) return undefined;
+  return { commitSha: review.commitSha, pullRequestNumber: pullRequest.number, repositoryFullName: repository.fullName,
+    repositoryId: repository.id, reviewerId: user.id };
 }
 
 function deadlineSignal(timeoutAt: Date, parent?: AbortSignal): { signal: AbortSignal; stop(): void } {

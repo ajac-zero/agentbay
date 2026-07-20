@@ -22,6 +22,7 @@ const running: Array<{ close: () => Promise<void> }> = [];
 
 afterEach(async () => {
   await Promise.all(running.splice(0).map(({ close }) => close()));
+  vi.unstubAllGlobals();
 });
 
 describe("GitHub token broker", () => {
@@ -37,6 +38,13 @@ describe("GitHub token broker", () => {
     expect(() => parseStartupConfig({ ...env, AGENTBAY_CONNECTIONS: JSON.stringify({ refs: ["other"], schemaVersion: 1, tenantId: "default" }) })).toThrow();
     expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MCP_UPSTREAM: "https://example.com" })).toThrow(/loopback/);
     expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_PERMISSIONS: "contents:admin" })).toThrow();
+    expect(parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_ID: "9", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 42,
+      repositoryFullName: "acme/repo", pullRequestNumber: 7, reviewerId: 9, commitSha: "a".repeat(40) }) }).mergeCapability)
+      .toMatchObject({ repositoryId: 42, pullRequestNumber: 7, commitSha: "a".repeat(40) });
+    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_ID: "9", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 43,
+      repositoryFullName: "acme/repo", pullRequestNumber: 7, reviewerId: 9, commitSha: "a".repeat(40) }) })).toThrow(/MERGE_CAPABILITY/);
+    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_ID: "10", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 42,
+      repositoryFullName: "acme/repo", pullRequestNumber: 7, reviewerId: 9, commitSha: "a".repeat(40) }) })).toThrow(/MERGE_CAPABILITY/);
   });
 
   it("validates mounted GitHub App credentials", async () => {
@@ -252,6 +260,48 @@ describe("GitHub token broker", () => {
     ]) });
     expect(response.status).toBe(502);
     expect(upstreamCalls).toBe(0);
+  });
+
+  it("rejects merge calls outside the execution-scoped capability", async () => {
+    let upstreamCalls = 0;
+    const upstream = await listen(http.createServer((_request, response) => { upstreamCalls += 1; response.writeHead(200).end(); }));
+    running.push(upstream);
+    const broker = await startBroker({ upstream: `http://127.0.0.1:${upstream.port}/`, host: "127.0.0.1", port: 0,
+      mergeCapability: { schemaVersion: 1, repositoryId: 7, repositoryFullName: "acme/repo", pullRequestNumber: 42, reviewerId: 9, commitSha: "a".repeat(40) } },
+    { getToken: async () => "ghs", invalidate: () => {} });
+    running.push(broker);
+    const response = await fetch(`http://127.0.0.1:${(broker.server.address() as AddressInfo).port}/`, { method: "POST", body: JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "merge_pull_request", arguments: { owner: "acme", repo: "repo", pullNumber: 41 } },
+    }) });
+    expect(response.status).toBe(502);
+    expect(upstreamCalls).toBe(0);
+  });
+
+  it("merges only the capability PR at the approved SHA", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ body?: string; method?: string; url: string }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.startsWith("https://api.github.com/")) return originalFetch(input, init);
+      requests.push({ url, method: init?.method, body: init?.body as string | undefined });
+      if (init?.method === "PUT") return Response.json({ merged: true, message: "Pull Request successfully merged" });
+      return Response.json({ state: "open", draft: false, head: { sha: "a".repeat(40) } });
+    }));
+    const upstream = await listen(http.createServer((_request, response) => response.writeHead(500).end()));
+    running.push(upstream);
+    const broker = await startBroker({ upstream: `http://127.0.0.1:${upstream.port}/`, host: "127.0.0.1", port: 0,
+      mergeCapability: { schemaVersion: 1, repositoryId: 7, repositoryFullName: "acme/repo", pullRequestNumber: 42, reviewerId: 9, commitSha: "a".repeat(40) } },
+    { getToken: async () => "ghs", invalidate: () => {} });
+    running.push(broker);
+    const response = await originalFetch(`http://127.0.0.1:${(broker.server.address() as AddressInfo).port}/`, { method: "POST", body: JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "merge_pull_request", arguments: { owner: "acme", repo: "repo", pullNumber: 42, merge_method: "merge" } },
+    }) });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ result: { content: [{ type: "text" }] } });
+    expect(requests).toEqual([
+      expect.objectContaining({ url: "https://api.github.com/repos/acme/repo/pulls/42" }),
+      expect.objectContaining({ url: "https://api.github.com/repos/acme/repo/pulls/42/merge", method: "PUT", body: JSON.stringify({ merge_method: "merge", sha: "a".repeat(40) }) }),
+    ]);
   });
 });
 
