@@ -1,0 +1,2 @@
+DROP INDEX "agentbay_executions_active_singleton_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "agentbay_executions_active_singleton_unique" ON "agentbay_executions" USING btree ("tenant_id","active_singleton_name","active_singleton_key") WHERE "agentbay_executions"."active_singleton_key" IS NOT NULL AND "agentbay_executions"."state" NOT IN ('SUCCEEDED', 'COMPLETED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED');

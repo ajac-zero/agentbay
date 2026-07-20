@@ -247,10 +247,10 @@ describe("execution persistence", () => {
     expect([first.executions.length, second.executions.length].sort()).toEqual([0, 1]);
     expect((await store.admitEvent(suppressed)).executions).toEqual([]);
     expect((await pool.query(
-      "select count(*)::int as count from agentbay_executions where active_singleton_name = 'developer-issue' and state not in ('COMPLETED','CANCELLED','TIMED_OUT','FAILED','DEAD_LETTERED')",
+      "select count(*)::int as count from agentbay_executions where active_singleton_name = 'developer-issue' and state not in ('SUCCEEDED','COMPLETED','CANCELLED','TIMED_OUT','FAILED','DEAD_LETTERED')",
     )).rows[0]).toEqual({ count: 1 });
 
-    await pool.query("update agentbay_executions set state = 'COMPLETED', completed_at = now() where id = $1", [owner[0]!.id]);
+    await pool.query("update agentbay_executions set state = 'SUCCEEDED' where id = $1", [owner[0]!.id]);
     expect((await store.admitEvent(suppressed)).executions).toEqual([]);
     const replacement = await store.admitEvent(singletonCommand(7));
     const otherIssue = await store.admitEvent(singletonCommand(8));

@@ -267,7 +267,7 @@ export const executions = pgTable("agentbay_executions", {
   uniqueIndex("agentbay_executions_tenant_event_binding_unique").on(table.tenantID, table.eventID, table.bindingVersionID),
   uniqueIndex("agentbay_executions_active_singleton_unique")
     .on(table.tenantID, table.activeSingletonName, table.activeSingletonKey)
-    .where(sql`${table.activeSingletonKey} IS NOT NULL AND ${table.state} NOT IN ('COMPLETED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')`),
+    .where(sql`${table.activeSingletonKey} IS NOT NULL AND ${table.state} NOT IN ('SUCCEEDED', 'COMPLETED', 'CANCELLED', 'TIMED_OUT', 'FAILED', 'DEAD_LETTERED')`),
   unique("agentbay_executions_id_tenant_unique").on(table.id, table.tenantID),
   index("agentbay_executions_tenant_binding_created_idx").on(table.tenantID, table.bindingVersionID, table.createdAt),
   index("agentbay_executions_tenant_event_idx").on(table.tenantID, table.eventID),
