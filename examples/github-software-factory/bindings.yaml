@@ -51,7 +51,7 @@ definition:
   filter:
     all:
       - { path: /repository/fullName, op: eq, value: acme/agentbay }
-      - { path: /review/state, op: eq, value: changes_requested }
+      - { path: /review/agentbayVerdict, op: eq, value: changes_requested }
   wake:
     waitName: developer-pr-lifecycle
     delivery: active-or-coalesced

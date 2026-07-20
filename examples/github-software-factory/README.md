@@ -15,9 +15,10 @@ the generic `contains` array predicate. They demonstrate:
 3. `issues.labeled` selects exactly one developer profile.
 4. The broker attributes the developer's primary PR through a fenced mutation receipt and matching signed webhook.
 5. `pull_request.opened` starts one separate reviewer lifecycle.
-6. Requested changes wake the developer at the reviewed head SHA.
-7. `pull_request.synchronize` coalesces the latest revision into the reviewer lifecycle.
-8. A merged `pull_request.closed` event terminally completes both independent lifecycles.
+6. The reviewer submits a comment review beginning with `Agentbay-Verdict: approved` or `Agentbay-Verdict: changes_requested`.
+7. A `changes_requested` Agentbay verdict wakes the developer at the reviewed head SHA.
+8. `pull_request.synchronize` coalesces the latest revision into the reviewer lifecycle.
+9. A merged `pull_request.closed` event terminally completes both independent lifecycles.
 
 The GitHub connector also normalizes issue comments, pull-request reviews, and
 pull-request review comments for later continuation matching.
@@ -55,7 +56,7 @@ slot. PR body text and repository-only correlation are never authoritative.
 The reciprocal policy is:
 
 ```text
-pull_request_review.submitted where review.state=changes_requested
+pull_request_review.submitted where review.agentbayVerdict=changes_requested
   -> wake the developer wait correlated by repository ID and PR number
 
 pull_request.synchronize or issue_comment.created
