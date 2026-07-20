@@ -80,7 +80,7 @@ export function parseStartupConfig(env = process.env) {
     mergeCapability: env.AGENTBAY_GITHUB_MERGE_CAPABILITY ? mergeCapability(
       env.AGENTBAY_GITHUB_MERGE_CAPABILITY,
       repositoryId,
-      positiveInteger(required(env, "AGENTBAY_GITHUB_MERGE_REVIEWER_ID"), "AGENTBAY_GITHUB_MERGE_REVIEWER_ID"),
+      reviewerIds(required(env, "AGENTBAY_GITHUB_MERGE_REVIEWER_IDS")),
     ) : undefined,
     effect: env.AGENTBAY_EFFECT_ENDPOINT ? Object.freeze({
       endpoint: effectEndpoint(required(env, "AGENTBAY_EFFECT_ENDPOINT")),
@@ -95,12 +95,18 @@ export function parseStartupConfig(env = process.env) {
   });
 }
 
-function mergeCapability(value, repositoryId, reviewerId) {
+function reviewerIds(value) {
+  const ids = value.split(",").map((entry) => positiveInteger(entry, "AGENTBAY_GITHUB_MERGE_REVIEWER_IDS"));
+  if (ids.length === 0 || new Set(ids).size !== ids.length) throw new Error("Invalid AGENTBAY_GITHUB_MERGE_REVIEWER_IDS");
+  return ids;
+}
+
+function mergeCapability(value, repositoryId, reviewerIds) {
   let capability;
   try { capability = JSON.parse(value); } catch { throw new Error("Invalid AGENTBAY_GITHUB_MERGE_CAPABILITY"); }
   if (capability === null || typeof capability !== "object" || Array.isArray(capability)
     || Object.keys(capability).sort().join(",") !== "commitSha,pullRequestNumber,repositoryFullName,repositoryId,reviewerId,schemaVersion"
-    || capability.schemaVersion !== 1 || capability.repositoryId !== repositoryId || capability.reviewerId !== reviewerId
+    || capability.schemaVersion !== 1 || capability.repositoryId !== repositoryId || !reviewerIds.includes(capability.reviewerId)
     || !Number.isSafeInteger(capability.pullRequestNumber) || capability.pullRequestNumber < 1
     || !Number.isSafeInteger(capability.reviewerId) || capability.reviewerId < 1
     || typeof capability.repositoryFullName !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(capability.repositoryFullName)

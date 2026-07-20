@@ -170,7 +170,7 @@ sandboxTemplates:
             - { name: AGENTBAY_GITHUB_CONNECTION, value: github-production }
             - { name: AGENTBAY_GITHUB_REPOSITORY_ID, value: "123456789" }
             # Replace with the reviewer App bot actor ID used by the approval binding.
-            - { name: AGENTBAY_GITHUB_MERGE_REVIEWER_ID, value: "987654321" }
+            - { name: AGENTBAY_GITHUB_MERGE_REVIEWER_IDS, value: "987654321,41898282" }
             - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "contents:write,pull_requests:write" }
           volumeMounts: *credentialMount
       extraVolumes: *credentialVolume

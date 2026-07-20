@@ -88,7 +88,17 @@ pull_request_review.submitted where review.state=approved
   -> create a merger execution that validates the current head and calls GitHub's merge API
 
 workflow_run.completed where workflowRun.name=CI
+  and workflowRun.headBranch does not start with dependabot/
   -> create a one-shot reviewer execution for repository ID, PR number, and head SHA
+
+verified Dependabot npm patch/minor update
+  and only package.json and pnpm-lock.yaml changed
+  and CI, Dependency Review, and CodeQL succeeded for the exact head SHA
+  -> github-actions[bot] submits an exact-SHA deterministic approval
+
+ineligible Dependabot update after required checks
+  -> trusted workflow applies agentbay-review
+  -> create the normal one-shot reviewer execution for the exact head SHA
 
 pull_request.closed
   -> complete the developer wait for that correlation key
@@ -100,8 +110,10 @@ broker token with read-only code access. The reviewer App uses its own
 installation, private key, logical `github-reviewer` connection, and broker
 credential Secret. The native
 change-request wake filters on its stable numeric bot user ID so unrelated human
-or bot reviews cannot resume the developer lifecycle. Repository protection may
-still allow an eligible human approval to satisfy the merge requirement.
+or bot reviews cannot resume the developer lifecycle. The merger accepts approvals
+only from that reviewer App or the fixed `github-actions[bot]` actor used by the
+trusted Dependabot fast lane. Repository protection may still allow an eligible
+human approval to satisfy the merge requirement without starting Agentbay's merger.
 
 The wait resource policy should default to `release`; deployments with a
 PVC-backed Agent Sandbox may choose `suspend` after claim-owned Sandbox

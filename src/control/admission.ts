@@ -26,6 +26,7 @@ export function matchesFilterClause(data: JsonValue, clause: FilterClause): bool
   }
   if (resolution.value !== null && typeof resolution.value === "object") return false;
   if (clause.op === "eq") return primitiveEquals(resolution.value, clause.value);
+  if (clause.op === "notStartsWith") return typeof resolution.value === "string" && !resolution.value.startsWith(clause.value);
   return clause.values.some((value) => primitiveEquals(resolution.value, value));
 }
 
