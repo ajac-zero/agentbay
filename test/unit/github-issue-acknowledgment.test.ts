@@ -54,6 +54,34 @@ describe("GitHubIssueAcknowledgmentTransport", () => {
     expect(fetch.mock.calls[2]![1]).toMatchObject({ method: "POST", body: JSON.stringify({ content: "eyes" }) });
   });
 
+  it("mints an exact pull-requests-write token for a pull request reaction", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({
+        token: "ghs_token",
+        expires_at: "2026-07-20T01:00:00Z",
+        repository_selection: "selected",
+        repositories: [{ id: 10 }],
+        permissions: { pull_requests: "write", metadata: "read" },
+      }))
+      .mockResolvedValueOnce(Response.json({ id: 10, full_name: "acme/widgets" }))
+      .mockResolvedValueOnce(new Response("", { status: 201 }));
+    const transport = new GitHubIssueAcknowledgmentTransport({
+      appIdFile: "app-id",
+      privateKeyFile: "private-key",
+      fetch,
+      now: () => Date.parse("2026-07-20T00:00:00Z"),
+      readFile: async (path) => String(path) === "app-id" ? "123" : pem,
+    });
+
+    await expect(transport.publish({
+      ...envelope,
+      payload: { ...envelope.payload, subjectType: "pull_request" as const },
+    }, { signal: new AbortController().signal })).resolves.toBeUndefined();
+    expect(fetch.mock.calls[0]![1]).toMatchObject({
+      body: JSON.stringify({ repository_ids: [10], permissions: { pull_requests: "write" } }),
+    });
+  });
+
   it("rejects a token with broader permissions before mutating the issue", async () => {
     const fetch = vi.fn().mockResolvedValueOnce(Response.json({
       token: "ghs_token",
