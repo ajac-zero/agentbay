@@ -111,7 +111,7 @@ pnpm db:migrate
 Health and generated documentation are public:
 
 ```text
-GET /healthz
+GET /healthz        → 200 OK when Agentbay is healthy
 GET /docs
 GET /openapi.json
 ```
