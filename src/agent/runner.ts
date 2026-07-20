@@ -214,7 +214,7 @@ export async function runExecutionAttempt(
         throw new Error(`opencode session ${sessionId} error: ${message}`);
       }
 
-      if (event.type === "session.idle") {
+      if (isIdleEvent(event)) {
         log.info("opencode session completed");
         return { output, sessionId };
       }
@@ -259,7 +259,7 @@ export async function* runPrompt(input: {
     if (event.type === "session.error") {
       throw new Error(`opencode session ${input.sessionID} error: ${formatOpencodeError(event.properties.error)}`);
     }
-    if (event.type === "session.idle") return;
+    if (isIdleEvent(event)) return;
   }
 
   throw new Error(`opencode event stream ended before session ${input.sessionID} became idle`);
@@ -386,6 +386,11 @@ function isSessionEvent(event: Event, sessionId: string): boolean {
       return maybe.type === "message.part.delta" && maybe.properties?.sessionID === sessionId;
     }
   }
+}
+
+function isIdleEvent(event: Event): boolean {
+  return event.type === "session.idle"
+    || (event.type === "session.status" && event.properties.status.type === "idle");
 }
 
 function formatOpencodeError(error: unknown): string {
