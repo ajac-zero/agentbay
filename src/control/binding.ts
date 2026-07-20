@@ -49,6 +49,14 @@ const activeSingletonSchema = z.object({
   key: z.array(jsonPointerSchema).min(1).max(16),
 }).strict();
 
+const checkpointSchema = z.object({
+  name: simpleIdSchema,
+  key: z.array(jsonPointerSchema).min(1).max(16),
+  value: z.object({ path: jsonPointerSchema }).strict(),
+  advanceOn: z.literal("succeeded"),
+  unchanged: z.literal("skip"),
+}).strict();
+
 export const promptSchema = z
   .object({
     literal: z.string().refine((value) => Buffer.byteLength(value, "utf8") <= MAX_PROMPT_BYTES, `must be at most ${MAX_PROMPT_BYTES} bytes`),
@@ -63,8 +71,14 @@ export const createBindingDefinitionSchema = z
     workspace: bindingWorkspaceSchema,
     afterTurn: afterTurnSchema.optional(),
     activeSingleton: activeSingletonSchema.optional(),
+    checkpoint: checkpointSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.checkpoint && value.afterTurn) {
+      context.addIssue({ code: "custom", message: "checkpoint bindings must be one-shot", path: ["checkpoint"] });
+    }
+  });
 
 export const wakeBindingDefinitionSchema = z
   .object({
