@@ -99,6 +99,20 @@ describe("parseExecutionAttemptProfile", () => {
       connections: [{ id: "github", sidecar: "github-token-broker" }],
     }))).toBeDefined();
 
+    expect(parseExecutionAttemptProfile(claimedExecution({
+      ...base,
+      runtime: {
+        type: "opencode",
+        agent: "merger",
+        opencodeConfig: {
+          mcp: { github: { type: "remote", url: "http://127.0.0.1:8083/", enabled: true, oauth: false } },
+          permission: { "github_*": "deny" },
+          agent: { merger: { permission: { github_pull_request_read: "allow", github_merge_pull_request: "allow" } } },
+        },
+      },
+      connections: [{ id: "github", sidecar: "github-token-broker" }],
+    }))).toBeDefined();
+
     for (const invalidPermission of [
       { "github_issue_*": "allow" },
       { github_not_a_real_tool: "allow" },

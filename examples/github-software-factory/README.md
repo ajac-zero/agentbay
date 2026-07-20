@@ -19,7 +19,9 @@ the generic `contains` array predicate. They demonstrate:
 7. A separate reviewer GitHub App submits a native `APPROVED` or `CHANGES_REQUESTED` review.
 8. A native change request from that reviewer App wakes the developer at the reviewed head SHA.
 9. `pull_request.synchronize` coalesces the latest revision into the reviewer lifecycle.
-10. A merged `pull_request.closed` event terminally completes both independent lifecycles.
+10. An approval from the pinned reviewer App starts a least-privilege merger execution.
+11. The merger verifies the reviewed SHA is still the PR head, then asks GitHub to merge through repository protection.
+12. A merged `pull_request.closed` event terminally completes both independent lifecycles.
 
 The GitHub connector also normalizes issue comments, pull-request reviews, and
 pull-request review comments for later continuation matching.
@@ -67,6 +69,11 @@ pull_request_review.submitted where review.state=changes_requested
   and review.user.id=<reviewer App bot user ID>
   -> wake the developer wait correlated by repository ID and PR number
 
+pull_request_review.submitted where review.state=approved
+  and review.user.id=<reviewer App bot user ID>
+  and review.commitSha exists
+  -> create a merger execution that validates the current head and calls GitHub's merge API
+
 pull_request.synchronize or issue_comment.created
   -> wake the reviewer wait correlated by repository ID and PR number
 
@@ -112,6 +119,17 @@ allows only its exact role tools:
 | Triager | Read issue, manage labels, comment |
 | Developer | Read issue/PR, create branch, write content, create/update PR, comment |
 | Reviewer | Read PR/diff/checks, create review and review comments |
+| Merger | Read PR/reviews, merge through repository protection |
+
+The merger uses the developer App installation but runs in its own sandbox. Its
+official GitHub MCP exposes only `pull_request_read` and `merge_pull_request`,
+and its broker token is narrowed to `contents:write,pull_requests:write`. The
+binding accepts only an `approved` native review from the configured reviewer
+App actor, and the broker independently requires that actor ID in the execution
+capability to match its configured reviewer ID. Before merging, the agent requires the PR's current head to equal the
+review's `commitSha`; GitHub then atomically enforces branch protection. A stale
+approval, pending required check, merge conflict, or other protection failure
+leaves the PR open.
 
 The deployed developer tiers may use distinct models while retaining separate
 immutable profiles and a common capability ceiling:
