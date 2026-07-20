@@ -16,6 +16,7 @@ export type OutboxPublisherOptions = {
   transportTimeoutMs: number;
   baseRetryDelayMs: number;
   maxRetryDelayMs: number;
+  topics?: readonly string[];
   maxErrorLength?: number;
   random?: () => number;
   uuid?: () => string;
@@ -30,6 +31,7 @@ export class OutboxPublisher {
   readonly #baseRetryDelayMs: number;
   readonly #maxRetryDelayMs: number;
   readonly #maxErrorLength: number;
+  readonly #topics?: readonly string[];
   readonly #random: () => number;
   readonly #uuid: () => string;
 
@@ -58,6 +60,7 @@ export class OutboxPublisher {
     this.#baseRetryDelayMs = options.baseRetryDelayMs;
     this.#maxRetryDelayMs = options.maxRetryDelayMs;
     this.#maxErrorLength = maxErrorLength;
+    this.#topics = options.topics;
     this.#random = options.random ?? Math.random;
     this.#uuid = options.uuid ?? randomUUID;
   }
@@ -69,6 +72,7 @@ export class OutboxPublisher {
       claimToken,
       limit: this.#batchSize,
       leaseDurationMs: this.#leaseDurationMs,
+      ...(this.#topics === undefined ? {} : { topics: this.#topics }),
       ...(signal === undefined ? {} : { signal }),
     });
     const accounting: PublishAccounting = { claimed: messages.length, published: 0, failed: 0, lostClaims: 0 };

@@ -109,6 +109,37 @@ describe("execution persistence", () => {
     expect((await pool.query("select count(*)::int as count from agentbay_events")).rows[0]).toEqual({ count: 1 });
   });
 
+  it("withholds execution claims until the issue acknowledgment is published", async () => {
+    await pool.query("update agentbay_executions set state = 'CANCELLED' where state = 'QUEUED'");
+    const command = {
+      ...freshAdmissionCommand(),
+      githubIssueAcknowledgment: {
+        installationId: 44,
+        repositoryId: 10,
+        repositoryFullName: "acme/widgets",
+        issueNumber: 7,
+      },
+    };
+    const admitted = await store.admitEvent(command);
+    expect(admitted.executions).toHaveLength(1);
+    expect(await store.claimNextQueuedExecution({ leaseOwner: "blocked-worker", leaseDurationMs: 60_000 })).toBeUndefined();
+
+    const [reaction] = await store.claimAvailable({
+      claimToken: "reaction-publisher",
+      limit: 1,
+      leaseDurationMs: 60_000,
+      topics: ["github.issue-reaction.requested"],
+    });
+    expect(reaction).toMatchObject({
+      aggregateId: command.internalEventId,
+      aggregateType: "github-issue-reaction",
+      payload: expect.objectContaining({ content: "eyes", issueNumber: 7 }),
+    });
+    expect(await store.markPublished({ id: reaction!.id, claimToken: reaction!.claimToken })).toBe(true);
+    const claimed = await store.claimNextQueuedExecution({ leaseOwner: "ready-worker", leaseDurationMs: 60_000 });
+    expect(claimed?.executionId).toBe(admitted.executions[0]!.id);
+  });
+
   it("rejects conflicting event replay without rematching", async () => {
     const before = (await pool.query("select count(*)::int as count from agentbay_events")).rows[0].count as number;
     const original = admissionCommand(new Date().toISOString());

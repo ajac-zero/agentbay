@@ -56,6 +56,22 @@ describe("loadConfig", () => {
     });
   });
 
+  it("provides disabled issue acknowledgment defaults and requires credentials when enabled", () => {
+    expect(loadConfig({})).toMatchObject({
+      githubIssueAcknowledgmentEnabled: false,
+      githubIssueAcknowledgmentIdlePollMs: 250,
+      githubIssueAcknowledgmentLeaseDurationMs: 60_000,
+      githubIssueAcknowledgmentRequestTimeoutMs: 30_000,
+      githubIssueAcknowledgmentRetryDelayMs: 5_000,
+    });
+    expect(() => loadConfig({ AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED: "true" })).toThrow(/APP_ID_FILE/);
+    expect(loadConfig({
+      AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED: "true",
+      AGENTBAY_GITHUB_APP_ID_FILE: "/app-id",
+      AGENTBAY_GITHUB_PRIVATE_KEY_FILE: "/private-key",
+    })).toMatchObject({ githubIssueAcknowledgmentEnabled: true });
+  });
+
   it("requires dispatcher renewal before lease expiry", () => {
     expect(() => loadConfig({
       AGENTBAY_DISPATCHER_LEASE_DURATION_MS: "1000",
@@ -67,6 +83,13 @@ describe("loadConfig", () => {
     expect(() => loadConfig({
       AGENTBAY_REVISION_RESOLVER_LEASE_DURATION_MS: "1000",
       AGENTBAY_REVISION_RESOLVER_REQUEST_TIMEOUT_MS: "1000",
+    })).toThrow(/must be less/);
+  });
+
+  it("requires issue acknowledgment requests to finish before lease expiry", () => {
+    expect(() => loadConfig({
+      AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS: "1000",
+      AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS: "1000",
     })).toThrow(/must be less/);
   });
 

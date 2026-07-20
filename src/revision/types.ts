@@ -41,4 +41,10 @@ export interface RevisionResolutionStore {
 
 export type RevisionAwareAdmissionCommand = AdmissionCommand & {
   revisionResolution?: GitHubRevisionResolutionRequest;
+  githubIssueAcknowledgment?: {
+    installationId: number;
+    repositoryId: number;
+    repositoryFullName: string;
+    issueNumber: number;
+  };
 };

@@ -315,7 +315,7 @@ Connectors must not launch workloads directly.
 
 The execution-creation invariant is strict: a connector or caller submits a normalized event to an enabled trigger, and admission evaluates enabled immutable binding versions. The transaction may persist zero or more executions, one for each matching create binding version, and may wake zero or more executions through matching wake bindings and active waits. No connector, source-specific agent tool, or internal caller creates or wakes executions outside this admission transaction.
 
-The target admission transaction atomically persists the event, resolves replays, creates binding-selected executions, claims one-shot matching waits, appends wake events to their executions, queues continuations, and writes outbox records. Replay returns the original create and wake results without rematching current configuration.
+The target admission transaction atomically persists the event, resolves replays, creates binding-selected executions, claims one-shot matching waits, appends wake events to their executions, queues continuations, and writes outbox records. Replay returns the original create and wake results without rematching current configuration. Connector policy may register a required event-scoped effect in the same transaction. The dispatcher excludes executions associated with an unpublished required effect, so deterministic source acknowledgment can complete before sandbox provisioning without making an external call inside the admission transaction.
 
 ### 6.2 Binding matching
 
@@ -344,6 +344,8 @@ For each match, the planner:
 7. Writes an execution-request message to the transactional outbox in the same transaction.
 
 An outbox publisher moves committed messages to the durable bus. This prevents a committed execution from being lost between database insertion and queue publication.
+
+For GitHub `issues.opened`, deployments may enable a required `eyes` reaction effect. The control-plane publisher mints a selected-repository installation token with exactly `issues:write`, validates repository identity, and treats GitHub's created and already-present responses as success. The effect is event-scoped and idempotent across webhook replay. No App JWT or installation token is persisted in the event or outbox payload.
 
 ### 6.4 Management API
 
