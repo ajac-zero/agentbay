@@ -88,6 +88,7 @@ describe("materializeWorkspace", () => {
     expect(fetchArgs).toContain("https://github.com/repo;touch-pwned");
     expect(fetchArgs).toEqual(expect.arrayContaining(["fetch", "--no-tags", "--depth=1", "--no-recurse-submodules"]));
     expect(fetchArgs).toEqual(expect.arrayContaining(["-c", "http.curloptResolve=github.com:443:93.184.216.34"]));
+    expect(runner.mock.calls.every((call) => call[1].includes(`safe.directory=${directory}`))).toBe(true);
     expect(publicResolver).toHaveBeenCalledWith("github.com", { all: true, verbatim: true });
     expect(runner.mock.calls.every((call) => call[2].shell === false)).toBe(true);
     expect(runner.mock.calls[0]![2].env).toMatchObject({

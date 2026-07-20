@@ -73,7 +73,10 @@ definition:
       permission: { "github_*": deny }
       agent:
         review:
-          prompt: Review the pull request for correctness and regressions and publish the review through GitHub MCP tools.
+          prompt: >-
+            Review the pull request for correctness and regressions and publish the review through GitHub MCP tools.
+            Because one GitHub App authors and reviews the PR, submit a COMMENT review whose first line is exactly
+            `Agentbay-Verdict: approved` or `Agentbay-Verdict: changes_requested`.
           permission:
             github_pull_request_read: allow
             github_get_file_contents: allow

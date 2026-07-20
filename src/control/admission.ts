@@ -2,7 +2,7 @@ import type { Execution, ExecutionInput } from "../execution/types.js";
 import type { NormalizedCloudEvent } from "../execution/events.js";
 import { bindingExecutionIdempotencyKey } from "../execution/idempotency.js";
 import { canonicalJson, resolveJsonPointer, type JsonPrimitive, type JsonValue } from "../json.js";
-import type { BindingDefinition, FilterClause, PublishedBindingVersion, WakeBindingDefinition } from "./binding.js";
+import type { BindingDefinition, CreateBindingDefinition, FilterClause, PublishedBindingVersion, WakeBindingDefinition } from "./binding.js";
 import { resolveWorkspace } from "../workspace/resolver.js";
 
 export const UNTRUSTED_EVENT_BEGIN = "--- BEGIN UNTRUSTED EVENT ---";
@@ -111,6 +111,20 @@ export function projectWakeCorrelation(definition: WakeBindingDefinition, event:
     correlation[item.name] = resolved.value;
   }
   return correlation;
+}
+
+export function projectActiveSingleton(definition: CreateBindingDefinition, event: NormalizedCloudEvent): { name: string; values: JsonPrimitive[] } | undefined {
+  if (!definition.activeSingleton) return undefined;
+  const values: JsonPrimitive[] = [];
+  for (const path of definition.activeSingleton.key) {
+    const resolved = resolveJsonPointer(event.data, path);
+    if (!resolved.found || (resolved.value !== null && typeof resolved.value === "object")
+      || Buffer.byteLength(JSON.stringify(resolved.value), "utf8") > 1_024) {
+      throw new Error(`Active singleton key path ${path} must resolve to a bounded JSON primitive`);
+    }
+    values.push(resolved.value);
+  }
+  return { name: definition.activeSingleton.name, values };
 }
 
 export function planExecution(binding: PublishedBindingVersion, command: AdmissionCommand): Execution | undefined {

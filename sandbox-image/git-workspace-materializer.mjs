@@ -157,7 +157,12 @@ export async function materializeWorkspace({
   const env = gitEnvironment(environment);
   const runGit = async (operation, args) => {
     try {
-      return await runner(GIT, [...GIT_CONFIG, "-c", `http.curloptResolve=${curlResolve}`, ...args], { env, shell: false });
+      return await runner(GIT, [
+        ...GIT_CONFIG,
+        "-c", `safe.directory=${directory}`,
+        "-c", `http.curloptResolve=${curlResolve}`,
+        ...args,
+      ], { env, shell: false });
     } catch (error) {
       throw new Error(`Git workspace ${operation} failed${boundedError(error)}`);
     }

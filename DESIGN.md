@@ -691,17 +691,16 @@ Exactly-once behavior is not assumed across webhooks, databases, queues, Kuberne
 - Idempotent destination delivery keys
 - Connector-specific replay protection
 
-### 10.4 Concurrency, supersession, and coalescing
+### 10.4 Active execution singletons
 
-Bindings may specify a `concurrencyKey`. Policy can:
-
-- Queue all executions in order
-- Reject while another execution is active
-- Keep only the newest event
-- Supersede and cancel older executions
-- Coalesce multiple events into one pending execution
-
-For example, a new pull-request commit should usually supersede a queued review of an older SHA, while an already published review remains historical.
+Create bindings may specify an `activeSingleton` name and ordered JSON-pointer
+key over normalized event data. Agentbay projects bounded primitives, hashes the
+canonical ordered values, and permits only one nonterminal execution for each
+tenant, name, and key. Distinct conflicting events remain durable but create no
+execution; exact replay returns the original empty execution set. Terminal
+execution state releases the slot for a later distinct event. Shared names let
+multiple bindings, such as difficulty-specific issue developers, enforce one
+logical lifecycle across binding versions and variants.
 
 ### 10.5 Cancellation and timeout
 

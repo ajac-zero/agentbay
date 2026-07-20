@@ -13,11 +13,13 @@ the generic `contains` array predicate. They demonstrate:
 1. `issues.opened` starts triage.
 2. Triage applies one difficulty label and then `agentbay/state:ready`.
 3. `issues.labeled` selects exactly one developer profile.
-4. The broker attributes the developer's primary PR through a fenced mutation receipt and matching signed webhook.
-5. `pull_request.opened` starts one separate reviewer lifecycle.
-6. Requested changes wake the developer at the reviewed head SHA.
-7. `pull_request.synchronize` coalesces the latest revision into the reviewer lifecycle.
-8. A merged `pull_request.closed` event terminally completes both independent lifecycles.
+4. All difficulty bindings share an active singleton keyed by repository ID and issue number, so later ready-label deliveries cannot create a second developer lifecycle while the first is nonterminal.
+5. The broker attributes the developer's primary PR through a fenced mutation receipt and matching signed webhook.
+6. `pull_request.opened` starts one separate reviewer lifecycle.
+7. The reviewer submits a comment review beginning with `Agentbay-Verdict: approved` or `Agentbay-Verdict: changes_requested`.
+8. A `changes_requested` Agentbay verdict wakes the developer at the reviewed head SHA.
+9. `pull_request.synchronize` coalesces the latest revision into the reviewer lifecycle.
+10. A merged `pull_request.closed` event terminally completes both independent lifecycles.
 
 The GitHub connector also normalizes issue comments, pull-request reviews, and
 pull-request review comments for later continuation matching.
@@ -52,10 +54,16 @@ slot. Only the execution-scoped GitHub broker receipt, verified against the
 signed opened webhook's repository ID, PR database ID, and number, can fill that
 slot. PR body text and repository-only correlation are never authoritative.
 
+The three developer difficulty bindings use the same `activeSingleton.name`
+and key paths. Agentbay admits every distinct signed delivery for audit and
+idempotent replay, but suppresses execution creation while a nonterminal
+execution owns that singleton. Terminal completion releases the key for a
+future delivery.
+
 The reciprocal policy is:
 
 ```text
-pull_request_review.submitted where review.state=changes_requested
+pull_request_review.submitted where review.agentbayVerdict=changes_requested
   -> wake the developer wait correlated by repository ID and PR number
 
 pull_request.synchronize or issue_comment.created

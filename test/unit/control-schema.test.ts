@@ -126,6 +126,13 @@ describe("binding schemas", () => {
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, afterTurn: { ...afterTurn, wait: { ...afterTurn.wait, extra: true } } }).success).toBe(false);
   });
 
+  it("accepts bounded active execution singleton keys on create bindings only", () => {
+    const activeSingleton = { name: "developer-issue", key: ["/repository/id", "/issue/number"] } as const;
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, activeSingleton }).success).toBe(true);
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, activeSingleton: { ...activeSingleton, key: [] } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, activeSingleton: { ...activeSingleton, key: ["/bad~2pointer"] } }).success).toBe(false);
+  });
+
   it("accepts bounded wake continuation and terminal policies", () => {
     const wake = {
       disposition: "wake",
@@ -152,6 +159,7 @@ describe("binding schemas", () => {
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, action: { type: "complete" } } }).success).toBe(true);
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, action: { type: "complete", workspace: { type: "empty" } } } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...wake, workspace: { type: "empty" } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({ ...wake, activeSingleton: { name: "bad", key: ["/repository/id"] } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, correlation: [] } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, correlation: [{ name: "x", path: "/x" }, { name: "x", path: "/y" }] } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, action: { type: "complete", prompt: { literal: "bad", includeEvent: "none" } } } }).success).toBe(false);

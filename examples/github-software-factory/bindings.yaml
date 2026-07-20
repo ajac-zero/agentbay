@@ -26,6 +26,9 @@ definition:
       - { path: /repository/fullName, op: eq, value: acme/agentbay }
       - { path: /issue/labels, op: contains, value: "agentbay/state:ready" }
       - { path: /issue/labels, op: contains, value: "agentbay/difficulty:easy" }
+  activeSingleton:
+    name: developer-issue
+    key: [/repository/id, /issue/number]
   prompt: { literal: Implement the ready issue and open a pull request., includeEvent: data }
   workspace:
     type: git
@@ -51,7 +54,7 @@ definition:
   filter:
     all:
       - { path: /repository/fullName, op: eq, value: acme/agentbay }
-      - { path: /review/state, op: eq, value: changes_requested }
+      - { path: /review/agentbayVerdict, op: eq, value: changes_requested }
   wake:
     waitName: developer-pr-lifecycle
     delivery: active-or-coalesced
