@@ -369,7 +369,8 @@ describe("normalizeGitHubEvent", () => {
       ...common,
       pull_request: { ...pullRequest, head: branch("contributor/widgets", "a".repeat(40)), base: { ...pullRequest.base, repo: null } },
     }, "pull_request"))).toThrow();
-    expect(() => normalizeGitHubEvent(input({ ...common, repository: { ...repository(), clone_url: "https://example.com/acme/widgets.git" }, issue }))).toThrow(/github.com/);
+    expect(() => normalizeGitHubEvent(input({ ...common, repository: { ...repository(), clone_url: "https://example.com/acme/widgets.git" }, issue })))
+      .toThrow("GitHub repository clone_url must match its full_name on github.com");
   });
 
   it("truncates bodies deterministically at a UTF-8 boundary", () => {
