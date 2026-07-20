@@ -153,12 +153,12 @@ comparison values are JSON primitives. The prompt's `includeEvent` is `none`,
 Connections are generic, tenant-owned metadata records created with `POST
 /v1/connections` and read with `GET /v1/connections/:connectionID`; the generated
 OpenAPI document defines their request and response schemas. They contain no raw
-credential; the create body is `{"id":"github-production","type":"github"}`.
+credential; for example, a create body may be `{"id":"source-control","type":"custom"}`.
 A profile grants connections by mapping each connection ID to a
 sidecar that must already be owned by its immutable sandbox template:
 
 ```json
-"connections": [{ "id": "github-production", "sidecar": "github-token-broker" }]
+"connections": [{ "id": "source-control", "sidecar": "credential-broker" }]
 ```
 
 At dispatch, Agentbay resolves the records and injects one canonical, non-secret
@@ -166,7 +166,7 @@ At dispatch, Agentbay resolves the records and injects one canonical, non-secret
 contains only that sidecar's sorted connection IDs:
 
 ```json
-{"refs":["github-production"],"schemaVersion":1,"tenantId":"default"}
+{"refs":["source-control"],"schemaVersion":1,"tenantId":"default"}
 ```
 
 Resolution is fail closed: a missing connection or invalid mapping prevents
@@ -363,9 +363,9 @@ An agent delegates by using ordinary tools or MCP servers to cause an external
 effect that a connector later normalizes into another event. Bindings consume
 that event exactly like any other; no special Agentbay delegation MCP is
 required. Template-owned sidecars provide standard policy-bounded tool access.
-The GitHub integration uses the official `github-mcp-server` behind a localhost
-token broker. The broker exchanges a GitHub App private key for short-lived,
-repository-scoped installation tokens without exposing credentials to OpenCode.
+Provider-specific integrations compose those generic sidecars with external tool
+servers. The complete GitHub MCP and token-broker stack lives in
+[`examples/github-software-factory`](examples/github-software-factory/README.md).
 Result destinations are separate: they deliver an existing execution's result
 and are not an execution-creation mechanism.
 
@@ -464,42 +464,14 @@ docker build -f opencode-sandbox.Dockerfile -t ghcr.io/your-org/opencode-sandbox
 docker push ghcr.io/your-org/opencode-sandbox:latest
 ```
 
-Build the dependency-free GitHub token broker separately. Publish the image and
-deploy the immutable digest, not a mutable tag:
-
-```bash
-docker build -f github-token-broker.Dockerfile \
-  -t ghcr.io/your-org/github-token-broker:v1 .
-docker push ghcr.io/your-org/github-token-broker:v1
-docker inspect --format='{{index .RepoDigests 0}}' \
-  ghcr.io/your-org/github-token-broker:v1
-```
-
-The image copies only `github-token-broker/*.mjs`, runs `index.mjs` directly as
-fixed UID/GID 65532 on a distroless Node 24 image, and is compatible with a
-read-only root filesystem. The broker reads
-`AGENTBAY_GITHUB_APP_ID_FILE`, `AGENTBAY_GITHUB_INSTALLATION_ID_FILE`, and
-`AGENTBAY_GITHUB_PRIVATE_KEY_FILE`, mints tokens for
-`AGENTBAY_GITHUB_REPOSITORY_ID` and `AGENTBAY_GITHUB_PERMISSIONS`, binds
-localhost port 8083, and reports readiness at `/readyz` and liveness at
-`/livez`. It accepts only the connection refs in `AGENTBAY_CONNECTIONS` and
-forwards MCP traffic to the official server on loopback port 8082.
-
-Configure the OpenCode profile with a remote MCP entry at
-`http://127.0.0.1:8083/` and `oauth: false`. Configure a GitHub App with
-selected-repository permissions **Issues: write**, **Contents: write**, and
-**Pull requests: write**, no **Workflows** permission, and install it on one
-selected repository. Mount its App ID, installation ID, and private key Secret
-files only into `github-token-broker`; the official MCP server and OpenCode get
-no credential mount. Pin the official `github-mcp-server` image by digest and
-start it with exact `--tools` for the role. Deny `github_*` globally in OpenCode
-and allow only exact official tool names on the selected agent. The broker never
-automatically replays failed MCP requests because mutations may have ambiguous
-outcomes.
-See the Helm
-[`README`](deploy/helm/agentbay/README.md) and
-[`sandbox-template.yaml`](deploy/examples/sandbox-template.yaml) for complete
-examples.
+Provider-specific sidecar stacks should be built and deployed by their example.
+The GitHub software factory includes the official GitHub MCP sidecar, its
+dependency-free installation-token broker, role-specific tools and permissions,
+credential mounts, tests, and image build instructions in
+[`examples/github-software-factory`](examples/github-software-factory/README.md).
+The generic Helm [`README`](deploy/helm/agentbay/README.md) and
+[`sandbox-template.yaml`](deploy/examples/sandbox-template.yaml) remain
+provider-neutral.
 
 PostgreSQL is required. The Helm chart can run migrations, deploy an in-cluster
 PostgreSQL instance for small installs, or use an external PostgreSQL URL or

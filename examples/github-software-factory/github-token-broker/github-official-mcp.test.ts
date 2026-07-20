@@ -3,7 +3,7 @@ import { GenericContainer, type StartedTestContainer, Wait } from "testcontainer
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 // @ts-expect-error The broker intentionally ships as dependency-free Node ESM.
-import { startBroker } from "../../github-token-broker/server.mjs";
+import { startBroker } from "./server.mjs";
 
 const IMAGE = "ghcr.io/github/github-mcp-server@sha256:2b0c48b070f61e9d3969269ead600f62d00fb237b60ac849ef3d166ee7de9ad3";
 

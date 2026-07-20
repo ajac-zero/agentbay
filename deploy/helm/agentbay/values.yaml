@@ -443,10 +443,8 @@ sandboxTemplates:
       # -- localhost. Connection profiles may select only sidecars already
       # -- owned by this template. Claim env injection forces cold starts from
       # -- the profile's concrete v1beta1 SandboxWarmPool.
-      # -- See the chart README for the official GitHub MCP server plus Agentbay
-      # -- installation-token broker example. Pin both images by digest and mount
-      # -- the GitHub App credential volume only on the broker, never through
-      # -- `extraVolumeMounts` or into OpenCode/the official server.
+      # -- Provider-specific stacks belong in dedicated examples. See
+      # -- examples/github-software-factory for the GitHub MCP and broker stack.
       sidecars: []
       # -- Additional volumes appended to the sandbox Pod. Use with `sidecars`
       # -- for projected tokens, config, sidecar-specific state, or a static
