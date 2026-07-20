@@ -262,7 +262,7 @@ describe("normalizeGitHubEvent", () => {
         conclusion: "success",
         head_sha: "a".repeat(40),
         head_branch: "feature",
-        head_repository: repository("contributor/widgets"),
+        head_repository: { id: 10, full_name: "contributor/widgets" },
         pull_requests: [{
           id: 700,
           number: 7,

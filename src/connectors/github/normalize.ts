@@ -54,6 +54,11 @@ const gitRepositorySchema = z.object({
   clone_url: bounded(2_048),
 });
 
+const workflowRunHeadRepositorySchema = z.object({
+  id,
+  full_name: fullName,
+});
+
 const issueSchema = z.object({
   number: z.number().int().positive(),
   title: bounded(4_096),
@@ -146,7 +151,7 @@ const workflowRunPayloadSchema = z.object({
     conclusion: z.enum(["action_required", "cancelled", "failure", "neutral", "skipped", "stale", "startup_failure", "success", "timed_out"]),
     head_sha: sha,
     head_branch: bounded(255).nullable(),
-    head_repository: gitRepositorySchema,
+    head_repository: workflowRunHeadRepositorySchema,
     pull_requests: z.array(z.object({
       id,
       number: z.number().int().positive(),
@@ -386,7 +391,7 @@ export function normalizeGitHubEvent(input: NormalizeGitHubEventInput): Normaliz
                       repository: {
                         id: run.head_repository.id,
                         fullName: run.head_repository.full_name,
-                        cloneUrl: cloneUrl(run.head_repository),
+                        cloneUrl: `https://github.com/${run.head_repository.full_name}.git`,
                       },
                     },
                     base: { ref: pullRequest.base.ref, sha: pullRequest.base.sha },
