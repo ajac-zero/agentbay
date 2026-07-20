@@ -40,13 +40,15 @@ describe("GitHub token broker", () => {
     expect(() => parseStartupConfig({ ...env, AGENTBAY_CONNECTIONS: JSON.stringify({ refs: ["other"], schemaVersion: 1, tenantId: "default" }) })).toThrow();
     expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MCP_UPSTREAM: "https://example.com" })).toThrow(/loopback/);
     expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_PERMISSIONS: "contents:admin" })).toThrow();
-    expect(parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_ID: "9", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 42,
+    expect(parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_IDS: "9,10", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 42,
       repositoryFullName: "acme/repo", pullRequestNumber: 7, reviewerId: 9, commitSha: "a".repeat(40) }) }).mergeCapability)
       .toMatchObject({ repositoryId: 42, pullRequestNumber: 7, commitSha: "a".repeat(40) });
-    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_ID: "9", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 43,
+    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_IDS: "9", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 43,
       repositoryFullName: "acme/repo", pullRequestNumber: 7, reviewerId: 9, commitSha: "a".repeat(40) }) })).toThrow(/MERGE_CAPABILITY/);
-    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_ID: "10", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 42,
+    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_IDS: "10", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 42,
       repositoryFullName: "acme/repo", pullRequestNumber: 7, reviewerId: 9, commitSha: "a".repeat(40) }) })).toThrow(/MERGE_CAPABILITY/);
+    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_IDS: "9,9", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 42,
+      repositoryFullName: "acme/repo", pullRequestNumber: 7, reviewerId: 9, commitSha: "a".repeat(40) }) })).toThrow(/REVIEWER_IDS/);
   });
 
   it("validates mounted GitHub App credentials", async () => {

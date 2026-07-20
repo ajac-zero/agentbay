@@ -12,6 +12,7 @@ export const filterClauseSchema = z.discriminatedUnion("op", [
   z.object({ path: jsonPointerSchema, op: z.literal("in"), values: z.array(primitiveSchema).min(1).max(32) }).strict(),
   z.object({ path: jsonPointerSchema, op: z.literal("contains"), value: primitiveSchema }).strict(),
   z.object({ path: jsonPointerSchema, op: z.literal("containsAny"), values: z.array(primitiveSchema).min(1).max(32) }).strict(),
+  z.object({ path: jsonPointerSchema, op: z.literal("notStartsWith"), value: z.string().min(1).max(255) }).strict(),
   z.object({ path: jsonPointerSchema, op: z.literal("exists"), value: z.boolean() }).strict(),
 ]);
 

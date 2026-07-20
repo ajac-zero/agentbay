@@ -1125,6 +1125,8 @@ Later, one global control plane may route to multiple execution clusters. Each c
 7. The workspace provider clones the exact workflow head SHA with read-only credentials.
 8. OpenCode reviews the repository and completed CI evidence in an isolated sandbox, then submits a SHA-bound native review.
 9. A later push runs CI again and can create a distinct reviewer only after that revision's terminal workflow event; stale workflow events remain bound to their old SHA.
+
+Verified Dependabot npm patch and minor updates may use a deterministic fast lane instead of provisioning a reviewer sandbox. A trusted `pull_request_target` workflow never checks out or executes pull-request code; it verifies the fixed Dependabot actor and signed commit metadata, restricts changes to dependency manifests and lockfiles, waits for all repository-required checks on the exact head SHA, revalidates the open pull request immediately before submitting an exact-SHA approval, and uses GitHub's ephemeral workflow token. Major updates, non-npm ecosystems, unexpected files, metadata failures, and failed or timed-out checks receive a trusted fallback label that admits the normal reviewer binding. Dependabot branches are excluded from the generic workflow-completion reviewer binding so one revision cannot enter both lanes. Repository protection and the merge broker accept the fixed workflow bot actor only as the deterministic fast-lane approver; all other automated reviews remain fenced to the reviewer App actor.
 10. A native approval starts a separate fenced merger execution, and GitHub branch protection remains the final merge authority.
 
 ### 19.2 Grafana alert diagnosis

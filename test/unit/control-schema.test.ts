@@ -81,6 +81,7 @@ describe("binding schemas", () => {
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: [{ path: "/active", op: "exists" }] } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: [{ path: "/labels", op: "contains", value: "ready" }] } }).success).toBe(true);
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: [{ path: "/labels", op: "containsAny", values: ["easy", "hard"] }] } }).success).toBe(true);
+    expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: [{ path: "/branch", op: "notStartsWith", value: "dependabot/" }] } }).success).toBe(true);
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: [{ path: "/labels", op: "containsAny", values: [] }] } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: Array(17).fill({ path: "", op: "exists", value: true }) } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...validDefinition, filter: { all: [{ path: "/bad~2path", op: "exists", value: true }] } }).success).toBe(false);
