@@ -59,7 +59,7 @@ spec:
             summary: Agentbay schedule stopped firing
             description: "Schedule {{ "{{ $labels.trigger_id }}" }} is past its expected next fire time."
         - alert: AgentbayObservabilityCollectorDown
-          expr: max(agentbay_observability_collector_up) == 0
+          expr: (max(agentbay_observability_collector_up) == 0) or absent(agentbay_observability_collector_up)
           for: 5m
           labels: { severity: warning }
           annotations:
