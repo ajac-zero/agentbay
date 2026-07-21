@@ -27,6 +27,7 @@ grep -q 'prometheus.io/path: /metrics' "$work_dir/observability.yaml"
 grep -q 'alert: AgentbayOutboxStuck' "$work_dir/observability.yaml"
 grep -q 'alert: AgentbayExecutionOverdue' "$work_dir/observability.yaml"
 grep -q 'alert: AgentbayScheduleStopped' "$work_dir/observability.yaml"
+grep -q 'absent(agentbay_observability_collector_up)' "$work_dir/observability.yaml"
 grep -q 'app.kubernetes.io/component: metrics-collector' "$work_dir/observability.yaml"
 grep -q 'automountServiceAccountToken: false' "$work_dir/observability.yaml"
 
