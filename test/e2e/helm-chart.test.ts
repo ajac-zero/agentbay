@@ -97,6 +97,7 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/AgentbayOutboxStuck/);
       expect(result.stdout).toMatch(/AgentbayExecutionOverdue/);
       expect(result.stdout).toMatch(/AgentbayScheduleStopped/);
+      expect(result.stdout).toMatch(/absent\(agentbay_observability_collector_up\)/);
       expect(result.stdout).toMatch(/agentbay-software-factory\.json/);
       expect(result.stdout).toMatch(/app\.kubernetes\.io\/component: metrics-collector/);
       expect(result.stdout).toMatch(/automountServiceAccountToken: false/);
