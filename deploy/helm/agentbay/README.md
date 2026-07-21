@@ -316,11 +316,15 @@ observability:
     enabled: true
 ```
 
-The initial rules alert when the oldest pending outbox message exceeds ten
-minutes, an active execution exceeds its persisted timeout, or an enabled
+The initial rules alert when the oldest pending publisher-managed outbox message
+exceeds ten minutes, an active execution exceeds its persisted timeout, or an enabled
 schedule has missed two expected cron intervals past `next_fire_at`. They also warn when the
 PostgreSQL collector has failed for five minutes. Tune these values under
 `observability.prometheusRule` after observing normal production behavior.
+By default, outbox paging is limited to `github.*` topics because the current
+database-polling dispatcher leaves internal `execution.requested` wake hints in
+the durable audit outbox. All topics remain visible on the dashboard; configure
+`outboxTopicsRegex` when additional external publishers are deployed.
 
 `ServiceMonitor` and `PrometheusRule` require the Prometheus Operator CRDs and
 are disabled by default. Annotation-based collectors can use
