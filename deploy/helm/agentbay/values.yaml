@@ -77,6 +77,9 @@ observability:
     enabled: false
     labels: {}
     outboxMaxAgeSeconds: 600
+    # -- Regex of outbox topics with an active external publisher. Durable
+    # -- internal wake hints remain visible on dashboards but do not page.
+    outboxTopicsRegex: "github\\..+"
     scheduleMissedIntervals: 2
     for: 5m
   dashboard:

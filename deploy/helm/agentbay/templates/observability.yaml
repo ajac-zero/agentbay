@@ -38,7 +38,7 @@ spec:
     - name: agentbay.factory
       rules:
         - alert: AgentbayOutboxStuck
-          expr: max by (tenant, topic) (agentbay_outbox_oldest_pending_age_seconds) > {{ .Values.observability.prometheusRule.outboxMaxAgeSeconds }}
+          expr: max by (tenant, topic) (agentbay_outbox_oldest_pending_age_seconds{topic=~{{ .Values.observability.prometheusRule.outboxTopicsRegex | quote }}}) > {{ .Values.observability.prometheusRule.outboxMaxAgeSeconds }}
           for: {{ .Values.observability.prometheusRule.for | quote }}
           labels: { severity: critical }
           annotations:
