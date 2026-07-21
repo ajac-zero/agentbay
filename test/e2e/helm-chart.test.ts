@@ -85,6 +85,8 @@ describe("agentbay Helm chart", () => {
         "--set", "observability.serviceMonitor.enabled=true",
         "--set", "observability.prometheusRule.enabled=true",
         "--set", "observability.dashboard.enabled=true",
+        "--set", "observability.collector.enabled=true",
+        "--set", "observability.collector.remoteWriteEndpoint=http://mimir:9009/api/v1/push",
       ]);
       expect(result.status, formatStderr(result)).toBe(0);
       expect(result.stdout).toMatch(/kind: ServiceMonitor/);
@@ -96,6 +98,9 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/AgentbayExecutionOverdue/);
       expect(result.stdout).toMatch(/AgentbayScheduleStopped/);
       expect(result.stdout).toMatch(/agentbay-software-factory\.json/);
+      expect(result.stdout).toMatch(/app\.kubernetes\.io\/component: metrics-collector/);
+      expect(result.stdout).toMatch(/automountServiceAccountToken: false/);
+      expect(result.stdout).toMatch(/endpoint: "http:\/\/mimir:9009\/api\/v1\/push"/);
     });
 
     it("renders SandboxTemplates with a NetworkPolicy ingress selector that matches the orchestrator", () => {

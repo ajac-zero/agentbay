@@ -17,7 +17,9 @@ helm template demo "$chart_dir" \
   --set observability.podAnnotations.enabled=true \
   --set observability.serviceMonitor.enabled=true \
   --set observability.prometheusRule.enabled=true \
-  --set observability.dashboard.enabled=true > "$work_dir/observability.yaml"
+  --set observability.dashboard.enabled=true \
+  --set observability.collector.enabled=true \
+  --set observability.collector.remoteWriteEndpoint=http://mimir:9009/api/v1/push > "$work_dir/observability.yaml"
 grep -q 'kind: ServiceMonitor' "$work_dir/observability.yaml"
 grep -q 'kind: PrometheusRule' "$work_dir/observability.yaml"
 grep -q 'grafana_dashboard: "1"' "$work_dir/observability.yaml"
@@ -25,6 +27,8 @@ grep -q 'prometheus.io/path: /metrics' "$work_dir/observability.yaml"
 grep -q 'alert: AgentbayOutboxStuck' "$work_dir/observability.yaml"
 grep -q 'alert: AgentbayExecutionOverdue' "$work_dir/observability.yaml"
 grep -q 'alert: AgentbayScheduleStopped' "$work_dir/observability.yaml"
+grep -q 'app.kubernetes.io/component: metrics-collector' "$work_dir/observability.yaml"
+grep -q 'automountServiceAccountToken: false' "$work_dir/observability.yaml"
 
 helm template demo "$chart_dir" \
   --namespace agentbay-helm-test \
