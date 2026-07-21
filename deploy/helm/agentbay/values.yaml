@@ -87,6 +87,17 @@ observability:
     enabled: false
     labels:
       grafana_dashboard: "1"
+  collector:
+    # -- Deploy a dedicated OpenTelemetry Collector that scrapes only Agentbay.
+    # -- Use when the cluster does not discover ServiceMonitor or Pod annotations.
+    enabled: false
+    image: otel/opentelemetry-collector-contrib@sha256:45392d534c1edcc809c2d112394029246bc679d2ae5ea7081414a1fc74f2c621
+    pullPolicy: IfNotPresent
+    scrapeInterval: 30s
+    remoteWriteEndpoint: ""
+    resources:
+      requests: { cpu: 10m, memory: 64Mi }
+      limits: { cpu: 100m, memory: 128Mi }
 
 ingress:
   # -- Whether to create an Ingress for the execution API.

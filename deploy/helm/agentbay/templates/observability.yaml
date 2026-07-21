@@ -80,3 +80,90 @@ data:
   agentbay-software-factory.json: |-
 {{ .Files.Get "dashboards/agentbay-software-factory.json" | indent 4 }}
 {{- end }}
+{{- if .Values.observability.collector.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentbay.fullname" . }}-metrics-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics-collector
+data:
+  collector.yaml: |-
+    receivers:
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: agentbay
+              metrics_path: /metrics
+              scrape_interval: {{ .Values.observability.collector.scrapeInterval }}
+              static_configs:
+                - targets: [{{ printf "%s.%s.svc.cluster.local:%v" (include "agentbay.fullname" .) .Release.Namespace .Values.service.metricsPort | quote }}]
+    processors:
+      batch: {}
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 20
+    exporters:
+      prometheusremotewrite:
+        endpoint: {{ required "observability.collector.remoteWriteEndpoint is required when the collector is enabled" .Values.observability.collector.remoteWriteEndpoint | quote }}
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+    service:
+      extensions: [health_check]
+      pipelines:
+        metrics:
+          receivers: [prometheus]
+          processors: [memory_limiter, batch]
+          exporters: [prometheusremotewrite]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentbay.fullname" . }}-metrics-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "agentbay.name" . }}-metrics-collector
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "agentbay.name" . }}-metrics-collector
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: metrics-collector
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: collector
+          image: {{ .Values.observability.collector.image | quote }}
+          imagePullPolicy: {{ .Values.observability.collector.pullPolicy }}
+          args: ["--config=/etc/collector/collector.yaml"]
+          ports:
+            - { name: health, containerPort: 13133, protocol: TCP }
+          readinessProbe: { httpGet: { path: /, port: health } }
+          livenessProbe: { httpGet: { path: /, port: health } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile: { type: RuntimeDefault }
+          resources:
+            {{- toYaml .Values.observability.collector.resources | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/collector, readOnly: true }
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "agentbay.fullname" . }}-metrics-collector
+{{- end }}
