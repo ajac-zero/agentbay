@@ -332,6 +332,19 @@ are disabled by default. Annotation-based collectors can use
 as an explicit `/metrics` scrape target. The dashboard ConfigMap is labeled
 `grafana_dashboard=1` by default for common Grafana sidecar discovery.
 
+For clusters with a static OpenTelemetry/Mimir pipeline, enable the optional
+chart-managed collector instead of mutating a shared collector configuration:
+
+```yaml
+observability:
+  collector:
+    enabled: true
+    remoteWriteEndpoint: http://mimir.observability.svc:9009/api/v1/push
+```
+
+The dedicated collector uses a pinned image, one static Agentbay target, no
+service account token or Kubernetes API permissions, and a read-only filesystem.
+
 ## Envoy AI Gateway authorization
 
 Enable `aiGatewayAuthz` when sandbox Pods should reach model providers through
