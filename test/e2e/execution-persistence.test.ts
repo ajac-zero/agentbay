@@ -107,6 +107,13 @@ describe("execution persistence", () => {
       },
     ]);
     expect((await pool.query("select count(*)::int as count from agentbay_events")).rows[0]).toEqual({ count: 1 });
+
+    const snapshot = await store.collectObservabilitySnapshot();
+    expect(snapshot.rows).toEqual(expect.arrayContaining([
+      { kind: "execution_state", tenantId: "default", label: "QUEUED", value: 1 },
+      expect.objectContaining({ kind: "execution_oldest_active_age", tenantId: "default", label: "" }),
+      { kind: "outbox_pending", tenantId: "default", label: "execution.requested", value: 1, secondaryValue: expect.any(Number) },
+    ]));
   });
 
   it("withholds execution claims until the issue acknowledgment is published", async () => {

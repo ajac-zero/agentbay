@@ -347,7 +347,28 @@ An outbox publisher moves committed messages to the durable bus. This prevents a
 
 For GitHub `issues.opened` and `pull_request.opened`, deployments may enable a required `eyes` reaction effect. The control-plane publisher mints a selected-repository installation token with exactly the corresponding `issues:write` or `pull_requests:write` permission, validates repository identity, and treats GitHub's created and already-present responses as success. The effect is event-scoped and idempotent across webhook replay. No App JWT or installation token is persisted in the event or outbox payload.
 
-### 6.4 Management API
+### 6.4 Observability
+
+PostgreSQL remains authoritative for operational state. Prometheus counters and
+histograms record committed lifecycle outcomes, while gauges for current
+executions, overdue executions, pending outbox messages, schedule lateness,
+checkpoint age, active sandbox workloads, and pending revision resolutions are
+derived from bounded aggregate PostgreSQL queries at scrape time. Collection is
+cached and timeout-bounded; transient collection failure preserves the last
+successful snapshot and exposes collector health and snapshot age rather than
+failing the application or returning fabricated zeros.
+
+Metric dimensions are restricted to bounded control-plane values such as tenant,
+state, result, event type, profile ID, binding ID, trigger ID, topic, operation,
+and component. Execution IDs, event IDs, repository names, issue or pull request
+numbers, commit SHAs, SandboxClaim names, prompts, model output, and raw errors
+belong in structured logs and durable audit records, never metric labels. The
+portable deployment surface supports Prometheus annotations, optional
+ServiceMonitor and PrometheusRule resources, and a Grafana sidecar dashboard.
+Infrastructure collectors remain responsible for Pod and Kubernetes controller
+health; Agentbay metrics describe durable factory behavior.
+
+### 6.5 Management API
 
 The implemented V1 management and ingress surface is:
 

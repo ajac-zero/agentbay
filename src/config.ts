@@ -14,6 +14,7 @@ export type Config = {
   opencodeDirectory: string;
   opencodePort: number;
   port: number;
+  metricsPort?: number;
   sandboxClaimApiVersion: SandboxClaimAPIVersion;
   executionMaintenanceBatchSize: number;
   executionMaintenanceEnabled: boolean;
@@ -83,6 +84,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     opencodeDirectory: env.AGENTBAY_OPENCODE_DIRECTORY ?? "/workspace",
     opencodePort: readNumber(env.AGENTBAY_OPENCODE_PORT, 4096),
     port: readNumber(env.PORT, 3000),
+    metricsPort: readNumber(env.AGENTBAY_METRICS_PORT, 9090),
     sandboxClaimApiVersion: readSandboxClaimApiVersion(env.AGENTBAY_SANDBOX_CLAIM_API_VERSION),
   };
   if (config.dispatcherRenewIntervalMs >= config.dispatcherLeaseDurationMs) {
