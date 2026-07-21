@@ -186,7 +186,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           FROM agentbay_execution_checkpoints GROUP BY tenant_id,binding_id
         UNION ALL
         SELECT 'active_workloads',tenant_id,'',count(*)::text,NULL,NULL FROM agentbay_execution_attempts
-          WHERE state IN ('LEASED','RUNNING') AND workload_name IS NOT NULL GROUP BY tenant_id
+          WHERE state IN ('LEASED','RUNNING') GROUP BY tenant_id
         UNION ALL
         SELECT 'revision_pending',tenant_id,'',count(*)::text,NULL,NULL FROM agentbay_event_revision_resolutions
           WHERE state IN ('PENDING','LEASED','RETRY_WAIT') GROUP BY tenant_id`,
