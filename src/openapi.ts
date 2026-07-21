@@ -1,5 +1,6 @@
 import { swaggerUI } from "@hono/swagger-ui";
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
+import type { Registry } from "prom-client";
 
 export function createOpenApiApp(): OpenAPIHono {
   const app = new OpenAPIHono();
@@ -21,6 +22,10 @@ export function mountHealthRoute(app: OpenAPIHono): void {
       200,
     ),
   );
+}
+
+export function mountMetricsRoute(app: OpenAPIHono, registry: Registry): void {
+  app.get("/metrics", async (context) => context.body(await registry.metrics(), 200, { "content-type": registry.contentType }));
 }
 
 export function mountOpenApiDocs(app: OpenAPIHono): void {

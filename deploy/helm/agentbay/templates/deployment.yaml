@@ -21,9 +21,17 @@ spec:
     metadata:
       labels:
         {{- include "agentbay.selectorLabels" . | nindent 8 }}
-      {{- with .Values.podAnnotations }}
+      {{- if or .Values.observability.podAnnotations.enabled .Values.podAnnotations }}
       annotations:
+        {{- if .Values.observability.podAnnotations.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: {{ .Values.service.metricsPort | quote }}
+        prometheus.io/scrape_interval: {{ .Values.observability.podAnnotations.interval | quote }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "agentbay.serviceAccountName" . }}
@@ -47,9 +55,14 @@ spec:
             - name: http
               containerPort: {{ .Values.orchestrator.port }}
               protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.service.metricsPort }}
+              protocol: TCP
           env:
             - name: PORT
               value: {{ .Values.orchestrator.port | quote }}
+            - name: AGENTBAY_METRICS_PORT
+              value: {{ .Values.service.metricsPort | quote }}
             - name: AGENTBAY_KUBE_NAMESPACE
               value: {{ include "agentbay.claimsNamespace" . | quote }}
             - name: AGENTBAY_SANDBOX_CLAIM_API_VERSION

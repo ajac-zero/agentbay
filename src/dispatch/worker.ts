@@ -12,6 +12,7 @@ import type { JsonValue } from "../execution/types.js";
 import { observeExecutionAttempt, runExecutionAttempt } from "../agent/runner.js";
 import type { OpenCodeConnectionOptions } from "../agent/client.js";
 import { SandboxClaimCleanupError, SandboxClaimRejectedError } from "../sandbox/provisioner.js";
+import { executionDuration, executionOutcomes, sandboxProvisionDuration } from "../observability/metrics.js";
 
 type AttemptProfile = ExecutionAttemptProfile;
 type ProvisionedAttempt = Awaited<ReturnType<ExecutionAttemptProvisioner["provision"]>>;
@@ -159,6 +160,23 @@ export class DispatcherWorker {
     let terminal = false;
     let cleanupAttempted = false;
     let leaseLost = false;
+    const provisioningStartedAt = process.hrtime.bigint();
+    let provisioningObserved = false;
+    const observeProvisioning = (result: string) => {
+      if (provisioningObserved) return;
+      provisioningObserved = true;
+      sandboxProvisionDuration.observe(
+        { tenant: execution.tenantId, profile_id: execution.profileVersion.profileId, result },
+        Number(process.hrtime.bigint() - provisioningStartedAt) / 1_000_000_000,
+      );
+    };
+    const observeOutcome = (result: string) => {
+      executionOutcomes.inc({ tenant: execution.tenantId, profile_id: execution.profileVersion.profileId, result });
+      executionDuration.observe(
+        { tenant: execution.tenantId, profile_id: execution.profileVersion.profileId, result },
+        Math.max(0, (Date.now() - execution.createdAt.getTime()) / 1_000),
+      );
+    };
 
     const releaseProvisioned = async (): Promise<boolean> => {
       cleanupAttempted = true;
@@ -202,6 +220,7 @@ export class DispatcherWorker {
       provisioned = execution.adoption
         ? await this.#options.provisioner.adopt(provisioningInput, execution.adoption.workloadName, heartbeat.signal)
         : await this.#options.provisioner.provision(provisioningInput, heartbeat.signal);
+      observeProvisioning(execution.adoption ? "adopted" : "ready");
       heartbeat.assertOwned();
 
       const markRunning = async (sessionId?: string): Promise<void> => {
@@ -244,12 +263,16 @@ export class DispatcherWorker {
         result: boundedResult(runnerResult.result, this.#options.maxResultBytes),
         tenantId: execution.tenantId,
       });
-      if (!completion.applied) await this.#handleRejectedTransition(execution, completion);
+      if (!completion.applied) {
+        await this.#handleRejectedTransition(execution, completion);
+      } else if (["SUCCEEDED", "COMPLETED", "TIMED_OUT"].includes(completion.executionState)) {
+        observeOutcome(completion.executionState.toLowerCase());
+      }
       terminal = true;
     } catch (error) {
       if (heartbeat.cancellationRequested || error instanceof ExecutionCancellationRequestedError) {
         if (!(error instanceof SandboxClaimCleanupError) && await releaseProvisioned()) {
-          await this.#acknowledgeCancellation(execution);
+          if (await this.#acknowledgeCancellation(execution)) observeOutcome("cancelled");
         }
         log.info("execution processing stopped after cancellation request");
         return;
@@ -261,6 +284,7 @@ export class DispatcherWorker {
       }
 
       const message = sanitizeError(error, this.#options.maxErrorLength);
+      if (provisioningStarted && !provisioned) observeProvisioning("failed");
       log.error("execution attempt failed", { error: message });
       try {
         const timedOut = Date.now() >= execution.timeoutAt.getTime();
@@ -288,6 +312,7 @@ export class DispatcherWorker {
               targetAttemptState: timedOut ? "TIMED_OUT" : "FAILED",
               targetExecutionState: timedOut ? "TIMED_OUT" : retry ? "RETRY_WAIT" : "FAILED",
             });
+        if (!retry) observeOutcome(timedOut ? "timed_out" : "failed");
         terminal = true;
       } catch (transitionError) {
         if (!(transitionError instanceof ExecutionLeaseLostError)) throw transitionError;

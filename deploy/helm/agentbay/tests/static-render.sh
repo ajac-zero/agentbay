@@ -6,6 +6,26 @@ work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT
 
 helm lint "$chart_dir"
+helm template demo "$chart_dir" --namespace agentbay-helm-test > "$work_dir/base.yaml"
+if grep -Eq 'kind: ServiceMonitor|kind: PrometheusRule|grafana_dashboard:' "$work_dir/base.yaml"; then
+  echo "Observability resources unexpectedly rendered by default" >&2
+  exit 1
+fi
+
+helm template demo "$chart_dir" \
+  --namespace agentbay-helm-test \
+  --set observability.podAnnotations.enabled=true \
+  --set observability.serviceMonitor.enabled=true \
+  --set observability.prometheusRule.enabled=true \
+  --set observability.dashboard.enabled=true > "$work_dir/observability.yaml"
+grep -q 'kind: ServiceMonitor' "$work_dir/observability.yaml"
+grep -q 'kind: PrometheusRule' "$work_dir/observability.yaml"
+grep -q 'grafana_dashboard: "1"' "$work_dir/observability.yaml"
+grep -q 'prometheus.io/path: /metrics' "$work_dir/observability.yaml"
+grep -q 'alert: AgentbayOutboxStuck' "$work_dir/observability.yaml"
+grep -q 'alert: AgentbayExecutionOverdue' "$work_dir/observability.yaml"
+grep -q 'alert: AgentbayScheduleStopped' "$work_dir/observability.yaml"
+
 helm template demo "$chart_dir" \
   --namespace agentbay-helm-test \
   --set sandboxTemplates.enabled=true \

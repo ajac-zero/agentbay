@@ -68,6 +68,8 @@ import { resolvedWorkspaceSchema } from "../workspace/schema.js";
 import { resolveWorkspace } from "../workspace/resolver.js";
 import { nextCronOccurrence } from "../schedule/cron.js";
 import type { ClaimedScheduleOccurrence, ScheduleStore } from "../schedule/types.js";
+import type { ObservabilitySnapshot, ObservabilitySnapshotRow, ObservabilityStore } from "../observability/types.js";
+import { checkpointAdvances, eventsAdmitted, executionsCreated, githubEffects } from "../observability/metrics.js";
 import * as schema from "./schema.js";
 import {
   agentProfileVersions,
@@ -87,6 +89,16 @@ type CancellationCleanupCandidate = RequestedCancellationCleanup & {
 const { Pool } = pg;
 
 type RuntimeDatabase = NodePgDatabase<typeof schema>;
+
+function countMissedCronIntervals(expression: string, nextFireAt: Date, now: Date): number {
+  let count = 0;
+  let occurrence = nextFireAt;
+  while (occurrence <= now && count < 10_000) {
+    count += 1;
+    occurrence = nextCronOccurrence(expression, occurrence);
+  }
+  return count;
+}
 
 export type PostgresRuntimeStoreOptions = {
   connectionString?: string;
@@ -135,7 +147,7 @@ export async function migratePostgresRuntimeStore(options: PostgresRuntimeStoreO
   }
 }
 
-export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, BindingStore, ConnectionStore, EventAdmissionStore, OutboxStore, DispatcherExecutionStore, RevisionResolutionStore, ScheduleStore {
+export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, BindingStore, ConnectionStore, EventAdmissionStore, OutboxStore, DispatcherExecutionStore, RevisionResolutionStore, ScheduleStore, ObservabilityStore {
   constructor(
     private readonly pool: pg.Pool,
     private readonly db: RuntimeDatabase,
@@ -148,6 +160,57 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  async collectObservabilitySnapshot(signal?: AbortSignal): Promise<ObservabilitySnapshot> {
+    const collectedAt = new Date();
+    const result = await this.pool.query<{ kind: ObservabilitySnapshotRow["kind"]; tenant_id: string; label: string; value: string; secondary_value: string | null; extra_value: string | null }>({
+      text: `WITH clock AS MATERIALIZED (SELECT clock_timestamp() AS now)
+        SELECT 'execution_state' AS kind, tenant_id, state AS label, count(*)::text AS value, NULL::text AS secondary_value, NULL::text AS extra_value
+          FROM agentbay_executions GROUP BY tenant_id,state
+        UNION ALL
+        SELECT 'execution_oldest_active_age',tenant_id,'',COALESCE(EXTRACT(EPOCH FROM ((SELECT now FROM clock)-min(created_at))),0)::text,NULL,NULL
+          FROM agentbay_executions WHERE state NOT IN ('SUCCEEDED','COMPLETED','CANCELLED','TIMED_OUT','FAILED','DEAD_LETTERED') GROUP BY tenant_id
+        UNION ALL
+        SELECT 'execution_overdue',tenant_id,'',count(*)::text,NULL,NULL FROM agentbay_executions
+          WHERE state NOT IN ('SUCCEEDED','COMPLETED','CANCELLED','TIMED_OUT','FAILED','DEAD_LETTERED') AND timeout_at < (SELECT now FROM clock) GROUP BY tenant_id
+        UNION ALL
+        SELECT 'outbox_pending',tenant_id,topic,count(*)::text,COALESCE(EXTRACT(EPOCH FROM ((SELECT now FROM clock)-min(created_at))),0)::text,NULL
+          FROM agentbay_outbox WHERE published_at IS NULL GROUP BY tenant_id,topic
+        UNION ALL
+        SELECT 'schedule_lateness',state.tenant_id,state.trigger_id,GREATEST(0,EXTRACT(EPOCH FROM ((SELECT now FROM clock)-state.next_fire_at)))::text,
+          EXTRACT(EPOCH FROM state.next_fire_at)::text,trigger.config->>'expression'
+          FROM agentbay_schedule_states state JOIN agentbay_triggers trigger ON trigger.tenant_id=state.tenant_id AND trigger.id=state.trigger_id WHERE trigger.enabled
+        UNION ALL
+        SELECT 'checkpoint_age',tenant_id,binding_id,GREATEST(0,EXTRACT(EPOCH FROM ((SELECT now FROM clock)-min(advanced_at))))::text,NULL,NULL
+          FROM agentbay_execution_checkpoints GROUP BY tenant_id,binding_id
+        UNION ALL
+        SELECT 'active_workloads',tenant_id,'',count(*)::text,NULL,NULL FROM agentbay_execution_attempts
+          WHERE state IN ('LEASED','RUNNING') AND workload_name IS NOT NULL GROUP BY tenant_id
+        UNION ALL
+        SELECT 'revision_pending',tenant_id,'',count(*)::text,NULL,NULL FROM agentbay_event_revision_resolutions
+          WHERE state IN ('PENDING','LEASED','RETRY_WAIT') GROUP BY tenant_id`,
+      values: [],
+      ...(signal ? { signal } : {}),
+    });
+    return {
+      collectedAt,
+      rows: result.rows.map((row) => {
+        const value = Number(row.value);
+        const missedIntervals = row.kind === "schedule_lateness" && row.extra_value && row.secondary_value
+          ? countMissedCronIntervals(row.extra_value, new Date(Number(row.secondary_value) * 1_000), collectedAt)
+          : undefined;
+        return {
+          kind: row.kind,
+          tenantId: row.tenant_id,
+          label: row.label,
+          value,
+          ...(missedIntervals === undefined
+            ? row.secondary_value === null ? {} : { secondaryValue: Number(row.secondary_value) }
+            : { secondaryValue: missedIntervals }),
+        };
+      }),
+    };
   }
 
   async claimAvailable(options: {
@@ -542,6 +605,8 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       const pendingWakes = await this.admitPendingWakes(client, command, candidates.rows);
       const wakes = await this.consumeEventWaits(client, command, candidates.rows);
       await client.query("COMMIT");
+      eventsAdmitted.inc({ tenant: command.tenantId, trigger_id: command.triggerId, event_type: command.event.type });
+      for (const execution of created) executionsCreated.inc({ tenant: execution.tenantId, binding_id: execution.binding.id, profile_id: execution.profile.id });
       return {
         event: {
           admissionHash: command.admissionHash,
@@ -649,6 +714,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         resolved_at = $4, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = $4
         WHERE event_id = $1 AND tenant_id = $2`, [input.eventId, input.tenantId, input.commit, new Date(input.resolvedAt)]);
       await client.query("COMMIT");
+      for (const execution of created) executionsCreated.inc({ tenant: execution.tenantId, binding_id: execution.binding.id, profile_id: execution.profile.id });
       return { event: eventSummary(eventRow), executions: created, wakes: await loadEventWakes(client, input.tenantId, input.eventId), pendingWakes: await loadEventWakeIntents(client, input.tenantId, input.eventId), replayed: false };
     } catch (error) {
       await client.query("ROLLBACK");
@@ -1052,6 +1118,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       [id, command.tenantId, command.executionId, String(command.repositoryId), command.repositoryFullName, command.requestHash, hashCanonicalJson(command.fencingToken),
         command.pullRequestTitle, command.headRef, command.baseRef, new Date(command.registeredAt)]);
       await client.query("COMMIT");
+      githubEffects.inc({ tenant: command.tenantId, effect_type: "pull_request", result: "registered" });
       return { created: true, id, state: "REGISTERED" };
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
@@ -1080,6 +1147,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         pull_request_number=$4,pull_request_url=$5,attempted_at=$6 WHERE tenant_id=$1 AND id=$2`,
       [command.tenantId, command.effectId, command.githubPullRequestId, command.pullRequestNumber, command.pullRequestUrl, new Date(command.reportedAt)]);
       await client.query("COMMIT");
+      githubEffects.inc({ tenant: command.tenantId, effect_type: "pull_request", result: "reported" });
       await this.reconcileGitHubPullRequestEffects(command.tenantId, { repositoryId: undefined, githubPullRequestId: command.githubPullRequestId, pullRequestNumber: command.pullRequestNumber });
       return { id: command.effectId, state: "REPORTED" };
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
@@ -2185,6 +2253,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       if (!binding) throw new PersistedExecutionCorruptionError(command.executionId, "binding version");
       if ("disposition" in binding.definition) throw new PersistedExecutionCorruptionError(command.executionId, "wake binding created execution");
       const policy = binding.definition.afterTurn;
+      let checkpointOutcome: { bindingId: string; result: "applied" | "superseded" } | undefined;
       let wait: { id: string; name: string; correlation: Record<string, JsonPrimitive>; deadline: Date } | undefined;
       const pendingResult = await client.query<{
         id: string; event_id: string; binding_version_id: string; action: "CONTINUED" | "COMPLETED"; input: unknown; workspace: unknown;
@@ -2289,6 +2358,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
           await client.query(`UPDATE agentbay_execution_checkpoint_advances SET state=$3, applied_at=$4
             WHERE execution_id=$1 AND tenant_id=$2`,
           [command.executionId, command.tenantId, applied ? "APPLIED" : "SUPERSEDED", now]);
+          checkpointOutcome = { bindingId: advance.binding_id, result: applied ? "applied" : "superseded" };
         }
       }
       if (executionState === "WAITING" && wait) {
@@ -2319,6 +2389,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         VALUES ($1,$2,$3,$4,(SELECT COALESCE(MAX(sequence),0)+1 FROM agentbay_execution_transitions WHERE tenant_id=$2 AND execution_id=$3),
           'RUNNING',$5,$6,$7,$8)`, [randomUUID(), command.tenantId, command.executionId, command.attempt, executionState, command.actor, command.reason, now]);
       await client.query("COMMIT");
+      if (checkpointOutcome) checkpointAdvances.inc({ tenant: command.tenantId, binding_id: checkpointOutcome.bindingId, result: checkpointOutcome.result });
       return { applied: true, attemptState: "SUCCEEDED", executionState, ...(executionState === "WAITING" && wait ? { eventWaitId: wait.id } : {}) };
     } catch (error) {
       await client.query("ROLLBACK");
