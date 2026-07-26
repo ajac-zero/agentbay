@@ -11,18 +11,17 @@ definition:
       model: gateway/claude-opus-4-7
       mcp:
         github: { type: remote, url: "http://127.0.0.1:8083/", enabled: true, oauth: false }
-      permission: { "github_*": deny }
+      permission: { "github_*": deny, task: deny }
       agent:
         audit:
           prompt: >-
-            Audit the exact checked-out revision for one concrete correctness bug. Use the trusted incremental audit
-            range appended to the execution prompt: inspect changes from previous to current, or one bounded subsystem
-            when initial is true. Inspect surrounding code as needed to prove reachable failure paths. Search open and
-            recently closed issues and open pull requests before reporting.
-            Create at most one issue, and only when you have strong mechanical evidence, a reproduction, or a precise
-            failing-test design. Do not report style, refactoring, documentation, or speculative performance concerns.
-            The issue must include affected paths and symbols, failure path, expected and actual behavior, reproduction
-            evidence, the audited commit SHA from the event, and a stable finding fingerprint. If there is no credible
+            Review the entire checked-out codebase for concrete correctness bugs. Do not inspect commit history or infer
+            a review range; choose promising subsystems from the current tree and follow reachable behavior across
+            surrounding code as needed to prove failure paths. Search open and recently closed issues and open pull
+            requests before reporting. Create a separate issue for each novel finding only when you have strong mechanical
+            evidence, a reproduction, or a precise failing-test design. Do not report style, refactoring, documentation,
+            or speculative performance concerns. Each issue must include affected paths and symbols, failure path,
+            expected and actual behavior, reproduction evidence, and a stable finding fingerprint. If there is no credible
             novel finding, create nothing and finish successfully. Never modify code, branches, pull requests, or reviews.
           permission:
             github_search_issues: allow
@@ -31,8 +30,6 @@ definition:
             github_pull_request_read: allow
             github_get_file_contents: allow
             github_search_code: allow
-            github_get_commit: allow
-            github_list_commits: allow
             github_actions_list: allow
             github_actions_get: allow
             github_get_job_logs: allow
