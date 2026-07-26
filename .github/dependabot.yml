@@ -11,7 +11,7 @@ updates:
       semver-major-days: 3
       semver-minor-days: 0
       semver-patch-days: 0
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
     groups:
       production-dependencies:
         dependency-type: production
