@@ -1,29 +1,23 @@
 # Request body for POST /v1/bindings/triage-issues/versions.
 ---
-# POST /v1/bindings/hourly-bug-finder/versions
+# POST /v1/bindings/bug-finder-cron/versions
 version: 1
-triggerId: hourly-bug-finder
+triggerId: bug-finder-cron
 profile: { id: bug-finder, version: 1 }
 definition:
   schemaVersion: 1
-  eventTypes: [dev.agentbay.schedule.triggered]
+  eventTypes: [dev.agentbay.repository.full_review.requested]
   filter:
     all:
       - { path: /repository/fullName, op: eq, value: acme/agentbay }
   activeSingleton:
     name: scheduled-bug-finder
     key: [/repository/id]
-  checkpoint:
-    name: repository-audit
-    key: [/repository/id]
-    value: { path: /repository/defaultBranchRevision/commit }
-    advanceOn: succeeded
-    unchanged: skip
-  prompt: { literal: Audit this exact scheduled repository revision for one novel concrete bug., includeEvent: data }
+  prompt: { literal: Review the full checked-out codebase for novel concrete correctness bugs., includeEvent: none }
   workspace:
     type: git
     repository: { url: { path: /repository/cloneUrl } }
-    revision: { commit: { path: /repository/defaultBranchRevision/commit } }
+    revision: { commit: { path: /repository/revision } }
 ---
 version: 1
 triggerId: engineering-github

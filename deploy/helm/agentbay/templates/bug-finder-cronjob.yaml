@@ -1,0 +1,79 @@
+{{- with .Values.bugFinderCron }}
+{{- if .enabled }}
+{{- if not .repository.id }}{{ fail "bugFinderCron.repository.id is required when bugFinderCron.enabled=true" }}{{- end }}
+{{- if not .repository.fullName }}{{ fail "bugFinderCron.repository.fullName is required when bugFinderCron.enabled=true" }}{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "agentbay.fullname" $ }}-bug-finder
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "agentbay.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: bug-finder
+spec:
+  schedule: {{ .schedule | quote }}
+  timeZone: {{ .timeZone | quote }}
+  concurrencyPolicy: {{ .concurrencyPolicy }}
+  startingDeadlineSeconds: {{ .startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: {{ .successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ .activeDeadlineSeconds }}
+      ttlSecondsAfterFinished: {{ .ttlSecondsAfterFinished }}
+      template:
+        metadata:
+          labels:
+            {{- include "agentbay.selectorLabels" $ | nindent 12 }}
+            app.kubernetes.io/component: bug-finder
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "agentbay.serviceAccountName" $ }}
+          automountServiceAccountToken: false
+          {{- with $.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: submit
+              image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag | default $.Chart.AppVersion }}"
+              imagePullPolicy: {{ $.Values.image.pullPolicy }}
+              command: ["node", "dist/bug-finder/submit.js"]
+              env:
+                - name: BUG_FINDER_RUN_ID
+                  valueFrom: { fieldRef: { fieldPath: metadata.uid } }
+                - { name: BUG_FINDER_AGENTBAY_URL, value: {{ printf "http://%s.%s.svc:%v" (include "agentbay.fullname" $) $.Release.Namespace $.Values.service.port | quote }} }
+                - { name: BUG_FINDER_TRIGGER_ID, value: {{ .triggerId | quote }} }
+                - { name: BUG_FINDER_REPOSITORY_ID, value: {{ .repository.id | quote }} }
+                - { name: BUG_FINDER_REPOSITORY_FULL_NAME, value: {{ .repository.fullName | quote }} }
+                - { name: BUG_FINDER_DEFAULT_BRANCH, value: {{ .repository.defaultBranch | quote }} }
+                - { name: BUG_FINDER_AGENTBAY_TOKEN_FILE, value: /var/run/agentbay/runtime/AGENTBAY_ADMIN_TOKEN }
+                - { name: BUG_FINDER_GITHUB_APP_ID_FILE, value: /var/run/agentbay/github-app/app-id }
+                - { name: BUG_FINDER_GITHUB_INSTALLATION_ID_FILE, value: /var/run/agentbay/github-app/installation-id }
+                - { name: BUG_FINDER_GITHUB_PRIVATE_KEY_FILE, value: /var/run/agentbay/github-app/private-key.pem }
+              volumeMounts:
+                - { name: runtime, mountPath: /var/run/agentbay/runtime, readOnly: true }
+                - { name: github-app, mountPath: /var/run/agentbay/github-app, readOnly: true }
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+              resources:
+                {{- toYaml .resources | nindent 16 }}
+          volumes:
+            - name: runtime
+              secret:
+                secretName: {{ include "agentbay.secretName" $ | quote }}
+                items:
+                  - { key: AGENTBAY_ADMIN_TOKEN, path: AGENTBAY_ADMIN_TOKEN }
+            - name: github-app
+              secret:
+                secretName: {{ required "bugFinderCron.githubCredentialsSecret is required when bugFinderCron.enabled=true" .githubCredentialsSecret | quote }}
+                items:
+                  - { key: app-id, path: app-id }
+                  - { key: installation-id, path: installation-id }
+                  - { key: private-key.pem, path: private-key.pem }
+{{- end }}
+{{- end }}

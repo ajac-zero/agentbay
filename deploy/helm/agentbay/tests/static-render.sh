@@ -7,10 +7,27 @@ trap 'rm -rf "$work_dir"' EXIT
 
 helm lint "$chart_dir"
 helm template demo "$chart_dir" --namespace agentbay-helm-test > "$work_dir/base.yaml"
+if grep -q 'name: demo-agentbay-bug-finder' "$work_dir/base.yaml"; then
+  echo "Bug finder CronJob unexpectedly rendered by default" >&2
+  exit 1
+fi
 if grep -Eq 'kind: ServiceMonitor|kind: PrometheusRule|grafana_dashboard:' "$work_dir/base.yaml"; then
   echo "Observability resources unexpectedly rendered by default" >&2
   exit 1
 fi
+
+helm template demo "$chart_dir" --namespace agentbay-helm-test \
+  --set bugFinderCron.enabled=true \
+  --set bugFinderCron.githubCredentialsSecret=github-app \
+  --set-string bugFinderCron.repository.id=42 \
+  --set bugFinderCron.repository.fullName=acme/repo > "$work_dir/bug-finder.yaml"
+grep -q 'name: demo-agentbay-bug-finder' "$work_dir/bug-finder.yaml"
+grep -q 'concurrencyPolicy: Forbid' "$work_dir/bug-finder.yaml"
+grep -q 'backoffLimit: 0' "$work_dir/bug-finder.yaml"
+grep -q 'activeDeadlineSeconds: 300' "$work_dir/bug-finder.yaml"
+grep -q 'command: \["node", "dist/bug-finder/submit.js"\]' "$work_dir/bug-finder.yaml"
+grep -q 'key: AGENTBAY_ADMIN_TOKEN' "$work_dir/bug-finder.yaml"
+grep -q 'key: private-key.pem' "$work_dir/bug-finder.yaml"
 
 helm template demo "$chart_dir" \
   --namespace agentbay-helm-test \
