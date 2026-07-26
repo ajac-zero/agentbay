@@ -4,6 +4,10 @@ allowBuilds:
   protobufjs: true
   ssh2: true
 overrides:
+  '@grpc/grpc-js': 1.14.4
+  brace-expansion: 5.0.8
   form-data: 4.0.6
   js-yaml: 4.3.0
+  protobufjs: 7.6.1
+  vite: 8.0.16
   ws: 8.21.0
