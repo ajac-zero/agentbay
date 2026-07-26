@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: 24
       - run: corepack enable
-      - run: corepack prepare pnpm@11.8.0 --activate
+      - run: corepack prepare pnpm@10.34.5 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm typecheck:test
