@@ -100,6 +100,12 @@ export async function reconcileOnce(api: ReconcileApi, opts: ReconcileOpts): Pro
     }
 
     const shutdownMs = new Date(shutdownTime).getTime();
+
+    if (Number.isNaN(shutdownMs)) {
+      log.warn("claim has unparseable shutdownTime, skipping", { claim: name, shutdownTime });
+      continue;
+    }
+
     const deadline = shutdownMs + graceMs;
 
     if (now < deadline) {
