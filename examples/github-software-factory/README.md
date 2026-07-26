@@ -24,18 +24,18 @@ the generic `contains` array predicate. They demonstrate:
 12. The merger verifies the reviewed SHA is still the PR head, then asks GitHub to merge through repository protection.
 13. A merged `pull_request.closed` event terminally completes the developer lifecycle.
 
-`triggers.yaml` adds a durable hourly `schedule.cron` ingress. Each due time is
-materialized in PostgreSQL before the schedule advances, then leased and admitted
-through the same event boundary as webhooks. The matching bug-finder audits an
-exact resolved default-branch SHA with read-only code access and may create at
-most one evidence-backed issue. That `issues.opened` webhook enters step 1 above.
-Missed intervals use `skip` semantics, and the repository singleton prevents
-overlapping audits without retaining a sandbox between runs.
+`triggers.yaml` adds a standard `cloudevents.http` ingress for the bug finder.
+The chart's optional `bugFinderCron` Kubernetes CronJob resolves the exact
+default-branch SHA from GitHub and submits one ordinary normalized event on a
+fixed schedule. The matching binding reviews the full tree with read-only code
+access and may create a separate evidence-backed issue for each novel finding. The agent is not shown
+the SHA or commit history. That `issues.opened` webhook enters step 1 above.
 
-The binding checkpoint is keyed by stable binding ID and repository ID. A
-successful audit atomically advances it to the audited SHA. An unchanged SHA
-creates no execution or sandbox; failures retain the previous SHA. Each created
-execution receives trusted `previous`, `current`, and `initial` range metadata.
+Kubernetes owns scheduling and uses `concurrencyPolicy: Forbid`, no Job retries,
+and a bounded submission deadline. The binding's repository singleton prevents
+overlapping review executions. There is intentionally no convergence checkpoint:
+unchanged revisions continue to receive independent stochastic reviews at the
+configured frequency. Lower the frequency when model cost matters.
 
 The GitHub connector also normalizes issue comments, pull-request reviews, and
 pull-request review comments for later continuation matching.

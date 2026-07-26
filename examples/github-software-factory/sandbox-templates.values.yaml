@@ -105,7 +105,6 @@ sandboxTemplates:
             - { name: AGENTBAY_GITHUB_CONNECTION, value: github-production }
             - { name: AGENTBAY_GITHUB_REPOSITORY_ID, value: "123456789" }
             - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "contents:read,issues:write,pull_requests:read,actions:read" }
-            - { name: AGENTBAY_GITHUB_MAX_ISSUES_CREATED, value: "1" }
           volumeMounts: *credentialMount
       extraVolumes: *credentialVolume
     - <<: *baseTemplate
