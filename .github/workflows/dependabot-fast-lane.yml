@@ -44,7 +44,7 @@ jobs:
           set -euo pipefail
           eligible=false
           if [[ "${{ steps.metadata.outcome }}" == success \
-            && "$PACKAGE_ECOSYSTEM" == npm \
+            && ("$PACKAGE_ECOSYSTEM" == npm || "$PACKAGE_ECOSYSTEM" == npm_and_yarn) \
             && "$MAINTAINER_CHANGES" == false \
             && ("$UPDATE_TYPE" == version-update:semver-patch || "$UPDATE_TYPE" == version-update:semver-minor) ]]; then
             files="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" --jq '.[].filename')"
