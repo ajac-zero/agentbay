@@ -155,6 +155,16 @@ describe("reconcileOnce", () => {
     expect(api.deleteNamespacedCustomObject).not.toHaveBeenCalled();
   });
 
+  it("does not delete a claim whose shutdownTime is unparseable", async () => {
+    const bad = claim("bad-shutdown", "not-a-timestamp");
+    const api = fakeApi([bad]);
+
+    const result = await reconcileOnce(api, BASE_OPTS);
+
+    expect(api.deleteNamespacedCustomObject).not.toHaveBeenCalled();
+    expect(result.deleted).toBe(0);
+  });
+
   it("deletes a claim that is past its grace period", async () => {
     const shutdownTime = msAgo(31 * 60_000); // 31 minutes ago; grace = 30 → past deadline
     const api = fakeApi([claim("expired", shutdownTime)]);
