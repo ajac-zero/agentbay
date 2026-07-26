@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 ARG NODE_VERSION=24
-ARG PNPM_VERSION=11.8.0
+ARG PNPM_VERSION=10.34.5
 
 FROM node:${NODE_VERSION}-slim AS package-manager
 ARG PNPM_VERSION
