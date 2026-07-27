@@ -197,7 +197,7 @@ export const eventWaitSchema = z.object({
   id: z.string(),
   attempt: z.number().int().positive(),
   name: z.string(),
-  state: z.enum(["ACTIVE", "CANCELLED", "EXPIRED", "CONSUMED"]),
+  state: z.enum(["PENDING_CONTEXT", "ACTIVE", "CANCELLED", "EXPIRED", "CONSUMED"]),
   correlation: z.record(z.string(), z.union([z.null(), z.boolean(), z.number(), z.string()])),
   deadlineAt: z.string().datetime(),
   activatedAt: z.string().datetime(),
