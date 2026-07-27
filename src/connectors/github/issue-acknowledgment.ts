@@ -42,7 +42,12 @@ export class GitHubIssueAcknowledgmentTransport implements OutboxTransport {
     );
     const fetch = this.options.fetch ?? globalThis.fetch;
     const apiBaseUrl = this.options.apiBaseUrl ?? "https://api.github.com";
-    const permission = payload.subjectType === "pull_request" ? "pull_requests" : "issues";
+    // The reactions endpoint used below (/repos/{owner}/{repo}/issues/{issue_number}/reactions)
+    // is gated on the "Issues" permission for GitHub Apps regardless of whether the numbered
+    // subject is an issue or a pull request (GitHub numbers PRs in the same namespace and this
+    // endpoint accepts PR numbers, but it is not covered by the "Pull requests" permission).
+    // `subjectType` is retained on the payload for provenance/logging only.
+    const permission = "issues";
     const headers = {
       Accept: "application/vnd.github+json",
       "User-Agent": "agentbay-issue-acknowledgment/1.0",
