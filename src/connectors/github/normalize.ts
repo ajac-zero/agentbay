@@ -164,7 +164,7 @@ const envelopeSchema = z.object({ action: bounded(64) });
 
 function agentbayReviewVerdict(body: string | null): "approved" | "changes_requested" | undefined {
   const match = body?.match(/^Agentbay-Verdict:[ \t]*(approved|changes_requested)[ \t]*(?:\r?\n|$)/i);
-  return match?.[1] as "approved" | "changes_requested" | undefined;
+  return match?.[1]?.toLowerCase() as "approved" | "changes_requested" | undefined;
 }
 
 export type GitHubEventName = "issues" | "issue_comment" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "workflow_run";

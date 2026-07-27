@@ -120,7 +120,7 @@ describe("normalizeGitHubEvent", () => {
         pullRequest: {
           state: "closed",
           head: { sha: "c".repeat(40), ref: "deleted-fork-branch", repository: null },
-          base: { sha: "b".repeat(40), ref: "main", repository: { fullName: "acme/widgets" } },
+          base: { ref: "main", sha: "b".repeat(40), repository: { fullName: "acme/widgets" } },
         },
       },
     });
@@ -220,6 +220,19 @@ describe("normalizeGitHubEvent", () => {
       ...appReviewPayload,
       review: { ...appReviewPayload.review, body: "Summary\nAgentbay-Verdict: changes_requested" },
     }, "pull_request_review"))).not.toHaveProperty("data.review.agentbayVerdict");
+
+    expect(normalizeGitHubEvent(input({
+      ...appReviewPayload,
+      review: { ...appReviewPayload.review, id: 95, body: "Agentbay-Verdict: APPROVED\n\nLGTM." },
+    }, "pull_request_review"))).toMatchObject({
+      data: { review: { agentbayVerdict: "approved" } },
+    });
+    expect(normalizeGitHubEvent(input({
+      ...appReviewPayload,
+      review: { ...appReviewPayload.review, id: 96, body: "Agentbay-Verdict:Changes_Requested\n" },
+    }, "pull_request_review"))).toMatchObject({
+      data: { review: { agentbayVerdict: "changes_requested" } },
+    });
 
     const comment = normalizeGitHubEvent(input({
       ...common,
