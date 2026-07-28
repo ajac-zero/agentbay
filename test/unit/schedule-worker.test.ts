@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AdmissionCommand, AdmissionResult } from "../../src/control/admission.js";
 import { ScheduleWorker } from "../../src/schedule/worker.js";
 import type { ClaimedScheduleOccurrence, ScheduleStore } from "../../src/schedule/types.js";
@@ -35,6 +35,24 @@ describe("ScheduleWorker", () => {
     expect(await worker(store).runOne()).toBe(true);
     expect(store.completed).toEqual([]);
     expect(store.failed).toEqual(["occurrence-1"]);
+  });
+
+  it("does not leak an abort listener per idle poll", async () => {
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const add = vi.spyOn(signal, "addEventListener");
+    const remove = vi.spyOn(signal, "removeEventListener");
+
+    const store = new FakeScheduleStore(undefined);
+    const run = worker(store).run(signal);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    controller.abort();
+    await run;
+
+    const abortAdds = add.mock.calls.filter(([type]) => type === "abort").length;
+    const abortRemoves = remove.mock.calls.filter(([type]) => type === "abort").length;
+    expect(abortAdds).toBeGreaterThan(1);
+    expect(abortRemoves).toBeGreaterThanOrEqual(abortAdds - 1);
   });
 });
 

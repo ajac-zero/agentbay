@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { OutboxPublisher } from "../../src/outbox/publisher.js";
+import { runOutboxPublisherLoop } from "../../src/outbox/worker.js";
 import type { ClaimedOutboxMessage, OutboxStore, OutboxTransport } from "../../src/outbox/types.js";
 
 const now = new Date("2026-07-17T12:00:00.000Z");
@@ -176,5 +177,27 @@ describe("OutboxPublisher", () => {
       baseRetryDelayMs: 1_000,
       maxRetryDelayMs: 8_000,
     })).toThrow("batchSize must be 1 until outbox leases support renewal");
+  });
+});
+
+describe("runOutboxPublisherLoop idle-poll delay", () => {
+  it("does not leak an abort listener per idle poll", async () => {
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const add = vi.spyOn(signal, "addEventListener");
+    const remove = vi.spyOn(signal, "removeEventListener");
+
+    const publisher = {
+      publishAvailable: async () => ({ claimed: 0, published: 0, failed: 0, lostClaims: 0 }),
+    } as unknown as OutboxPublisher;
+    const loop = runOutboxPublisherLoop({ publisher, idlePollMs: 1, signal });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    controller.abort();
+    await loop;
+
+    const abortAdds = add.mock.calls.filter(([type]) => type === "abort").length;
+    const abortRemoves = remove.mock.calls.filter(([type]) => type === "abort").length;
+    expect(abortAdds).toBeGreaterThan(1);
+    expect(abortRemoves).toBeGreaterThanOrEqual(abortAdds - 1);
   });
 });

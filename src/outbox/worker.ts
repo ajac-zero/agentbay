@@ -21,10 +21,12 @@ export async function runOutboxPublisherLoop(options: {
 
 function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, milliseconds);
-    signal.addEventListener("abort", () => {
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener("abort", finish, { once: true });
+    function finish(): void {
       clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
       resolve();
-    }, { once: true });
+    }
   });
 }
