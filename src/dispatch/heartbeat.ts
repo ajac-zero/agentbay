@@ -123,7 +123,18 @@ export function startExecutionLeaseHeartbeat(input: {
       clearTimeout(timer);
       clearTimeout(expiryTimer);
       input.signal?.removeEventListener("abort", abortFromParent);
-      await Promise.race([renewal, new Promise<void>((resolve) => setTimeout(resolve, input.renewIntervalMs))]);
+      if (renewal === undefined) return;
+      let fallback: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          renewal,
+          new Promise<void>((resolve) => {
+            fallback = setTimeout(resolve, input.renewIntervalMs);
+          }),
+        ]);
+      } finally {
+        clearTimeout(fallback);
+      }
     },
   };
 }
