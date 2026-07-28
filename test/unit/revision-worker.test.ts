@@ -30,6 +30,30 @@ describe("RevisionResolutionWorker", () => {
     }));
     expect(store.completeRevisionResolution).not.toHaveBeenCalled();
   });
+
+  it("does not leak an abort listener per idle poll", async () => {
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const add = vi.spyOn(signal, "addEventListener");
+    const remove = vi.spyOn(signal, "removeEventListener");
+
+    const store = {
+      claimRevisionResolution: vi.fn(async () => undefined),
+      completeRevisionResolution: vi.fn(async () => undefined),
+      failRevisionResolution: vi.fn(async () => true),
+    };
+    const resolver = { resolve: vi.fn(async () => "a".repeat(40)) };
+    const worker = new RevisionResolutionWorker(options(store, resolver));
+    const run = worker.run(signal);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    controller.abort();
+    await run;
+
+    const abortAdds = add.mock.calls.filter(([type]) => type === "abort").length;
+    const abortRemoves = remove.mock.calls.filter(([type]) => type === "abort").length;
+    expect(abortAdds).toBeGreaterThan(1);
+    expect(abortRemoves).toBeGreaterThanOrEqual(abortAdds - 1);
+  });
 });
 
 function fakeStore() {
