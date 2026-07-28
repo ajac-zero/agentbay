@@ -31,8 +31,8 @@ importers:
         specifier: ^1.4.0
         version: 1.4.0
       '@opencode-ai/sdk':
-        specifier: ^1.18.6
-        version: 1.18.6
+        specifier: ^1.18.7
+        version: 1.18.7
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(pg@8.22.0)
@@ -332,8 +332,8 @@ packages:
       '@emnapi/core': ^1.7.1
       '@emnapi/runtime': ^1.7.1
 
-  '@opencode-ai/sdk@1.18.6':
-    resolution: {integrity: sha512-bK2rca3tYOo1h2tWNaO+lUiL+qZ9wgE/HcM3N46FahykYwL5RL1r2G6GEVyV3BBv5Qs0g0+yIlosBWJWwF13AQ==}
+  '@opencode-ai/sdk@1.18.7':
+    resolution: {integrity: sha512-5txVELvCxzC3O/MYnRKdTvBN3TqQjE3PaEks3kDRA/moWzMSUhdm15xCth/Mz/NPYyGTn2u4IdScdV9vLTfLRg==}
 
   '@opentelemetry/api@1.9.1':
     resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
@@ -2037,7 +2037,7 @@ snapshots:
       '@tybys/wasm-util': 0.10.3
     optional: true
 
-  '@opencode-ai/sdk@1.18.6':
+  '@opencode-ai/sdk@1.18.7':
     dependencies:
       cross-spawn: 7.0.6
 
