@@ -43,7 +43,19 @@ function parseCronExpression(expression: string): {
     const range = FIELD_RANGES[index]!;
     return parseField(part!, range[0], range[1]);
   }) as [Set<number>, Set<number>, Set<number>, Set<number>, Set<number>];
-  return { fields, dayOfMonthWildcard: parts[2] === "*", dayOfWeekWildcard: parts[4] === "*" };
+  return {
+    fields,
+    dayOfMonthWildcard: spansEntireRange(fields[2], ...FIELD_RANGES[2]),
+    dayOfWeekWildcard: spansEntireRange(fields[4], ...FIELD_RANGES[4]),
+  };
+}
+
+function spansEntireRange(values: Set<number>, minimum: number, maximum: number): boolean {
+  if (values.size !== maximum - minimum + 1) return false;
+  for (let value = minimum; value <= maximum; value += 1) {
+    if (!values.has(value)) return false;
+  }
+  return true;
 }
 
 function parseField(field: string, minimum: number, maximum: number): Set<number> {
