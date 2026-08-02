@@ -1,9 +1,9 @@
 /**
- * Unit tests for src/util.ts — readBoolean, readNumber.
+ * Unit tests for src/util.ts — readBoolean, readNumber, readNonnegativeInteger.
  */
 
 import { describe, expect, it } from "vitest";
-import { readBoolean, readNumber } from "../../src/util.js";
+import { readBoolean, readNonnegativeInteger, readNumber } from "../../src/util.js";
 
 // ---------------------------------------------------------------------------
 // readBoolean
@@ -81,4 +81,28 @@ describe("readNumber", () => {
   it("throws for the string 'NaN'", () => {
     expect(() => readNumber("NaN", 0)).toThrow(/Expected numeric env value/);
   });
+});
+
+// ---------------------------------------------------------------------------
+// readNonnegativeInteger
+// ---------------------------------------------------------------------------
+
+describe("readNonnegativeInteger", () => {
+  it("returns the fallback for absent values", () => {
+    expect(readNonnegativeInteger(undefined, 30)).toBe(30);
+    expect(readNonnegativeInteger("", 30)).toBe(30);
+  });
+
+  it("accepts zero and positive safe integers", () => {
+    expect(readNonnegativeInteger("0", 30)).toBe(0);
+    expect(readNonnegativeInteger("30", 0)).toBe(30);
+    expect(readNonnegativeInteger(String(Number.MAX_SAFE_INTEGER), 0)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it.each(["-1", "2.5", "Infinity", "NaN", "9007199254740992", "not-a-number"])(
+    "rejects %s",
+    (value) => {
+      expect(() => readNonnegativeInteger(value, 30)).toThrow(/Expected nonnegative integer env value/);
+    },
+  );
 });
