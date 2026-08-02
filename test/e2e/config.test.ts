@@ -24,6 +24,25 @@ describe("loadConfig", () => {
     });
   });
 
+  it.each([
+    ["PORT", "-1"],
+    ["PORT", "1.5"],
+    ["PORT", "65536"],
+    ["AGENTBAY_METRICS_PORT", "-1"],
+    ["AGENTBAY_METRICS_PORT", "1.5"],
+    ["AGENTBAY_METRICS_PORT", "65536"],
+    ["AGENTBAY_OPENCODE_PORT", "-1"],
+    ["AGENTBAY_OPENCODE_PORT", "1.5"],
+    ["AGENTBAY_OPENCODE_PORT", "65536"],
+  ])("rejects invalid TCP port %s=%s", (name, value) => {
+    expect(() => loadConfig({ [name]: value })).toThrow(/port|integer/i);
+  });
+
+  it("allows ephemeral listener ports but requires a concrete OpenCode port", () => {
+    expect(loadConfig({ PORT: "0", AGENTBAY_METRICS_PORT: "0" })).toMatchObject({ port: 0, metricsPort: 0 });
+    expect(() => loadConfig({ AGENTBAY_OPENCODE_PORT: "0" })).toThrow(/port/i);
+  });
+
   it("provides dispatcher defaults", () => {
     expect(loadConfig({ HOSTNAME: "worker-1" })).toMatchObject({
       dispatcherEnabled: true,

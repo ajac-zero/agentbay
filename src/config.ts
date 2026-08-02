@@ -1,5 +1,4 @@
 import type { SandboxClaimAPIVersion } from "./sandbox/types.js";
-import { readNumber } from "./util.js";
 
 export type Config = {
   adminToken?: string;
@@ -82,9 +81,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     scheduleWorkerId: env.AGENTBAY_SCHEDULE_WORKER_ID ?? env.HOSTNAME ?? `agentbay-${process.pid}`,
     kubeNamespace: env.AGENTBAY_KUBE_NAMESPACE ?? env.POD_NAMESPACE ?? "agents",
     opencodeDirectory: env.AGENTBAY_OPENCODE_DIRECTORY ?? "/workspace",
-    opencodePort: readNumber(env.AGENTBAY_OPENCODE_PORT, 4096),
-    port: readNumber(env.PORT, 3000),
-    metricsPort: readNumber(env.AGENTBAY_METRICS_PORT, 9090),
+    opencodePort: readPort(env.AGENTBAY_OPENCODE_PORT, 4096, "AGENTBAY_OPENCODE_PORT", false),
+    port: readPort(env.PORT, 3000, "PORT", true),
+    metricsPort: readPort(env.AGENTBAY_METRICS_PORT, 9090, "AGENTBAY_METRICS_PORT", true),
     sandboxClaimApiVersion: readSandboxClaimApiVersion(env.AGENTBAY_SANDBOX_CLAIM_API_VERSION),
   };
   if (config.dispatcherRenewIntervalMs >= config.dispatcherLeaseDurationMs) {
@@ -136,6 +135,14 @@ function readInteger(value: string | undefined, fallback: number): number {
   if (value === undefined || value === "") return fallback;
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) throw new Error(`Expected a safe integer, got ${value}`);
+  return parsed;
+}
+
+function readPort(value: string | undefined, fallback: number, name: string, allowZero: boolean): number {
+  const parsed = readInteger(value, fallback);
+  if (parsed > 65_535 || parsed < (allowZero ? 0 : 1)) {
+    throw new Error(`${name} must be a ${allowZero ? "nonnegative" : "positive"} integer TCP port at most 65535, got ${value}`);
+  }
   return parsed;
 }
 
