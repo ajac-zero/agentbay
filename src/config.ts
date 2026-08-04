@@ -89,6 +89,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (config.dispatcherRenewIntervalMs >= config.dispatcherLeaseDurationMs) {
     throw new Error("AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS must be less than AGENTBAY_DISPATCHER_LEASE_DURATION_MS");
   }
+  if (config.scheduleWorkerEnabled && !config.revisionResolverEnabled) {
+    throw new Error("AGENTBAY_SCHEDULE_WORKER_ENABLED requires AGENTBAY_REVISION_RESOLVER_ENABLED=true");
+  }
   if ((config.revisionResolverEnabled || config.githubIssueAcknowledgmentEnabled) && (!config.githubAppIdFile || !config.githubAppPrivateKeyFile)) {
     throw new Error("AGENTBAY_GITHUB_APP_ID_FILE and AGENTBAY_GITHUB_PRIVATE_KEY_FILE are required when GitHub control-plane workers are enabled");
   }

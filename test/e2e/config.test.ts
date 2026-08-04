@@ -103,6 +103,25 @@ describe("loadConfig", () => {
     });
   });
 
+  it("requires revision resolution and credentials when schedule processing is enabled", () => {
+    expect(() => loadConfig({
+      AGENTBAY_SCHEDULE_WORKER_ENABLED: "true",
+    })).toThrow(/revision resolver/i);
+    expect(() => loadConfig({
+      AGENTBAY_SCHEDULE_WORKER_ENABLED: "true",
+      AGENTBAY_REVISION_RESOLVER_ENABLED: "true",
+    })).toThrow(/APP_ID_FILE/);
+    expect(loadConfig({
+      AGENTBAY_SCHEDULE_WORKER_ENABLED: "true",
+      AGENTBAY_REVISION_RESOLVER_ENABLED: "true",
+      AGENTBAY_GITHUB_APP_ID_FILE: "/app-id",
+      AGENTBAY_GITHUB_PRIVATE_KEY_FILE: "/private-key",
+    })).toMatchObject({
+      scheduleWorkerEnabled: true,
+      revisionResolverEnabled: true,
+    });
+  });
+
   it("requires dispatcher renewal before lease expiry", () => {
     expect(() => loadConfig({
       AGENTBAY_DISPATCHER_LEASE_DURATION_MS: "1000",
