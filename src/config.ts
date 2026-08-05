@@ -86,6 +86,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     metricsPort: readPort(env.AGENTBAY_METRICS_PORT, 9090, "AGENTBAY_METRICS_PORT", true),
     sandboxClaimApiVersion: readSandboxClaimApiVersion(env.AGENTBAY_SANDBOX_CLAIM_API_VERSION),
   };
+  if (config.port !== 0 && config.port === config.metricsPort) {
+    throw new Error("PORT and AGENTBAY_METRICS_PORT must not use the same nonzero port");
+  }
   if (config.dispatcherRenewIntervalMs >= config.dispatcherLeaseDurationMs) {
     throw new Error("AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS must be less than AGENTBAY_DISPATCHER_LEASE_DURATION_MS");
   }
