@@ -58,7 +58,7 @@ export class InstallationTokenProvider {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${createGitHubAppJwt({ ...credentials, now: this.now })}`,
         "Content-Type": "application/json",
-        "User-Agent": "agentbay-github-token-broker/1.0",
+        "User-Agent": "dispatch-github-token-broker/1.0",
         "X-GitHub-Api-Version": API_VERSION,
       },
       body: JSON.stringify({ repository_ids: [this.config.repositoryId], permissions: this.config.permissions }),

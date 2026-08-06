@@ -29,21 +29,21 @@ export async function runRuntimeMigrations(env: NodeJS.ProcessEnv = process.env)
 }
 
 function readPostgresRuntimeStoreOptions(env: NodeJS.ProcessEnv): PostgresRuntimeStoreOptions {
-  const connectionString = env.AGENTBAY_DATABASE_URL ?? env.DATABASE_URL;
-  const host = env.AGENTBAY_DATABASE_HOST;
+  const connectionString = env.DISPATCH_DATABASE_URL ?? env.DATABASE_URL;
+  const host = env.DISPATCH_DATABASE_HOST;
   if (!connectionString && !host) {
-    throw new Error("AGENTBAY_DATABASE_URL, DATABASE_URL, or AGENTBAY_DATABASE_HOST must be set");
+    throw new Error("DISPATCH_DATABASE_URL, DATABASE_URL, or DISPATCH_DATABASE_HOST must be set");
   }
 
   return {
-    database: env.AGENTBAY_DATABASE_NAME,
+    database: env.DISPATCH_DATABASE_NAME,
     host,
-    migrationsFolder: env.AGENTBAY_DATABASE_MIGRATIONS_FOLDER,
-    password: env.AGENTBAY_DATABASE_PASSWORD,
-    port: readNumber(env.AGENTBAY_DATABASE_PORT, 5432),
-    user: env.AGENTBAY_DATABASE_USER,
+    migrationsFolder: env.DISPATCH_DATABASE_MIGRATIONS_FOLDER,
+    password: env.DISPATCH_DATABASE_PASSWORD,
+    port: readNumber(env.DISPATCH_DATABASE_PORT, 5432),
+    user: env.DISPATCH_DATABASE_USER,
     ...(connectionString ? { connectionString } : {}),
-    ssl: readBoolean(env.AGENTBAY_DATABASE_SSL, false),
-    sslRejectUnauthorized: readBoolean(env.AGENTBAY_DATABASE_SSL_REJECT_UNAUTHORIZED, false),
+    ssl: readBoolean(env.DISPATCH_DATABASE_SSL, false),
+    sslRejectUnauthorized: readBoolean(env.DISPATCH_DATABASE_SSL_REJECT_UNAUTHORIZED, false),
   };
 }

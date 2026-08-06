@@ -9,14 +9,14 @@ substrate.
 
 The product architecture and roadmap are defined in [`DESIGN.md`](DESIGN.md).
 
-## Naming and compatibility
+## Naming
 
-Dispatch is the product name. Existing `agentbay` identifiers are retained where
-they are deployment, API, or observability contracts: `AGENTBAY_*` environment
-variables, Kubernetes labels and annotations, Helm chart and release names,
-Prometheus metric names, CloudEvent types, and database objects. New product
-features must use neutral domain terms or explicitly versioned public namespaces
-rather than embedding the product name in a new runtime contract.
+Dispatch identifiers are the canonical deployment, API, and observability
+contracts: `DISPATCH_*` environment variables, Kubernetes labels and
+annotations, Helm chart and release names, Prometheus metric names, CloudEvent
+types, and database objects. New product features must use neutral domain terms
+or explicitly versioned public namespaces rather than embedding the product name
+in a new runtime contract.
 
 ## Current product surface
 
@@ -58,8 +58,8 @@ pnpm typecheck
 Configure PostgreSQL, apply migrations, and run the API:
 
 ```bash
-export AGENTBAY_DATABASE_URL=postgres://agentbay:agentbay@localhost:5432/agentbay
-export AGENTBAY_ADMIN_TOKEN=development-token
+export DISPATCH_DATABASE_URL=postgres://dispatch:dispatch@localhost:5432/dispatch
+export DISPATCH_ADMIN_TOKEN=development-token
 pnpm build
 pnpm db:migrate
 pnpm dev
@@ -81,32 +81,32 @@ cannot mount the Docker socket, run with `TESTCONTAINERS_RYUK_DISABLED=true`.
 | Variable | Default | Purpose |
 |---|---:|---|
 | `PORT` | `3000` | HTTP port for health, documentation, management, event ingress, and execution reads. |
-| `AGENTBAY_ADMIN_TOKEN` | unset | Bearer token required by `/v1/*`. The historical variable name is retained temporarily; there is no runtime-admin API. |
-| `AGENTBAY_DATABASE_URL` / `DATABASE_URL` | required unless host vars are set | PostgreSQL URL for profile, trigger, binding, event, execution, transition, lease, and outbox state. |
-| `AGENTBAY_DATABASE_HOST` | unset | Alternative to URL configuration; pair with database user, password, and name. |
-| `AGENTBAY_DATABASE_PORT` | `5432` | PostgreSQL port with host-based configuration. |
-| `AGENTBAY_DATABASE_USER` | unset | PostgreSQL user with host-based configuration. |
-| `AGENTBAY_DATABASE_PASSWORD` | unset | PostgreSQL password with host-based configuration. |
-| `AGENTBAY_DATABASE_NAME` | unset | PostgreSQL database with host-based configuration. |
-| `AGENTBAY_DATABASE_SSL` | `false` | Enables PostgreSQL SSL. |
-| `AGENTBAY_DATABASE_SSL_REJECT_UNAUTHORIZED` | `false` | Verifies the PostgreSQL server certificate when SSL is enabled. Enable in production. |
-| `AGENTBAY_DATABASE_MIGRATIONS_FOLDER` | `drizzle` | Migration folder used by `pnpm db:migrate`. |
-| `AGENTBAY_EXECUTION_MAINTENANCE_ENABLED` | `true` | Enables retry promotion and expired-lease recovery. |
-| `AGENTBAY_EXECUTION_MAINTENANCE_INTERVAL_MS` | `5000` | Delay between maintenance cycles. |
-| `AGENTBAY_EXECUTION_MAINTENANCE_BATCH_SIZE` | `100` | Maximum rows handled by each maintenance operation per cycle. |
-| `AGENTBAY_EXECUTION_MAX_ATTEMPTS` | `3` | Maximum execution attempts, including the initial attempt. |
-| `AGENTBAY_EXECUTION_RETRY_DELAY_MS` | `30000` | Fixed delay before a failed execution is eligible for retry. |
-| `AGENTBAY_DISPATCHER_ENABLED` | `true` | Enables the embedded fenced dispatcher worker. |
-| `AGENTBAY_DISPATCHER_IDLE_POLL_MS` | `500` | Delay before polling again when no execution is queued. |
-| `AGENTBAY_DISPATCHER_LEASE_DURATION_MS` | `60000` | Duration of each execution-attempt lease. |
-| `AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS` | `20000` | Lease renewal interval; must be shorter than the lease duration. |
-| `AGENTBAY_DISPATCHER_WORKER_ID` | hostname/PID | Stable lease-owner identity for the process. |
-| `AGENTBAY_KUBE_NAMESPACE` | `agents` | Namespace reserved for SandboxClaim-based execution. |
-| `AGENTBAY_SANDBOX_CLAIM_API_VERSION` | `v1alpha1` | Installed agent-sandbox extensions API version. |
-| `AGENTBAY_OPENCODE_PORT` | `4096` | OpenCode server port used by the execution runtime. |
-| `AGENTBAY_OPENCODE_DIRECTORY` | `/workspace` | OpenCode working directory in execution sandboxes. |
+| `DISPATCH_ADMIN_TOKEN` | unset | Bearer token required by `/v1/*`. There is no runtime-admin API. |
+| `DISPATCH_DATABASE_URL` / `DATABASE_URL` | required unless host vars are set | PostgreSQL URL for profile, trigger, binding, event, execution, transition, lease, and outbox state. |
+| `DISPATCH_DATABASE_HOST` | unset | Alternative to URL configuration; pair with database user, password, and name. |
+| `DISPATCH_DATABASE_PORT` | `5432` | PostgreSQL port with host-based configuration. |
+| `DISPATCH_DATABASE_USER` | unset | PostgreSQL user with host-based configuration. |
+| `DISPATCH_DATABASE_PASSWORD` | unset | PostgreSQL password with host-based configuration. |
+| `DISPATCH_DATABASE_NAME` | unset | PostgreSQL database with host-based configuration. |
+| `DISPATCH_DATABASE_SSL` | `false` | Enables PostgreSQL SSL. |
+| `DISPATCH_DATABASE_SSL_REJECT_UNAUTHORIZED` | `false` | Verifies the PostgreSQL server certificate when SSL is enabled. Enable in production. |
+| `DISPATCH_DATABASE_MIGRATIONS_FOLDER` | `drizzle` | Migration folder used by `pnpm db:migrate`. |
+| `DISPATCH_EXECUTION_MAINTENANCE_ENABLED` | `true` | Enables retry promotion and expired-lease recovery. |
+| `DISPATCH_EXECUTION_MAINTENANCE_INTERVAL_MS` | `5000` | Delay between maintenance cycles. |
+| `DISPATCH_EXECUTION_MAINTENANCE_BATCH_SIZE` | `100` | Maximum rows handled by each maintenance operation per cycle. |
+| `DISPATCH_EXECUTION_MAX_ATTEMPTS` | `3` | Maximum execution attempts, including the initial attempt. |
+| `DISPATCH_EXECUTION_RETRY_DELAY_MS` | `30000` | Fixed delay before a failed execution is eligible for retry. |
+| `DISPATCH_DISPATCHER_ENABLED` | `true` | Enables the embedded fenced dispatcher worker. |
+| `DISPATCH_DISPATCHER_IDLE_POLL_MS` | `500` | Delay before polling again when no execution is queued. |
+| `DISPATCH_DISPATCHER_LEASE_DURATION_MS` | `60000` | Duration of each execution-attempt lease. |
+| `DISPATCH_DISPATCHER_RENEW_INTERVAL_MS` | `20000` | Lease renewal interval; must be shorter than the lease duration. |
+| `DISPATCH_DISPATCHER_WORKER_ID` | hostname/PID | Stable lease-owner identity for the process. |
+| `DISPATCH_KUBE_NAMESPACE` | `agents` | Namespace reserved for SandboxClaim-based execution. |
+| `DISPATCH_SANDBOX_CLAIM_API_VERSION` | `v1alpha1` | Installed agent-sandbox extensions API version. |
+| `DISPATCH_OPENCODE_PORT` | `4096` | OpenCode server port used by the execution runtime. |
+| `DISPATCH_OPENCODE_DIRECTORY` | `/workspace` | OpenCode working directory in execution sandboxes. |
 | `LOG_LEVEL` | `info` | Structured JSON log threshold: `debug`, `info`, `warn`, or `error`. |
-| `AGENTBAY_RECONCILER_GRACE_MINUTES` | `30` | Grace period used by the standalone SandboxClaim reconciler command. |
+| `DISPATCH_RECONCILER_GRACE_MINUTES` | `30` | Grace period used by the standalone SandboxClaim reconciler command. |
 
 Apply pending migrations before serving traffic:
 
@@ -125,11 +125,10 @@ GET /docs
 GET /openapi.json
 ```
 
-`GET /healthz` returns `200 OK` when Dispatch is healthy. Its `service` value
-remains `agentbay` for API compatibility.
+`GET /healthz` returns `200 OK` when Dispatch is healthy.
 
 Management routes and normalized event ingress require `Authorization: Bearer
-<AGENTBAY_ADMIN_TOKEN>`:
+<DISPATCH_ADMIN_TOKEN>`:
 
 ```text
 POST /v1/agent-profiles/:profileID/versions
@@ -172,7 +171,7 @@ sidecar that must already be owned by its immutable sandbox template:
 ```
 
 At dispatch, Dispatch resolves the records and injects one canonical, non-secret
-`AGENTBAY_CONNECTIONS` JSON envelope into each selected sidecar. The envelope
+`DISPATCH_CONNECTIONS` JSON envelope into each selected sidecar. The envelope
 contains only that sidecar's sorted connection IDs:
 
 ```json
@@ -328,7 +327,7 @@ For GitHub App delivery, create a trigger such as:
   "type": "github.app.webhook",
   "config": {
     "schemaVersion": 1,
-    "webhookSecretEnv": "AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION"
+    "webhookSecretEnv": "DISPATCH_GITHUB_WEBHOOK_SECRET_PRODUCTION"
   }
 }
 ```
@@ -361,9 +360,9 @@ limited to public HTTPS repositories and do not use the webhook secret for
 cloning or GitHub API access.
 
 Enable issue revision resolution with
-`AGENTBAY_REVISION_RESOLVER_ENABLED=true` and mount the GitHub App ID and RSA
-private key as files referenced by `AGENTBAY_GITHUB_APP_ID_FILE` and
-`AGENTBAY_GITHUB_PRIVATE_KEY_FILE`. The delivery supplies the installation ID.
+`DISPATCH_REVISION_RESOLVER_ENABLED=true` and mount the GitHub App ID and RSA
+private key as files referenced by `DISPATCH_GITHUB_APP_ID_FILE` and
+`DISPATCH_GITHUB_PRIVATE_KEY_FILE`. The delivery supplies the installation ID.
 These credentials remain in the orchestrator and are never added to an
 execution, workspace, or OpenCode environment. This resolves immutable
 revisions for public workspaces; private repository materialization remains
@@ -408,7 +407,7 @@ outcomes, rather than being rewritten as cancelled.
 
 Active workers learn about cancellation when they renew their execution lease,
 so interruption latency is normally bounded by
-`AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS`, plus in-flight operation latency. The
+`DISPATCH_DISPATCHER_RENEW_INTERVAL_MS`, plus in-flight operation latency. The
 worker deletes the provisioned workload before acknowledging `CANCELLED` using
 its attempt and fencing token; a stale worker cannot acknowledge after losing
 its lease. If cleanup fails, the execution remains `CANCEL_REQUESTED` until the
@@ -438,7 +437,7 @@ authentication and authorization remain roadmap work.
 
 Do not embed provider or infrastructure credentials in profile definitions.
 Use Kubernetes Secrets, an external secret manager, or workload identity. The
-Helm chart can generate and preserve `AGENTBAY_ADMIN_TOKEN` for development, but
+Helm chart can generate and preserve `DISPATCH_ADMIN_TOKEN` for development, but
 production deployments should provide a managed Secret and rotate tokens under
 their normal credential policy.
 
@@ -468,8 +467,8 @@ without changing the generic profile-to-sidecar contract.
 Build and push the API and OpenCode sandbox images:
 
 ```bash
-docker build -t ghcr.io/your-org/agentbay:latest .
-docker push ghcr.io/your-org/agentbay:latest
+docker build -t ghcr.io/your-org/dispatch:latest .
+docker push ghcr.io/your-org/dispatch:latest
 docker build -f opencode-sandbox.Dockerfile -t ghcr.io/your-org/opencode-sandbox:latest .
 docker push ghcr.io/your-org/opencode-sandbox:latest
 ```
@@ -479,7 +478,7 @@ The GitHub software factory includes the official GitHub MCP sidecar, its
 dependency-free installation-token broker, role-specific tools and permissions,
 credential mounts, tests, and image build instructions in
 [`examples/github-software-factory`](examples/github-software-factory/README.md).
-The generic Helm [`README`](deploy/helm/agentbay/README.md) and
+The generic Helm [`README`](deploy/helm/dispatch/README.md) and
 [`sandbox-template.yaml`](deploy/examples/sandbox-template.yaml) remain
 provider-neutral.
 
@@ -501,12 +500,12 @@ kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/downl
 Then install the chart:
 
 ```bash
-helm install dispatch deploy/helm/agentbay \
+helm install dispatch deploy/helm/dispatch \
   --namespace agents --create-namespace \
   --set image.repository=ghcr.io/your-org/dispatch \
   --set image.tag=latest \
   --set secrets.existingSecret=dispatch-secrets
 ```
 
-See the chart [`README`](deploy/helm/agentbay/README.md) for PostgreSQL,
+See the chart [`README`](deploy/helm/dispatch/README.md) for PostgreSQL,
 migrations, RBAC, sandbox resources, reconciler, and AI gateway settings.

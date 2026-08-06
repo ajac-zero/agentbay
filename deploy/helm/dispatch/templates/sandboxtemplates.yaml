@@ -2,7 +2,7 @@
 {{- $root := . -}}
 {{- range .Values.sandboxTemplates.templates }}
 {{- $t := . -}}
-{{- $ns := default (include "agentbay.claimsNamespace" $root) $t.namespace -}}
+{{- $ns := default (include "dispatch.claimsNamespace" $root) $t.namespace -}}
 {{- $gatewayEnabled := $root.Values.aiGatewayAuthz.enabled -}}
 {{- $materializer := default dict $t.workspaceMaterializer -}}
 {{- $materializerImage := default dict $materializer.image -}}
@@ -21,7 +21,7 @@ metadata:
   name: {{ required "sandboxTemplates.templates[].name is required" $t.name }}
   namespace: {{ $ns }}
   labels:
-    {{- include "agentbay.labels" $root | nindent 4 }}
+    {{- include "dispatch.labels" $root | nindent 4 }}
     app.kubernetes.io/component: sandbox-template
 spec:
 {{- if $t.specOverride }}
@@ -36,7 +36,7 @@ spec:
       - from:
           - podSelector:
               matchLabels:
-                {{- include "agentbay.selectorLabels" $root | nindent 16 }}
+                {{- include "dispatch.selectorLabels" $root | nindent 16 }}
             namespaceSelector:
               matchLabels:
                 kubernetes.io/metadata.name: {{ $root.Release.Namespace }}
@@ -79,7 +79,7 @@ spec:
                 kubernetes.io/metadata.name: {{ $root.Release.Namespace }}
             podSelector:
               matchLabels:
-                {{- include "agentbay.selectorLabels" $root | nindent 16 }}
+                {{- include "dispatch.selectorLabels" $root | nindent 16 }}
         ports:
           - protocol: TCP
             port: {{ $root.Values.orchestrator.port }}
@@ -102,7 +102,7 @@ spec:
     spec:
       automountServiceAccountToken: false
       {{- if $gatewayEnabled }}
-      serviceAccountName: {{ include "agentbay.aiGatewayAuthz.sandboxServiceAccountName" $root }}
+      serviceAccountName: {{ include "dispatch.aiGatewayAuthz.sandboxServiceAccountName" $root }}
       {{- with $root.Values.aiGatewayAuthz.localhostHostnames }}
       hostAliases:
         - ip: "127.0.0.1"
@@ -117,7 +117,7 @@ spec:
         - name: workspace-materializer
           image: "{{ default $t.image.repository $materializerImage.repository }}:{{ default $t.image.tag $materializerImage.tag }}"
           imagePullPolicy: {{ default (default "IfNotPresent" $t.image.pullPolicy) $materializerImage.pullPolicy }}
-          command: ["node", "/opt/agentbay/git-workspace-materializer.mjs"]
+          command: ["node", "/opt/dispatch/git-workspace-materializer.mjs"]
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -129,7 +129,7 @@ spec:
             seccompProfile:
               type: RuntimeDefault
           env:
-            - name: AGENTBAY_WORKSPACE_DIRECTORY
+            - name: DISPATCH_WORKSPACE_DIRECTORY
               value: /workspace
           volumeMounts:
             - name: workspace
@@ -173,7 +173,7 @@ spec:
           {{- toYaml . | nindent 10 }}
           {{- end }}
         {{- if $gatewayEnabled }}
-        - name: agentbay-gateway-proxy
+        - name: dispatch-gateway-proxy
           image: "{{ $root.Values.aiGatewayAuthz.proxy.image.repository }}:{{ $root.Values.aiGatewayAuthz.proxy.image.tag }}"
           imagePullPolicy: {{ $root.Values.aiGatewayAuthz.proxy.image.pullPolicy }}
           env:
@@ -195,7 +195,7 @@ spec:
             - containerPort: {{ $root.Values.aiGatewayAuthz.proxy.port }}
               name: gateway-proxy
           volumeMounts:
-            - name: agentbay-ai-gateway-token
+            - name: dispatch-ai-gateway-token
               mountPath: {{ $root.Values.aiGatewayAuthz.proxy.tokenMountPath }}
               readOnly: true
           {{- with $root.Values.aiGatewayAuthz.proxy.resources }}
@@ -223,7 +223,7 @@ spec:
           emptyDir: {}
           {{- end }}
         {{- if $gatewayEnabled }}
-        - name: agentbay-ai-gateway-token
+        - name: dispatch-ai-gateway-token
           projected:
             sources:
               - serviceAccountToken:

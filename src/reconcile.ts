@@ -1,8 +1,8 @@
 /**
  * Reconciler entrypoint.
  *
- * Lists all SandboxClaims managed by agentbay (label
- * app.kubernetes.io/managed-by=agentbay) and deletes any whose
+ * Lists all SandboxClaims managed by dispatch (label
+ * app.kubernetes.io/managed-by=dispatch) and deletes any whose
  * spec.lifecycle.shutdownTime has passed the configured grace period.
  *
  * Intended to run as a Kubernetes CronJob every 30 minutes.
@@ -16,13 +16,13 @@ import { readNumber } from "./util.js";
 
 const GROUP = "extensions.agents.x-k8s.io";
 const PLURAL = "sandboxclaims";
-const LABEL_SELECTOR = "app.kubernetes.io/managed-by=agentbay";
+const LABEL_SELECTOR = "app.kubernetes.io/managed-by=dispatch";
 
 export function readApiVersion(value: string | undefined): SandboxClaimAPIVersion {
   if (value === undefined || value === "") return "v1beta1";
   if (value === "v1alpha1" || value === "v1beta1") return value;
   throw new Error(
-    `Expected AGENTBAY_SANDBOX_CLAIM_API_VERSION to be v1alpha1 or v1beta1, got ${value}`,
+    `Expected DISPATCH_SANDBOX_CLAIM_API_VERSION to be v1alpha1 or v1beta1, got ${value}`,
   );
 }
 
@@ -145,9 +145,9 @@ export async function reconcileOnce(api: ReconcileApi, opts: ReconcileOpts): Pro
 }
 
 async function reconcile(): Promise<void> {
-  const namespace = process.env.AGENTBAY_KUBE_NAMESPACE ?? process.env.POD_NAMESPACE ?? "agents";
-  const apiVersion = readApiVersion(process.env.AGENTBAY_SANDBOX_CLAIM_API_VERSION);
-  const graceMinutes = readNumber(process.env.AGENTBAY_RECONCILER_GRACE_MINUTES, 30);
+  const namespace = process.env.DISPATCH_KUBE_NAMESPACE ?? process.env.POD_NAMESPACE ?? "agents";
+  const apiVersion = readApiVersion(process.env.DISPATCH_SANDBOX_CLAIM_API_VERSION);
+  const graceMinutes = readNumber(process.env.DISPATCH_RECONCILER_GRACE_MINUTES, 30);
 
   const api = createCustomObjectsApi();
   const result = await reconcileOnce(api, { namespace, apiVersion, graceMinutes, now: Date.now() });

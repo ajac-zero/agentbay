@@ -12,7 +12,7 @@ spec:
       - from:
           - podSelector:
               matchLabels:
-                app.kubernetes.io/name: agentbay
+                app.kubernetes.io/name: dispatch
         ports:
           - protocol: TCP
             port: 4096
@@ -48,9 +48,9 @@ spec:
         - name: workspace-materializer
           image: ghcr.io/example/opencode-sandbox:latest
           imagePullPolicy: IfNotPresent
-          command: ["node", "/opt/agentbay/git-workspace-materializer.mjs"]
+          command: ["node", "/opt/dispatch/git-workspace-materializer.mjs"]
           env:
-            - name: AGENTBAY_WORKSPACE_DIRECTORY
+            - name: DISPATCH_WORKSPACE_DIRECTORY
               value: /workspace
           volumeMounts:
             - name: workspace

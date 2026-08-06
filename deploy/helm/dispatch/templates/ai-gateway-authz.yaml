@@ -1,14 +1,14 @@
 {{- if .Values.aiGatewayAuthz.enabled -}}
-{{- $authzName := printf "%s-authz" (include "agentbay.fullname" .) | trunc 63 | trimSuffix "-" -}}
-{{- $claimsNamespace := include "agentbay.claimsNamespace" . -}}
+{{- $authzName := printf "%s-authz" (include "dispatch.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- $claimsNamespace := include "dispatch.claimsNamespace" . -}}
 {{- if .Values.aiGatewayAuthz.sandboxServiceAccount.create }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "agentbay.aiGatewayAuthz.sandboxServiceAccountName" . }}
+  name: {{ include "dispatch.aiGatewayAuthz.sandboxServiceAccountName" . }}
   namespace: {{ $claimsNamespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: sandbox-runtime
   {{- with .Values.aiGatewayAuthz.sandboxServiceAccount.annotations }}
   annotations:
@@ -20,10 +20,10 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "agentbay.aiGatewayAuthz.serviceAccountName" . }}
+  name: {{ include "dispatch.aiGatewayAuthz.serviceAccountName" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: ai-gateway-authz
   {{- with .Values.aiGatewayAuthz.authz.serviceAccount.annotations }}
   annotations:
@@ -37,7 +37,7 @@ metadata:
   name: {{ $authzName }}-policy
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: ai-gateway-authz
 data:
   policy.yaml: |
@@ -49,25 +49,25 @@ metadata:
   name: {{ $authzName }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: ai-gateway-authz
 spec:
   replicas: {{ .Values.aiGatewayAuthz.authz.replicaCount }}
   selector:
     matchLabels:
-      {{- include "agentbay.aiGatewayAuthz.selectorLabels" . | nindent 6 }}
+      {{- include "dispatch.aiGatewayAuthz.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "agentbay.aiGatewayAuthz.selectorLabels" . | nindent 8 }}
+        {{- include "dispatch.aiGatewayAuthz.selectorLabels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "agentbay.aiGatewayAuthz.serviceAccountName" . }}
+      serviceAccountName: {{ include "dispatch.aiGatewayAuthz.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-        - name: agentbay-authz
+        - name: dispatch-authz
           image: "{{ .Values.aiGatewayAuthz.authz.image.repository }}:{{ .Values.aiGatewayAuthz.authz.image.tag }}"
           imagePullPolicy: {{ .Values.aiGatewayAuthz.authz.image.pullPolicy }}
           env:
@@ -80,7 +80,7 @@ spec:
             - name: SANDBOX_NAMESPACES
               value: {{ $claimsNamespace | quote }}
             - name: SANDBOX_SERVICE_ACCOUNT
-              value: {{ include "agentbay.aiGatewayAuthz.sandboxServiceAccountName" . | quote }}
+              value: {{ include "dispatch.aiGatewayAuthz.sandboxServiceAccountName" . | quote }}
             - name: REQUIRE_POD_BINDING
               value: {{ .Values.aiGatewayAuthz.authz.requirePodBinding | quote }}
             - name: REQUIRE_SANDBOX_OWNER
@@ -102,7 +102,7 @@ spec:
             - name: DEFAULT_ACTION
               value: {{ .Values.aiGatewayAuthz.authz.defaultAction | quote }}
             - name: POLICY_FILE
-              value: /etc/agentbay-authz/policy.yaml
+              value: /etc/dispatch-authz/policy.yaml
           ports:
             - name: grpc
               containerPort: 9000
@@ -120,7 +120,7 @@ spec:
               port: http
           volumeMounts:
             - name: policy
-              mountPath: /etc/agentbay-authz
+              mountPath: /etc/dispatch-authz
               readOnly: true
           {{- with .Values.aiGatewayAuthz.authz.resources }}
           resources:
@@ -137,11 +137,11 @@ metadata:
   name: {{ $authzName }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: ai-gateway-authz
 spec:
   selector:
-    {{- include "agentbay.aiGatewayAuthz.selectorLabels" . | nindent 4 }}
+    {{- include "dispatch.aiGatewayAuthz.selectorLabels" . | nindent 4 }}
   ports:
     - name: grpc
       port: 9000
@@ -158,7 +158,7 @@ kind: ClusterRole
 metadata:
   name: {{ $authzName }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: ai-gateway-authz
 rules:
   - apiGroups: ["authentication.k8s.io"]
@@ -179,7 +179,7 @@ kind: ClusterRoleBinding
 metadata:
   name: {{ $authzName }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: ai-gateway-authz
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -187,7 +187,7 @@ roleRef:
   name: {{ $authzName }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "agentbay.aiGatewayAuthz.serviceAccountName" . }}
+    name: {{ include "dispatch.aiGatewayAuthz.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}
 {{- end }}

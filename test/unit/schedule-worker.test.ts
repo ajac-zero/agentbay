@@ -15,8 +15,8 @@ describe("ScheduleWorker", () => {
       sourceDeduplicationKey: "schedule:hourly-bug-finder:2026-07-20T18:17:00.000Z",
       event: {
         id: "occurrence-1",
-        source: "urn:agentbay:schedule:hourly-bug-finder",
-        type: "dev.agentbay.schedule.triggered",
+        source: "urn:dispatch:schedule:hourly-bug-finder",
+        type: "dev.dispatch.schedule.triggered",
         subject: "schedules/hourly-bug-finder",
         data: { repository: { id: 20, fullName: "acme/widgets", cloneUrl: "https://github.com/acme/widgets.git", defaultBranch: "main" } },
       },

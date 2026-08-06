@@ -45,58 +45,58 @@ export type Config = {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const config = {
-    adminToken: emptyToUndefined(env.AGENTBAY_ADMIN_TOKEN),
-    claimReadyTimeoutMs: readTimerDelay(env.AGENTBAY_CLAIM_READY_TIMEOUT_MS, 180_000),
-    controlPlaneUrl: readControlPlaneUrl(env.AGENTBAY_CONTROL_PLANE_URL),
-    dispatcherEnabled: readStrictBoolean(env.AGENTBAY_DISPATCHER_ENABLED, true),
-    dispatcherIdlePollMs: readTimerDelay(env.AGENTBAY_DISPATCHER_IDLE_POLL_MS, 500),
-    dispatcherLeaseDurationMs: readPositiveInteger(env.AGENTBAY_DISPATCHER_LEASE_DURATION_MS, 60_000),
-    dispatcherRenewIntervalMs: readTimerDelay(env.AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS, 20_000),
-    dispatcherWorkerId: env.AGENTBAY_DISPATCHER_WORKER_ID ?? env.HOSTNAME ?? `agentbay-${process.pid}`,
-    executionMaintenanceBatchSize: readPositiveInteger(env.AGENTBAY_EXECUTION_MAINTENANCE_BATCH_SIZE, 100),
-    executionMaintenanceEnabled: readStrictBoolean(env.AGENTBAY_EXECUTION_MAINTENANCE_ENABLED, true),
-    executionMaintenanceIntervalMs: readTimerDelay(env.AGENTBAY_EXECUTION_MAINTENANCE_INTERVAL_MS, 5_000),
-    executionMaxAttempts: readPositiveInteger(env.AGENTBAY_EXECUTION_MAX_ATTEMPTS, 3),
-    executionRetryDelayMs: readNonnegativeInteger(env.AGENTBAY_EXECUTION_RETRY_DELAY_MS, 30_000),
-    revisionResolverEnabled: readStrictBoolean(env.AGENTBAY_REVISION_RESOLVER_ENABLED, false),
-    revisionResolverIdlePollMs: readTimerDelay(env.AGENTBAY_REVISION_RESOLVER_IDLE_POLL_MS, 500),
-    revisionResolverLeaseDurationMs: readPositiveInteger(env.AGENTBAY_REVISION_RESOLVER_LEASE_DURATION_MS, 60_000),
-    revisionResolverMaxAttempts: readPositiveInteger(env.AGENTBAY_REVISION_RESOLVER_MAX_ATTEMPTS, 5),
-    revisionResolverRequestTimeoutMs: readTimerDelay(env.AGENTBAY_REVISION_RESOLVER_REQUEST_TIMEOUT_MS, 30_000),
-    revisionResolverRetryDelayMs: readNonnegativeInteger(env.AGENTBAY_REVISION_RESOLVER_RETRY_DELAY_MS, 30_000),
-    revisionResolverWorkerId: env.AGENTBAY_REVISION_RESOLVER_WORKER_ID ?? env.HOSTNAME ?? `agentbay-${process.pid}`,
-    githubAppIdFile: emptyToUndefined(env.AGENTBAY_GITHUB_APP_ID_FILE),
-    githubAppPrivateKeyFile: emptyToUndefined(env.AGENTBAY_GITHUB_PRIVATE_KEY_FILE),
-    githubIssueAcknowledgmentEnabled: readStrictBoolean(env.AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED, false),
-    githubIssueAcknowledgmentIdlePollMs: readTimerDelay(env.AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_IDLE_POLL_MS, 250),
-    githubIssueAcknowledgmentLeaseDurationMs: readPositiveInteger(env.AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS, 60_000),
-    githubIssueAcknowledgmentRequestTimeoutMs: readTimerDelay(env.AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS, 30_000),
-    githubIssueAcknowledgmentRetryDelayMs: readNonnegativeInteger(env.AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_RETRY_DELAY_MS, 5_000),
-    scheduleWorkerEnabled: readStrictBoolean(env.AGENTBAY_SCHEDULE_WORKER_ENABLED, false),
-    scheduleWorkerIdlePollMs: readTimerDelay(env.AGENTBAY_SCHEDULE_WORKER_IDLE_POLL_MS, 1_000),
-    scheduleWorkerLeaseDurationMs: readPositiveInteger(env.AGENTBAY_SCHEDULE_WORKER_LEASE_DURATION_MS, 60_000),
-    scheduleWorkerRetryDelayMs: readNonnegativeInteger(env.AGENTBAY_SCHEDULE_WORKER_RETRY_DELAY_MS, 30_000),
-    scheduleWorkerMaxAttempts: readPositiveInteger(env.AGENTBAY_SCHEDULE_WORKER_MAX_ATTEMPTS, 5),
-    scheduleWorkerMaterializeBatchSize: readPositiveInteger(env.AGENTBAY_SCHEDULE_WORKER_MATERIALIZE_BATCH_SIZE, 100),
-    scheduleWorkerId: env.AGENTBAY_SCHEDULE_WORKER_ID ?? env.HOSTNAME ?? `agentbay-${process.pid}`,
-    kubeNamespace: env.AGENTBAY_KUBE_NAMESPACE ?? env.POD_NAMESPACE ?? "agents",
-    opencodeDirectory: env.AGENTBAY_OPENCODE_DIRECTORY ?? "/workspace",
-    opencodePort: readPort(env.AGENTBAY_OPENCODE_PORT, 4096, "AGENTBAY_OPENCODE_PORT", false),
+    adminToken: emptyToUndefined(env.DISPATCH_ADMIN_TOKEN),
+    claimReadyTimeoutMs: readTimerDelay(env.DISPATCH_CLAIM_READY_TIMEOUT_MS, 180_000),
+    controlPlaneUrl: readControlPlaneUrl(env.DISPATCH_CONTROL_PLANE_URL),
+    dispatcherEnabled: readStrictBoolean(env.DISPATCH_DISPATCHER_ENABLED, true),
+    dispatcherIdlePollMs: readTimerDelay(env.DISPATCH_DISPATCHER_IDLE_POLL_MS, 500),
+    dispatcherLeaseDurationMs: readPositiveInteger(env.DISPATCH_DISPATCHER_LEASE_DURATION_MS, 60_000),
+    dispatcherRenewIntervalMs: readTimerDelay(env.DISPATCH_DISPATCHER_RENEW_INTERVAL_MS, 20_000),
+    dispatcherWorkerId: env.DISPATCH_DISPATCHER_WORKER_ID ?? env.HOSTNAME ?? `dispatch-${process.pid}`,
+    executionMaintenanceBatchSize: readPositiveInteger(env.DISPATCH_EXECUTION_MAINTENANCE_BATCH_SIZE, 100),
+    executionMaintenanceEnabled: readStrictBoolean(env.DISPATCH_EXECUTION_MAINTENANCE_ENABLED, true),
+    executionMaintenanceIntervalMs: readTimerDelay(env.DISPATCH_EXECUTION_MAINTENANCE_INTERVAL_MS, 5_000),
+    executionMaxAttempts: readPositiveInteger(env.DISPATCH_EXECUTION_MAX_ATTEMPTS, 3),
+    executionRetryDelayMs: readNonnegativeInteger(env.DISPATCH_EXECUTION_RETRY_DELAY_MS, 30_000),
+    revisionResolverEnabled: readStrictBoolean(env.DISPATCH_REVISION_RESOLVER_ENABLED, false),
+    revisionResolverIdlePollMs: readTimerDelay(env.DISPATCH_REVISION_RESOLVER_IDLE_POLL_MS, 500),
+    revisionResolverLeaseDurationMs: readPositiveInteger(env.DISPATCH_REVISION_RESOLVER_LEASE_DURATION_MS, 60_000),
+    revisionResolverMaxAttempts: readPositiveInteger(env.DISPATCH_REVISION_RESOLVER_MAX_ATTEMPTS, 5),
+    revisionResolverRequestTimeoutMs: readTimerDelay(env.DISPATCH_REVISION_RESOLVER_REQUEST_TIMEOUT_MS, 30_000),
+    revisionResolverRetryDelayMs: readNonnegativeInteger(env.DISPATCH_REVISION_RESOLVER_RETRY_DELAY_MS, 30_000),
+    revisionResolverWorkerId: env.DISPATCH_REVISION_RESOLVER_WORKER_ID ?? env.HOSTNAME ?? `dispatch-${process.pid}`,
+    githubAppIdFile: emptyToUndefined(env.DISPATCH_GITHUB_APP_ID_FILE),
+    githubAppPrivateKeyFile: emptyToUndefined(env.DISPATCH_GITHUB_PRIVATE_KEY_FILE),
+    githubIssueAcknowledgmentEnabled: readStrictBoolean(env.DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED, false),
+    githubIssueAcknowledgmentIdlePollMs: readTimerDelay(env.DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_IDLE_POLL_MS, 250),
+    githubIssueAcknowledgmentLeaseDurationMs: readPositiveInteger(env.DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS, 60_000),
+    githubIssueAcknowledgmentRequestTimeoutMs: readTimerDelay(env.DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS, 30_000),
+    githubIssueAcknowledgmentRetryDelayMs: readNonnegativeInteger(env.DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_RETRY_DELAY_MS, 5_000),
+    scheduleWorkerEnabled: readStrictBoolean(env.DISPATCH_SCHEDULE_WORKER_ENABLED, false),
+    scheduleWorkerIdlePollMs: readTimerDelay(env.DISPATCH_SCHEDULE_WORKER_IDLE_POLL_MS, 1_000),
+    scheduleWorkerLeaseDurationMs: readPositiveInteger(env.DISPATCH_SCHEDULE_WORKER_LEASE_DURATION_MS, 60_000),
+    scheduleWorkerRetryDelayMs: readNonnegativeInteger(env.DISPATCH_SCHEDULE_WORKER_RETRY_DELAY_MS, 30_000),
+    scheduleWorkerMaxAttempts: readPositiveInteger(env.DISPATCH_SCHEDULE_WORKER_MAX_ATTEMPTS, 5),
+    scheduleWorkerMaterializeBatchSize: readPositiveInteger(env.DISPATCH_SCHEDULE_WORKER_MATERIALIZE_BATCH_SIZE, 100),
+    scheduleWorkerId: env.DISPATCH_SCHEDULE_WORKER_ID ?? env.HOSTNAME ?? `dispatch-${process.pid}`,
+    kubeNamespace: env.DISPATCH_KUBE_NAMESPACE ?? env.POD_NAMESPACE ?? "agents",
+    opencodeDirectory: env.DISPATCH_OPENCODE_DIRECTORY ?? "/workspace",
+    opencodePort: readPort(env.DISPATCH_OPENCODE_PORT, 4096, "DISPATCH_OPENCODE_PORT", false),
     port: readPort(env.PORT, 3000, "PORT", true),
-    metricsPort: readPort(env.AGENTBAY_METRICS_PORT, 9090, "AGENTBAY_METRICS_PORT", true),
-    sandboxClaimApiVersion: readSandboxClaimApiVersion(env.AGENTBAY_SANDBOX_CLAIM_API_VERSION),
+    metricsPort: readPort(env.DISPATCH_METRICS_PORT, 9090, "DISPATCH_METRICS_PORT", true),
+    sandboxClaimApiVersion: readSandboxClaimApiVersion(env.DISPATCH_SANDBOX_CLAIM_API_VERSION),
   };
   if (config.dispatcherRenewIntervalMs >= config.dispatcherLeaseDurationMs) {
-    throw new Error("AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS must be less than AGENTBAY_DISPATCHER_LEASE_DURATION_MS");
+    throw new Error("DISPATCH_DISPATCHER_RENEW_INTERVAL_MS must be less than DISPATCH_DISPATCHER_LEASE_DURATION_MS");
   }
   if ((config.revisionResolverEnabled || config.githubIssueAcknowledgmentEnabled) && (!config.githubAppIdFile || !config.githubAppPrivateKeyFile)) {
-    throw new Error("AGENTBAY_GITHUB_APP_ID_FILE and AGENTBAY_GITHUB_PRIVATE_KEY_FILE are required when GitHub control-plane workers are enabled");
+    throw new Error("DISPATCH_GITHUB_APP_ID_FILE and DISPATCH_GITHUB_PRIVATE_KEY_FILE are required when GitHub control-plane workers are enabled");
   }
   if (config.revisionResolverRequestTimeoutMs >= config.revisionResolverLeaseDurationMs) {
-    throw new Error("AGENTBAY_REVISION_RESOLVER_REQUEST_TIMEOUT_MS must be less than AGENTBAY_REVISION_RESOLVER_LEASE_DURATION_MS");
+    throw new Error("DISPATCH_REVISION_RESOLVER_REQUEST_TIMEOUT_MS must be less than DISPATCH_REVISION_RESOLVER_LEASE_DURATION_MS");
   }
   if (config.githubIssueAcknowledgmentRequestTimeoutMs >= config.githubIssueAcknowledgmentLeaseDurationMs) {
-    throw new Error("AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS must be less than AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS");
+    throw new Error("DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS must be less than DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS");
   }
   return config;
 }
@@ -104,7 +104,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 function readSandboxClaimApiVersion(value: string | undefined): SandboxClaimAPIVersion {
   if (value === undefined || value === "") return "v1beta1";
   if (value === "v1alpha1" || value === "v1beta1") return value;
-  throw new Error(`Expected AGENTBAY_SANDBOX_CLAIM_API_VERSION to be v1alpha1 or v1beta1, got ${value}`);
+  throw new Error(`Expected DISPATCH_SANDBOX_CLAIM_API_VERSION to be v1alpha1 or v1beta1, got ${value}`);
 }
 
 function emptyToUndefined(value: string | undefined): string | undefined {
@@ -115,7 +115,7 @@ function readControlPlaneUrl(value: string | undefined): string | undefined {
   const configured = emptyToUndefined(value);
   if (!configured) return undefined;
   const url = new URL(configured);
-  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("AGENTBAY_CONTROL_PLANE_URL must be an HTTP(S) URL without credentials, query, or fragment");
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("DISPATCH_CONTROL_PLANE_URL must be an HTTP(S) URL without credentials, query, or fragment");
   return url.toString();
 }
 

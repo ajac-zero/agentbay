@@ -52,7 +52,7 @@ describe("connection persistence", () => {
   it("rejects corrupt persisted connection rows on read", async () => {
     const tenantId = `tenant-${randomUUID()}`;
     const connectionId = "Corrupt_ID";
-    await pool.query(`INSERT INTO agentbay_connections (id, tenant_id, connection_id, type, created_at)
+    await pool.query(`INSERT INTO dispatch_connections (id, tenant_id, connection_id, type, created_at)
       VALUES ($1, $2, $3, $4, $5)`, [randomUUID(), tenantId, connectionId, "grafana", new Date()]);
 
     await expect(store.getConnection(tenantId, connectionId)).rejects.toThrow();
@@ -73,7 +73,7 @@ describe("connection persistence", () => {
       .toEqual(profile.definition.connections);
 
     const grants = await pool.query(`SELECT grant_row.connection_id, grant_row.sidecar, grant_row.ordinal
-      FROM agentbay_agent_profile_version_connections AS grant_row
+      FROM dispatch_agent_profile_version_connections AS grant_row
       WHERE grant_row.profile_version_id = $1 ORDER BY grant_row.ordinal`, [profile.id]);
     expect(grants.rows).toEqual([
       { connection_id: grafana.id, ordinal: 0, sidecar: "grafana-tools" },
@@ -90,14 +90,14 @@ describe("connection persistence", () => {
     await expect(store.publishProfileVersion(command)).rejects.toBeInstanceOf(ConnectionNotFoundError);
     expect(await store.getProfileVersion(tenantId, command.profileId, command.version)).toBeUndefined();
     expect((await pool.query(
-      "SELECT count(*)::int AS count FROM agentbay_agent_profile_version_connections WHERE profile_version_id = $1",
+      "SELECT count(*)::int AS count FROM dispatch_agent_profile_version_connections WHERE profile_version_id = $1",
       [command.id],
     )).rows[0]).toEqual({ count: 0 });
   });
 
   it("persists no secret-bearing connection columns", async () => {
     const columns = await pool.query<{ column_name: string }>(`SELECT column_name FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = 'agentbay_connections' ORDER BY ordinal_position`);
+      WHERE table_schema = 'public' AND table_name = 'dispatch_connections' ORDER BY ordinal_position`);
     expect(columns.rows.map((row) => row.column_name)).toEqual([
       "connection_id", "created_at", "id", "tenant_id", "type",
     ]);
@@ -134,15 +134,15 @@ function profileCommand(tenantId: string, profileId: string, connections: { id: 
 async function startPostgres(): Promise<StartedTestContainer> {
   return new GenericContainer("postgres:16-alpine")
     .withEnvironment({
-      POSTGRES_DB: "agentbay",
-      POSTGRES_PASSWORD: "agentbay-password",
-      POSTGRES_USER: "agentbay",
+      POSTGRES_DB: "dispatch",
+      POSTGRES_PASSWORD: "dispatch-password",
+      POSTGRES_USER: "dispatch",
     })
     .withExposedPorts(5432)
     .withHealthCheck({
       interval: 1_000,
       retries: 30,
-      test: ["CMD-SHELL", "pg_isready -U agentbay -d agentbay"],
+      test: ["CMD-SHELL", "pg_isready -U dispatch -d dispatch"],
       timeout: 5_000,
     })
     .withWaitStrategy(Wait.forHealthCheck())
@@ -150,5 +150,5 @@ async function startPostgres(): Promise<StartedTestContainer> {
 }
 
 function postgresConnectionString(container: StartedTestContainer): string {
-  return `postgresql://agentbay:agentbay-password@${container.getHost()}:${container.getMappedPort(5432)}/agentbay`;
+  return `postgresql://dispatch:dispatch-password@${container.getHost()}:${container.getMappedPort(5432)}/dispatch`;
 }

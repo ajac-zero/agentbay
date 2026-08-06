@@ -2,10 +2,10 @@
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "agentbay.postgres.fullname" . }}
+  name: {{ include "dispatch.postgres.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgres
 type: Opaque
 stringData:
@@ -14,15 +14,15 @@ stringData:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "agentbay.postgres.fullname" . }}
+  name: {{ include "dispatch.postgres.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgres
 spec:
   type: ClusterIP
   selector:
-    {{- include "agentbay.postgres.selectorLabels" . | nindent 4 }}
+    {{- include "dispatch.postgres.selectorLabels" . | nindent 4 }}
   ports:
     - name: postgres
       port: 5432
@@ -33,10 +33,10 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "agentbay.postgres.fullname" . }}
+  name: {{ include "dispatch.postgres.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgres
 spec:
   accessModes:
@@ -52,10 +52,10 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "agentbay.postgres.fullname" . }}
+  name: {{ include "dispatch.postgres.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgres
 spec:
   replicas: 1
@@ -63,11 +63,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "agentbay.postgres.selectorLabels" . | nindent 6 }}
+      {{- include "dispatch.postgres.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "agentbay.postgres.selectorLabels" . | nindent 8 }}
+        {{- include "dispatch.postgres.selectorLabels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -85,7 +85,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "agentbay.postgres.fullname" . }}
+                  name: {{ include "dispatch.postgres.fullname" . }}
                   key: POSTGRES_PASSWORD
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
@@ -114,7 +114,7 @@ spec:
         - name: data
           {{- if .Values.database.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "agentbay.postgres.fullname" . }}
+            claimName: {{ include "dispatch.postgres.fullname" . }}
           {{- else }}
           emptyDir: {}
           {{- end }}

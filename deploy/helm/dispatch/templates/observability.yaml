@@ -2,17 +2,17 @@
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: {{ include "agentbay.fullname" . }}
+  name: {{ include "dispatch.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     {{- with .Values.observability.serviceMonitor.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
   selector:
     matchLabels:
-      {{- include "agentbay.selectorLabels" . | nindent 6 }}
+      {{- include "dispatch.selectorLabels" . | nindent 6 }}
   namespaceSelector:
     matchNames: [{{ .Release.Namespace | quote }}]
   endpoints:
@@ -26,40 +26,40 @@ spec:
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
-  name: {{ include "agentbay.fullname" . }}
+  name: {{ include "dispatch.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     {{- with .Values.observability.prometheusRule.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
   groups:
-    - name: agentbay.factory
+    - name: dispatch.factory
       rules:
-        - alert: AgentbayOutboxStuck
-          expr: max by (tenant, topic) (agentbay_outbox_oldest_pending_age_seconds{topic=~{{ .Values.observability.prometheusRule.outboxTopicsRegex | quote }}}) > {{ .Values.observability.prometheusRule.outboxMaxAgeSeconds }}
+        - alert: DispatchOutboxStuck
+          expr: max by (tenant, topic) (dispatch_outbox_oldest_pending_age_seconds{topic=~{{ .Values.observability.prometheusRule.outboxTopicsRegex | quote }}}) > {{ .Values.observability.prometheusRule.outboxMaxAgeSeconds }}
           for: {{ .Values.observability.prometheusRule.for | quote }}
           labels: { severity: critical }
           annotations:
             summary: Dispatch outbox publication is stuck
             description: "The oldest pending message for topic {{ "{{ $labels.topic }}" }} is older than the configured threshold."
-        - alert: AgentbayExecutionOverdue
-          expr: sum by (tenant) (agentbay_executions_overdue) > 0
+        - alert: DispatchExecutionOverdue
+          expr: sum by (tenant) (dispatch_executions_overdue) > 0
           for: {{ .Values.observability.prometheusRule.for | quote }}
           labels: { severity: critical }
           annotations:
             summary: Dispatch execution exceeded its persisted timeout
             description: "At least one active execution is overdue for tenant {{ "{{ $labels.tenant }}" }}."
-        - alert: AgentbayScheduleStopped
-          expr: max by (tenant, trigger_id) (agentbay_schedule_missed_intervals) >= {{ .Values.observability.prometheusRule.scheduleMissedIntervals }}
+        - alert: DispatchScheduleStopped
+          expr: max by (tenant, trigger_id) (dispatch_schedule_missed_intervals) >= {{ .Values.observability.prometheusRule.scheduleMissedIntervals }}
           for: {{ .Values.observability.prometheusRule.for | quote }}
           labels: { severity: critical }
           annotations:
             summary: Dispatch schedule stopped firing
             description: "Schedule {{ "{{ $labels.trigger_id }}" }} is past its expected next fire time."
-        - alert: AgentbayObservabilityCollectorDown
-          expr: (max(agentbay_observability_collector_up) == 0) or absent(agentbay_observability_collector_up)
+        - alert: DispatchObservabilityCollectorDown
+          expr: (max(dispatch_observability_collector_up) == 0) or absent(dispatch_observability_collector_up)
           for: 5m
           labels: { severity: warning }
           annotations:
@@ -71,24 +71,24 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "agentbay.fullname" . }}-dashboard
+  name: {{ include "dispatch.fullname" . }}-dashboard
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     {{- toYaml .Values.observability.dashboard.labels | nindent 4 }}
 data:
-  agentbay-software-factory.json: |-
-{{ .Files.Get "dashboards/agentbay-software-factory.json" | indent 4 }}
+  dispatch-software-factory.json: |-
+{{ .Files.Get "dashboards/dispatch-software-factory.json" | indent 4 }}
 {{- end }}
 {{- if .Values.observability.collector.enabled }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "agentbay.fullname" . }}-metrics-collector
+  name: {{ include "dispatch.fullname" . }}-metrics-collector
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: metrics-collector
 data:
   collector.yaml: |-
@@ -96,11 +96,11 @@ data:
       prometheus:
         config:
           scrape_configs:
-            - job_name: agentbay
+            - job_name: dispatch
               metrics_path: /metrics
               scrape_interval: {{ .Values.observability.collector.scrapeInterval }}
               static_configs:
-                - targets: [{{ printf "%s.%s.svc.cluster.local:%v" (include "agentbay.fullname" .) .Release.Namespace .Values.service.metricsPort | quote }}]
+                - targets: [{{ printf "%s.%s.svc.cluster.local:%v" (include "dispatch.fullname" .) .Release.Namespace .Values.service.metricsPort | quote }}]
     processors:
       batch: {}
       memory_limiter:
@@ -124,21 +124,21 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "agentbay.fullname" . }}-metrics-collector
+  name: {{ include "dispatch.fullname" . }}-metrics-collector
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: metrics-collector
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: {{ include "agentbay.name" . }}-metrics-collector
+      app.kubernetes.io/name: {{ include "dispatch.name" . }}-metrics-collector
       app.kubernetes.io/instance: {{ .Release.Name }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "agentbay.name" . }}-metrics-collector
+        app.kubernetes.io/name: {{ include "dispatch.name" . }}-metrics-collector
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: metrics-collector
     spec:
@@ -165,5 +165,5 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: {{ include "agentbay.fullname" . }}-metrics-collector
+            name: {{ include "dispatch.fullname" . }}-metrics-collector
 {{- end }}

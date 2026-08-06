@@ -5,14 +5,14 @@ import { join, resolve } from "node:path";
 import { K3sContainer, type StartedK3sContainer } from "@testcontainers/k3s";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const CHART_PATH = resolve(__dirname, "..", "..", "deploy", "helm", "agentbay");
-const K3S_IMAGE = process.env.AGENTBAY_E2E_K3S_IMAGE ?? "rancher/k3s:v1.31.2-k3s1";
+const CHART_PATH = resolve(__dirname, "..", "..", "deploy", "helm", "dispatch");
+const K3S_IMAGE = process.env.DISPATCH_E2E_K3S_IMAGE ?? "rancher/k3s:v1.31.2-k3s1";
 const AGENT_SANDBOX_VERSION = "v0.5.2";
 const AGENT_SANDBOX_MANIFEST_URLS = [
   `https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/sandbox.yaml`,
   `https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/extensions.yaml`,
 ];
-const NAMESPACE = "agentbay-helm-e2e";
+const NAMESPACE = "dispatch-helm-e2e";
 const AGENT_SANDBOX_CRDS = [
   "sandboxes.agents.x-k8s.io",
   "sandboxclaims.extensions.agents.x-k8s.io",
@@ -20,7 +20,7 @@ const AGENT_SANDBOX_CRDS = [
   "sandboxwarmpools.extensions.agents.x-k8s.io",
 ];
 
-describe("agentbay Helm chart", () => {
+describe("dispatch Helm chart", () => {
   describe("static validation", () => {
     it("passes helm lint", () => {
       const result = helm(["lint", CHART_PATH]);
@@ -36,23 +36,23 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/kind: Role\b/);
       expect(result.stdout).toMatch(/kind: RoleBinding/);
       // In-cluster Postgres is on by default
-      expect(result.stdout).toMatch(/name: demo-agentbay-postgres/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_HOST/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_PASSWORD/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_EXECUTION_MAINTENANCE_ENABLED\n\s+value: "true"/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_EXECUTION_MAINTENANCE_INTERVAL_MS\n\s+value: "5000"/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_EXECUTION_MAINTENANCE_BATCH_SIZE\n\s+value: "100"/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_EXECUTION_MAX_ATTEMPTS\n\s+value: "3"/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_EXECUTION_RETRY_DELAY_MS\n\s+value: "30000"/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_DISPATCHER_ENABLED\n\s+value: "true"/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_DISPATCHER_IDLE_POLL_MS\n\s+value: "500"/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_DISPATCHER_LEASE_DURATION_MS\n\s+value: "60000"/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS\n\s+value: "20000"/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED\n\s+value: "false"/);
+      expect(result.stdout).toMatch(/name: demo-dispatch-postgres/);
+      expect(result.stdout).toMatch(/name: DISPATCH_DATABASE_HOST/);
+      expect(result.stdout).toMatch(/name: DISPATCH_DATABASE_PASSWORD/);
+      expect(result.stdout).toMatch(/name: DISPATCH_EXECUTION_MAINTENANCE_ENABLED\n\s+value: "true"/);
+      expect(result.stdout).toMatch(/name: DISPATCH_EXECUTION_MAINTENANCE_INTERVAL_MS\n\s+value: "5000"/);
+      expect(result.stdout).toMatch(/name: DISPATCH_EXECUTION_MAINTENANCE_BATCH_SIZE\n\s+value: "100"/);
+      expect(result.stdout).toMatch(/name: DISPATCH_EXECUTION_MAX_ATTEMPTS\n\s+value: "3"/);
+      expect(result.stdout).toMatch(/name: DISPATCH_EXECUTION_RETRY_DELAY_MS\n\s+value: "30000"/);
+      expect(result.stdout).toMatch(/name: DISPATCH_DISPATCHER_ENABLED\n\s+value: "true"/);
+      expect(result.stdout).toMatch(/name: DISPATCH_DISPATCHER_IDLE_POLL_MS\n\s+value: "500"/);
+      expect(result.stdout).toMatch(/name: DISPATCH_DISPATCHER_LEASE_DURATION_MS\n\s+value: "60000"/);
+      expect(result.stdout).toMatch(/name: DISPATCH_DISPATCHER_RENEW_INTERVAL_MS\n\s+value: "20000"/);
+      expect(result.stdout).toMatch(/name: DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED\n\s+value: "false"/);
       expect(result.stdout).toMatch(
-        /name: AGENTBAY_DISPATCHER_WORKER_ID\n\s+valueFrom:\n\s+fieldRef:\n\s+fieldPath: metadata\.name/,
+        /name: DISPATCH_DISPATCHER_WORKER_ID\n\s+valueFrom:\n\s+fieldRef:\n\s+fieldPath: metadata\.name/,
       );
-      expect(result.stdout).toMatch(/name: demo-agentbay-migrate-1/);
+      expect(result.stdout).toMatch(/name: demo-dispatch-migrate-1/);
       expect(result.stdout).not.toMatch(/helm\.sh\/hook: "post-install,pre-upgrade"/);
       expect(result.stdout).toMatch(/command: \["node", "dist\/migrate\.js"\]/);
       // No SandboxTemplate / WarmPool / Ingress unless opted in
@@ -62,8 +62,8 @@ describe("agentbay Helm chart", () => {
       // Reconciler CronJob is on by default
       expect(result.stdout).toMatch(/kind: CronJob/);
       expect(result.stdout).toMatch(/command: \["node", "dist\/reconcile\.js"\]/);
-      expect(result.stdout).toMatch(/name: demo-agentbay-reconciler/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_RECONCILER_GRACE_MINUTES/);
+      expect(result.stdout).toMatch(/name: demo-dispatch-reconciler/);
+      expect(result.stdout).toMatch(/name: DISPATCH_RECONCILER_GRACE_MINUTES/);
     });
 
     it("renders durable GitHub issue acknowledgment independently of revision resolution", () => {
@@ -73,8 +73,8 @@ describe("agentbay Helm chart", () => {
         "--set", "orchestrator.revisionResolver.credentialsSecret=github-app",
       ]);
       expect(result.status, formatStderr(result)).toBe(0);
-      expect(result.stdout).toMatch(/name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED\n\s+value: "true"/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_GITHUB_APP_ID_FILE/);
+      expect(result.stdout).toMatch(/name: DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED\n\s+value: "true"/);
+      expect(result.stdout).toMatch(/name: DISPATCH_GITHUB_APP_ID_FILE/);
       expect(result.stdout).toMatch(/secretName: "github-app"/);
     });
 
@@ -94,11 +94,11 @@ describe("agentbay Helm chart", () => {
       expect(result.stdout).toMatch(/kind: ConfigMap/);
       expect(result.stdout).toMatch(/grafana_dashboard: "1"/);
       expect(result.stdout).toMatch(/prometheus\.io\/path: \/metrics/);
-      expect(result.stdout).toMatch(/AgentbayOutboxStuck/);
-      expect(result.stdout).toMatch(/AgentbayExecutionOverdue/);
-      expect(result.stdout).toMatch(/AgentbayScheduleStopped/);
-      expect(result.stdout).toMatch(/absent\(agentbay_observability_collector_up\)/);
-      expect(result.stdout).toMatch(/agentbay-software-factory\.json/);
+      expect(result.stdout).toMatch(/DispatchOutboxStuck/);
+      expect(result.stdout).toMatch(/DispatchExecutionOverdue/);
+      expect(result.stdout).toMatch(/DispatchScheduleStopped/);
+      expect(result.stdout).toMatch(/absent\(dispatch_observability_collector_up\)/);
+      expect(result.stdout).toMatch(/dispatch-software-factory\.json/);
       expect(result.stdout).toMatch(/app\.kubernetes\.io\/component: metrics-collector/);
       expect(result.stdout).toMatch(/automountServiceAccountToken: false/);
       expect(result.stdout).toMatch(/endpoint: "http:\/\/mimir:9009\/api\/v1\/push"/);
@@ -119,12 +119,12 @@ describe("agentbay Helm chart", () => {
       // The auto-rendered NetworkPolicy must reference the orchestrator's labels;
       // if these ever drift, sandbox pods will not accept orchestrator traffic.
       expect(result.stdout).toMatch(/kind: SandboxTemplate/);
-      expect(result.stdout).toMatch(/app\.kubernetes\.io\/name: agentbay/);
+      expect(result.stdout).toMatch(/app\.kubernetes\.io\/name: dispatch/);
       expect(result.stdout).toMatch(/app\.kubernetes\.io\/instance: demo/);
     });
 
     it("renders SandboxTemplate sidecars and extra volumes", async () => {
-      const workDir = await mkdtemp(join(tmpdir(), "agentbay-helm-values-"));
+      const workDir = await mkdtemp(join(tmpdir(), "dispatch-helm-values-"));
       try {
         const valuesPath = join(workDir, "values.yaml");
         await writeFile(
@@ -153,19 +153,19 @@ describe("agentbay Helm chart", () => {
         - name: opencode-cache
           mountPath: /tmp/opencode-cache
       sidecars:
-        - name: agentbay-authz
-          image: example/agentbay-authz:latest
+        - name: dispatch-authz
+          image: example/dispatch-authz:latest
           ports:
             - name: authz
               containerPort: 8080
           volumeMounts:
-            - name: agentbay-authz-token
-              mountPath: /var/run/secrets/agentbay-authz
+            - name: dispatch-authz-token
+              mountPath: /var/run/secrets/dispatch-authz
               readOnly: true
       extraVolumes:
         - name: opencode-cache
           emptyDir: {}
-        - name: agentbay-authz-token
+        - name: dispatch-authz-token
           emptyDir:
             medium: Memory
 `,
@@ -174,11 +174,11 @@ describe("agentbay Helm chart", () => {
         expect(result.status, formatStderr(result)).toBe(0);
         expect(result.stdout).toMatch(/name: opencode/);
         expect(result.stdout).toMatch(/mountPath: \/tmp\/opencode-cache/);
-        expect(result.stdout).toMatch(/name: agentbay-authz/);
-        expect(result.stdout).toMatch(/image: example\/agentbay-authz:latest/);
+        expect(result.stdout).toMatch(/name: dispatch-authz/);
+        expect(result.stdout).toMatch(/image: example\/dispatch-authz:latest/);
         expect(result.stdout).toMatch(/containerPort: 8080/);
-        expect(result.stdout).toMatch(/mountPath: \/var\/run\/secrets\/agentbay-authz/);
-        expect(result.stdout).toMatch(/name: agentbay-authz-token/);
+        expect(result.stdout).toMatch(/mountPath: \/var\/run\/secrets\/dispatch-authz/);
+        expect(result.stdout).toMatch(/name: dispatch-authz-token/);
         expect(result.stdout).toMatch(/medium: Memory/);
       } finally {
         await rm(workDir, { force: true, recursive: true });
@@ -186,7 +186,7 @@ describe("agentbay Helm chart", () => {
     });
 
     it("renders aiGatewayAuthz resources and sandbox proxy wiring", async () => {
-      const workDir = await mkdtemp(join(tmpdir(), "agentbay-helm-values-"));
+      const workDir = await mkdtemp(join(tmpdir(), "dispatch-helm-values-"));
       try {
         const valuesPath = join(workDir, "values.yaml");
         await writeFile(
@@ -229,17 +229,17 @@ sandboxTemplates:
         );
         const result = helm(["template", "demo", CHART_PATH, "--namespace", NAMESPACE, "-f", valuesPath]);
         expect(result.status, formatStderr(result)).toBe(0);
-        expect(result.stdout).toMatch(/name: demo-agentbay-authz/);
+        expect(result.stdout).toMatch(/name: demo-dispatch-authz/);
         expect(result.stdout).toMatch(/kind: ClusterRole/);
         expect(result.stdout).toMatch(/resources: \["tokenreviews"\]/);
         expect(result.stdout).toMatch(/name: sandbox-runtime/);
         expect(result.stdout).toMatch(/serviceAccountName: sandbox-runtime/);
-        expect(result.stdout).toMatch(/name: agentbay-gateway-proxy/);
+        expect(result.stdout).toMatch(/name: dispatch-gateway-proxy/);
         expect(result.stdout).toMatch(/name: UPSTREAM_BASE_URL/);
         expect(result.stdout).toMatch(/http:\/\/envoy-ai-gateway\.ai-gateway\.svc\.cluster\.local:8080/);
-        expect(result.stdout).toMatch(/name: agentbay-ai-gateway-token/);
+        expect(result.stdout).toMatch(/name: dispatch-ai-gateway-token/);
         expect(result.stdout).toMatch(/audience: "ai-gateway"/);
-        expect(result.stdout).toMatch(/agentbay-gateway/);
+        expect(result.stdout).toMatch(/dispatch-gateway/);
         expect(result.stdout).toMatch(/app\.kubernetes\.io\/name: envoy-ai-gateway/);
         expect(result.stdout).toMatch(/name: SANDBOX_CLAIM_API_VERSION/);
         expect(result.stdout).toMatch(/value: "v1beta1"/);
@@ -263,7 +263,7 @@ sandboxTemplates:
         "sandboxWarmPools.enabled=true",
       ]);
       expect(result.status, formatStderr(result)).toBe(0);
-      expect(result.stdout).toMatch(/name: AGENTBAY_SANDBOX_CLAIM_API_VERSION\s+value: "v1beta1"/);
+      expect(result.stdout).toMatch(/name: DISPATCH_SANDBOX_CLAIM_API_VERSION\s+value: "v1beta1"/);
       expect(result.stdout).toMatch(/apiVersion: extensions\.agents\.x-k8s\.io\/v1beta1/);
       expect(result.stdout).toMatch(/kind: SandboxTemplate/);
       expect(result.stdout).toMatch(/kind: SandboxWarmPool/);
@@ -283,11 +283,11 @@ sandboxTemplates:
         "database.external.existingSecret=my-postgres",
       ]);
       expect(result.status, formatStderr(result)).toBe(0);
-      expect(result.stdout).toMatch(/name: AGENTBAY_DATABASE_URL/);
+      expect(result.stdout).toMatch(/name: DISPATCH_DATABASE_URL/);
       expect(result.stdout).toMatch(/secretKeyRef:\s+name: my-postgres/);
       expect(result.stdout).toMatch(/helm\.sh\/hook: "pre-install,pre-upgrade"/);
-      expect(result.stdout).not.toMatch(/name: demo-agentbay-migrate[\s\S]*envFrom:\s+- secretRef:\s+name: demo-agentbay/);
-      expect(result.stdout).not.toMatch(/name: demo-agentbay-postgres/);
+      expect(result.stdout).not.toMatch(/name: demo-dispatch-migrate[\s\S]*envFrom:\s+- secretRef:\s+name: demo-dispatch/);
+      expect(result.stdout).not.toMatch(/name: demo-dispatch-postgres/);
     });
 
     it("uses a generic existing Secret for migration database config when database mode is unset", () => {
@@ -300,12 +300,12 @@ sandboxTemplates:
         "--set",
         "database.enabled=false",
         "--set",
-        "secrets.existingSecret=agentbay-secrets",
+        "secrets.existingSecret=dispatch-secrets",
       ]);
       expect(result.status, formatStderr(result)).toBe(0);
-      expect(result.stdout).toMatch(/name: demo-agentbay-migrate/);
+      expect(result.stdout).toMatch(/name: demo-dispatch-migrate/);
       expect(result.stdout).toMatch(/helm\.sh\/hook: "pre-install,pre-upgrade"/);
-      expect(result.stdout).toMatch(/name: demo-agentbay-migrate[\s\S]*envFrom:\s+- secretRef:\s+name: agentbay-secrets\s+optional: false/);
+      expect(result.stdout).toMatch(/name: demo-dispatch-migrate[\s\S]*envFrom:\s+- secretRef:\s+name: dispatch-secrets\s+optional: false/);
     });
 
     it("rejects chart-managed Secret database URLs for migration hooks", () => {
@@ -318,16 +318,16 @@ sandboxTemplates:
         "--set",
         "database.enabled=false",
         "--set-string",
-        "secrets.data.AGENTBAY_DATABASE_URL=postgres://agentbay:agentbay@example:5432/agentbay",
+        "secrets.data.DISPATCH_DATABASE_URL=postgres://dispatch:dispatch@example:5432/dispatch",
       ]);
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toMatch(/migrations\.enabled=true cannot use secrets\.data\.AGENTBAY_DATABASE_URL/);
+      expect(result.stderr).toMatch(/migrations\.enabled=true cannot use secrets\.data\.DISPATCH_DATABASE_URL/);
     });
 
     it("renders the helm test connection Pod", () => {
       const result = helm(["template", "demo", CHART_PATH, "--namespace", NAMESPACE]);
       expect(result.status, formatStderr(result)).toBe(0);
-      expect(result.stdout).toMatch(/name: demo-agentbay-test-connection/);
+      expect(result.stdout).toMatch(/name: demo-dispatch-test-connection/);
       expect(result.stdout).toMatch(/helm\.sh\/hook: test/);
     });
 
@@ -343,7 +343,7 @@ sandboxTemplates:
       ]);
       expect(result.status, formatStderr(result)).toBe(0);
       expect(result.stdout).not.toMatch(/kind: CronJob/);
-      expect(result.stdout).not.toMatch(/demo-agentbay-reconciler/);
+      expect(result.stdout).not.toMatch(/demo-dispatch-reconciler/);
     });
 
     it("reconciler CronJob uses claims.namespace, claims.apiVersion, and graceMinutes", () => {
@@ -364,8 +364,8 @@ sandboxTemplates:
       // CronJob and its RBAC must land in the claims namespace
       expect(result.stdout).toMatch(/namespace: sandbox-claims/);
       // API version and grace period must be threaded into the container env
-      expect(result.stdout).toMatch(/name: AGENTBAY_SANDBOX_CLAIM_API_VERSION\s+value: "v1beta1"/);
-      expect(result.stdout).toMatch(/name: AGENTBAY_RECONCILER_GRACE_MINUTES\s+value: "60"/);
+      expect(result.stdout).toMatch(/name: DISPATCH_SANDBOX_CLAIM_API_VERSION\s+value: "v1beta1"/);
+      expect(result.stdout).toMatch(/name: DISPATCH_RECONCILER_GRACE_MINUTES\s+value: "60"/);
     });
   });
 
@@ -376,7 +376,7 @@ sandboxTemplates:
 
     beforeAll(async () => {
       k3s = await new K3sContainer(K3S_IMAGE).start();
-      workDir = await mkdtemp(join(tmpdir(), "agentbay-helm-e2e-"));
+      workDir = await mkdtemp(join(tmpdir(), "dispatch-helm-e2e-"));
       kubeConfigPath = join(workDir, "kubeconfig.yaml");
       await writeFile(kubeConfigPath, k3s.getKubeConfig());
 
@@ -411,7 +411,7 @@ sandboxTemplates:
     it("server-side validates the default install", () => {
       const result = helm([
         "install",
-        "agentbay-default",
+        "dispatch-default",
         CHART_PATH,
         "--namespace",
         NAMESPACE,
@@ -425,7 +425,7 @@ sandboxTemplates:
     it("server-side validates the kitchen-sink install (SandboxTemplate + WarmPool + Ingress)", () => {
       const result = helm([
         "install",
-        "agentbay-full",
+        "dispatch-full",
         CHART_PATH,
         "--namespace",
         NAMESPACE,
@@ -448,7 +448,7 @@ sandboxTemplates:
     it("server-side validates an external Postgres configuration", () => {
       const result = helm([
         "install",
-        "agentbay-extdb",
+        "dispatch-extdb",
         CHART_PATH,
         "--namespace",
         NAMESPACE,
@@ -458,7 +458,7 @@ sandboxTemplates:
         "--set",
         "database.enabled=false",
         "--set",
-        "database.external.url=postgres://agentbay:agentbay@example:5432/agentbay",
+        "database.external.url=postgres://dispatch:dispatch@example:5432/dispatch",
       ]);
       expect(result.status, formatStderr(result)).toBe(0);
     });

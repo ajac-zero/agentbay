@@ -2,25 +2,25 @@ Dispatch {{ .Chart.AppVersion }} is installing as release {{ .Release.Name }}
 in namespace {{ .Release.Namespace }}.
 
 Execution API service:
-  http://{{ include "agentbay.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+  http://{{ include "dispatch.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
 
 Verify the API and inspect its OpenAPI document:
-  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "agentbay.fullname" . }}
-  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "agentbay.fullname" . }} 8080:{{ .Values.service.port }}
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "dispatch.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "dispatch.fullname" . }} 8080:{{ .Values.service.port }}
   curl http://127.0.0.1:8080/healthz
   open http://127.0.0.1:8080/docs
 
 API authentication:
 {{- if and .Values.secrets.create (not .Values.secrets.existingSecret) }}
-  AGENTBAY_ADMIN_TOKEN was written to Secret {{ include "agentbay.fullname" . }}.
+  DISPATCH_ADMIN_TOKEN was written to Secret {{ include "dispatch.fullname" . }}.
   Retrieve it with:
-    kubectl -n {{ .Release.Namespace }} get secret {{ include "agentbay.fullname" . }} -o jsonpath='{.data.AGENTBAY_ADMIN_TOKEN}' | base64 -d
+    kubectl -n {{ .Release.Namespace }} get secret {{ include "dispatch.fullname" . }} -o jsonpath='{.data.DISPATCH_ADMIN_TOKEN}' | base64 -d
 {{- else }}
-  Ensure Secret {{ include "agentbay.secretName" . }} provides AGENTBAY_ADMIN_TOKEN.
+  Ensure Secret {{ include "dispatch.secretName" . }} provides DISPATCH_ADMIN_TOKEN.
 {{- end }}
 
 Postgres:
-{{- $databaseMode := include "agentbay.database.mode" . }}
+{{- $databaseMode := include "dispatch.database.mode" . }}
 {{- if eq $databaseMode "in-cluster" }}
   Chart-managed Postgres is enabled. Use persistent storage for durable installs.
 {{- else if eq $databaseMode "external-url" }}
@@ -31,16 +31,16 @@ Postgres:
   Provide database connectivity through the orchestrator Secret or extra environment configuration.
 {{- end }}
 
-SandboxClaims will be created in: {{ include "agentbay.claimsNamespace" . }}
+SandboxClaims will be created in: {{ include "dispatch.claimsNamespace" . }}
 
 SandboxTemplates:
 {{- if .Values.sandboxTemplates.enabled }}
 {{- range .Values.sandboxTemplates.templates }}
-  - {{ .name }} (namespace: {{ default (include "agentbay.claimsNamespace" $) .namespace }})
+  - {{ .name }} (namespace: {{ default (include "dispatch.claimsNamespace" $) .namespace }})
 {{- end }}
 {{- else }}
   Not managed by this release. Ensure execution profiles reference templates
-  available in {{ include "agentbay.claimsNamespace" . }}.
+  available in {{ include "dispatch.claimsNamespace" . }}.
 {{- end }}
 
 SandboxWarmPools:

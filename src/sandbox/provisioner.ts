@@ -16,8 +16,8 @@ import type {
 
 const GROUP = "extensions.agents.x-k8s.io";
 const PLURAL = "sandboxclaims";
-const CONNECTIONS_DIGEST_ANNOTATION = "agentbay.dev/connections-digest";
-const FENCING_TOKEN_ANNOTATION = "agentbay.dev/fencing-token";
+const CONNECTIONS_DIGEST_ANNOTATION = "dispatch.dev/connections-digest";
+const FENCING_TOKEN_ANNOTATION = "dispatch.dev/fencing-token";
 const TERMINAL_CLAIM_REASONS = new Set([
   "EnvVarsInjectionRejected",
   "InvalidMetadata",
@@ -274,32 +274,32 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
     const env: SandboxEnvVar[] = [
       { containerName: "opencode", name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
       { containerName: "opencode", name: "OPENCODE_SERVER_PASSWORD", value: password },
-      { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_TYPE", value: input.workspace.type },
+      { containerName: "workspace-materializer", name: "DISPATCH_WORKSPACE_TYPE", value: input.workspace.type },
     ];
     const configContent = buildOpencodeConfigContent(input.opencodeConfig);
     if (configContent) env.push({ containerName: "opencode", name: "OPENCODE_CONFIG_CONTENT", value: configContent });
     if (input.workspace.type === "git") {
       env.push(
-        { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_GIT_URL", value: input.workspace.repository.url },
-        { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_GIT_COMMIT", value: input.workspace.revision.commit },
+        { containerName: "workspace-materializer", name: "DISPATCH_WORKSPACE_GIT_URL", value: input.workspace.repository.url },
+        { containerName: "workspace-materializer", name: "DISPATCH_WORKSPACE_GIT_COMMIT", value: input.workspace.revision.commit },
       );
     }
     for (const [sidecar, refs] of groupedConnections(input.connections)) {
       env.push({
         containerName: sidecar,
-        name: "AGENTBAY_CONNECTIONS",
+        name: "DISPATCH_CONNECTIONS",
         value: canonicalJson({ schemaVersion: 1, tenantId: input.tenantId, refs }),
       });
     }
     if (input.controlPlaneUrl && input.connections.some(({ sidecar }) => sidecar === "github-token-broker")) {
       env.push(
-        { containerName: "github-token-broker", name: "AGENTBAY_EFFECT_ENDPOINT", value: input.controlPlaneUrl },
-        { containerName: "github-token-broker", name: "AGENTBAY_EXECUTION_ID", value: input.executionId },
-        { containerName: "github-token-broker", name: "AGENTBAY_EFFECT_TOKEN", value: input.fencingToken },
+        { containerName: "github-token-broker", name: "DISPATCH_EFFECT_ENDPOINT", value: input.controlPlaneUrl },
+        { containerName: "github-token-broker", name: "DISPATCH_EXECUTION_ID", value: input.executionId },
+        { containerName: "github-token-broker", name: "DISPATCH_EFFECT_TOKEN", value: input.fencingToken },
       );
       if (input.githubMergeCapability) env.push({
         containerName: "github-token-broker",
-        name: "AGENTBAY_GITHUB_MERGE_CAPABILITY",
+        name: "DISPATCH_GITHUB_MERGE_CAPABILITY",
         value: canonicalJson({ schemaVersion: 1, ...input.githubMergeCapability }),
       });
     }
@@ -313,10 +313,10 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
         name: claimName,
         namespace: this.config.kubeNamespace,
         labels: {
-          "app.kubernetes.io/managed-by": "agentbay",
-          "agentbay.dev/execution": labelValue(input.executionId),
-          "agentbay.dev/attempt": String(input.attempt),
-          "agentbay.dev/profile": labelValue(input.profileVersion.profileId),
+          "app.kubernetes.io/managed-by": "dispatch",
+          "dispatch.dev/execution": labelValue(input.executionId),
+          "dispatch.dev/attempt": String(input.attempt),
+          "dispatch.dev/profile": labelValue(input.profileVersion.profileId),
         },
         annotations: ownership,
       },
@@ -336,11 +336,11 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
         additionalPodMetadata: {
           annotations: {
             ...connectionAnnotations,
-            "agentbay.dev/managed-by": "agentbay",
-            "agentbay.dev/execution": labelValue(input.executionId),
-            "agentbay.dev/attempt": String(input.attempt),
-            "agentbay.dev/profile": labelValue(input.profileVersion.profileId),
-            "agentbay.dev/claim": claimName,
+            "dispatch.dev/managed-by": "dispatch",
+            "dispatch.dev/execution": labelValue(input.executionId),
+            "dispatch.dev/attempt": String(input.attempt),
+            "dispatch.dev/profile": labelValue(input.profileVersion.profileId),
+            "dispatch.dev/claim": claimName,
           },
         },
       },
@@ -524,13 +524,13 @@ export class SandboxClaimExecutionAttemptProvisioner implements ExecutionAttempt
 function ownershipAnnotations(input: ExecutionAttemptProvisioningInput): Record<string, string> {
   return {
     [FENCING_TOKEN_ANNOTATION]: input.fencingToken,
-    "agentbay.dev/tenant-id": input.tenantId,
-    "agentbay.dev/execution-id": input.executionId,
-    "agentbay.dev/attempt": String(input.attempt),
-    "agentbay.dev/profile-version-id": input.profileVersion.id,
-    "agentbay.dev/profile-id": input.profileVersion.profileId,
-    "agentbay.dev/profile-version": String(input.profileVersion.version),
-    "agentbay.dev/workspace-digest": createHash("sha256").update(canonicalJson(input.workspace)).digest("hex"),
+    "dispatch.dev/tenant-id": input.tenantId,
+    "dispatch.dev/execution-id": input.executionId,
+    "dispatch.dev/attempt": String(input.attempt),
+    "dispatch.dev/profile-version-id": input.profileVersion.id,
+    "dispatch.dev/profile-id": input.profileVersion.profileId,
+    "dispatch.dev/profile-version": String(input.profileVersion.version),
+    "dispatch.dev/workspace-digest": createHash("sha256").update(canonicalJson(input.workspace)).digest("hex"),
     [CONNECTIONS_DIGEST_ANNOTATION]: authorizationAnnotations(input)[CONNECTIONS_DIGEST_ANNOTATION]!,
   };
 }
@@ -596,10 +596,10 @@ function assertCancellationOwnership(claim: SandboxClaim, candidate: RequestedCa
   const labels = claim.metadata.labels ?? {};
   const annotations = claim.metadata.annotations ?? {};
   const expected = {
-    "app.kubernetes.io/managed-by": "agentbay",
-    "agentbay.dev/tenant-id": candidate.tenantId,
-    "agentbay.dev/execution-id": candidate.executionId,
-    "agentbay.dev/attempt": String(candidate.attempt),
+    "app.kubernetes.io/managed-by": "dispatch",
+    "dispatch.dev/tenant-id": candidate.tenantId,
+    "dispatch.dev/execution-id": candidate.executionId,
+    "dispatch.dev/attempt": String(candidate.attempt),
   };
   const actual: Record<string, string | undefined> = {
     ...annotations,

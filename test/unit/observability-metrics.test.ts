@@ -15,9 +15,9 @@ describe("observability metrics", () => {
       }),
     };
     const text = await databaseMetricsTextForTest(store);
-    expect(text).toContain('agentbay_executions{tenant="default",state="RUNNING"} 2');
-    expect(text).toContain('agentbay_outbox_oldest_pending_age_seconds{tenant="default",topic="execution.requested"} 42');
-    expect(text).toContain('agentbay_executions_overdue{tenant="default"} 1');
+    expect(text).toContain('dispatch_executions{tenant="default",state="RUNNING"} 2');
+    expect(text).toContain('dispatch_outbox_oldest_pending_age_seconds{tenant="default",topic="execution.requested"} 42');
+    expect(text).toContain('dispatch_executions_overdue{tenant="default"} 1');
     expect(store.collectObservabilitySnapshot).toHaveBeenCalledTimes(1);
   });
 });

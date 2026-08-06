@@ -1,11 +1,11 @@
 ---
-name: agentbay-testing
-description: Run and troubleshoot tests for the agentbay TypeScript orchestrator, including typechecks, handler-level e2e tests, and @testcontainers/k3s sandbox lifecycle tests.
+name: dispatch-testing
+description: Run and troubleshoot tests for the dispatch TypeScript orchestrator, including typechecks, handler-level e2e tests, and @testcontainers/k3s sandbox lifecycle tests.
 ---
 
-# Testing agentbay
+# Testing dispatch
 
-Use this skill when changing agentbay code, adding tests, or debugging test failures in this repository.
+Use this skill when changing dispatch code, adding tests, or debugging test failures in this repository.
 
 ## Commands
 
@@ -75,7 +75,7 @@ DEBUG=testcontainers* TESTCONTAINERS_RYUK_DISABLED=true pnpm test:e2e
 
 `test/e2e/sandbox-manager.test.ts` is the heavy Kubernetes layer. It starts k3s with `@testcontainers/k3s`, applies pinned upstream `kubernetes-sigs/agent-sandbox` manifests, waits for the real controller and CRDs, creates a real `SandboxTemplate`, provisions a real `SandboxClaim` through `SandboxManager`, runs a fake opencode server in the resulting sandbox Pod, port-forwards to it, and verifies `createSession` plus `runPrompt` streaming.
 
-`test/e2e/helm-chart.test.ts` validates the Helm chart in `deploy/helm/agentbay/`. The `static validation` describe runs `helm lint` and `helm template` over several value combinations (default, external Redis from Secret, in-memory state, SandboxTemplate with auto-templated NetworkPolicy selectors, helm-test Pod) without a cluster. The `against a live cluster` describe spins up k3s, installs the agent-sandbox CRDs and controllers, then runs `helm install --dry-run=server` for default, kitchen-sink (SandboxTemplate + SandboxWarmPool + Ingress), and external-Redis configurations to confirm the rendered manifests are accepted by a real kube-apiserver with the real CRD schemas. Requires `helm` on `PATH`.
+`test/e2e/helm-chart.test.ts` validates the Helm chart in `deploy/helm/dispatch/`. The `static validation` describe runs `helm lint` and `helm template` over several value combinations (default, external Redis from Secret, in-memory state, SandboxTemplate with auto-templated NetworkPolicy selectors, helm-test Pod) without a cluster. The `against a live cluster` describe spins up k3s, installs the agent-sandbox CRDs and controllers, then runs `helm install --dry-run=server` for default, kitchen-sink (SandboxTemplate + SandboxWarmPool + Ingress), and external-Redis configurations to confirm the rendered manifests are accepted by a real kube-apiserver with the real CRD schemas. Requires `helm` on `PATH`.
 
 ## Requirements
 
@@ -106,11 +106,11 @@ Do not add fields to local TypeScript `SandboxClaim` types just because they are
 
 Restricted additional Pod metadata:
 
-The agent-sandbox controller rejects restricted system-domain labels in `SandboxClaim.spec.additionalPodMetadata`. Use project-owned labels such as `agentbay.dev/managed-by`, not `app.kubernetes.io/managed-by`, when propagating labels into sandbox Pods.
+The agent-sandbox controller rejects restricted system-domain labels in `SandboxClaim.spec.additionalPodMetadata`. Use project-owned labels such as `dispatch.dev/managed-by`, not `app.kubernetes.io/managed-by`, when propagating labels into sandbox Pods.
 
 Fake opencode is intentional:
 
-The e2e tests use fake opencode-compatible HTTP/SSE servers. This avoids model credentials and external LLM calls while still exercising the real agentbay opencode client paths: health check, session creation, session status, SSE events, and `prompt_async`.
+The e2e tests use fake opencode-compatible HTTP/SSE servers. This avoids model credentials and external LLM calls while still exercising the real dispatch opencode client paths: health check, session creation, session status, SSE events, and `prompt_async`.
 
 ## When To Run What
 

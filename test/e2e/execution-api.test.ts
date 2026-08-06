@@ -90,7 +90,7 @@ describe("public API", () => {
     const body = {
       id: "github-app",
       type: "github.app.webhook",
-      config: { schemaVersion: 1, webhookSecretEnv: "AGENTBAY_GITHUB_WEBHOOK_SECRET_TEST" },
+      config: { schemaVersion: 1, webhookSecretEnv: "DISPATCH_GITHUB_WEBHOOK_SECRET_TEST" },
     };
 
     const created = await request(app, "POST", "/v1/triggers", body);
@@ -106,7 +106,7 @@ describe("public API", () => {
     const response = await request(app, "POST", "/v1/triggers", {
       id: "github-app",
       type: "github.app.webhook",
-      config: { schemaVersion: 1, webhookSecretEnv: "AGENTBAY_GITHUB_WEBHOOK_SECRET_TEST" },
+      config: { schemaVersion: 1, webhookSecretEnv: "DISPATCH_GITHUB_WEBHOOK_SECRET_TEST" },
     });
 
     expect(response).toMatchObject({ status: 422, body: { error: "GitHub webhook secret unavailable" } });
@@ -119,7 +119,7 @@ describe("public API", () => {
     expect((await request(app, "POST", "/v1/triggers", {
       id: "github-app",
       type: "github.app.webhook",
-      config: { schemaVersion: 1, webhookSecretEnv: "AGENTBAY_GITHUB_WEBHOOK_SECRET_TEST" },
+      config: { schemaVersion: 1, webhookSecretEnv: "DISPATCH_GITHUB_WEBHOOK_SECRET_TEST" },
     })).status).toBe(201);
 
     const response = await request(app, "POST", "/v1/triggers/github-app/events", cloudEvent("push", {}), { "Idempotency-Key": "github-delivery" });
@@ -290,7 +290,7 @@ describe("public API", () => {
     expect(store.executions.size).toBe(0);
   });
 
-  it.each(["tenantid", "agentbay"])("returns 400 for caller-supplied reserved %s extensions", async (name) => {
+  it.each(["tenantid", "dispatch"])("returns 400 for caller-supplied reserved %s extensions", async (name) => {
     const app = testApp();
     await request(app, "POST", "/v1/triggers", { id: "github", type: "cloudevents.http", config: { schemaVersion: 1 } });
     const event = { ...cloudEvent("issue.opened", {}), [name]: "caller-supplied" };

@@ -22,7 +22,7 @@ export class GitHubAppRevisionResolver {
     const apiBaseUrl = this.options.apiBaseUrl ?? "https://api.github.com";
     const headers = {
       Accept: "application/vnd.github+json",
-      "User-Agent": "agentbay-revision-resolver/1.0",
+      "User-Agent": "dispatch-revision-resolver/1.0",
       "X-GitHub-Api-Version": API_VERSION,
     };
     const tokenResponse = await fetch(`${apiBaseUrl}/app/installations/${request.installationId}/access_tokens`, {

@@ -62,7 +62,7 @@ describe("parseExecutionAttemptProfile", () => {
       ...validDefinition(),
       connections: [{ id: "github", sidecar: "github-api" }, { id: "github", sidecar: "other" }],
     }))).toThrow();
-    for (const sidecar of ["opencode", "workspace-materializer", "agentbay-gateway-proxy", "Not_DNS"]) {
+    for (const sidecar of ["opencode", "workspace-materializer", "dispatch-gateway-proxy", "Not_DNS"]) {
       expect(() => parseExecutionAttemptProfile(claimedExecution({
         ...validDefinition(),
         connections: [{ id: "github", sidecar }],

@@ -28,26 +28,26 @@ afterEach(async () => {
 describe("GitHub token broker", () => {
   it("validates the exact Dispatch grant and loopback upstream", () => {
     const env = {
-      AGENTBAY_GITHUB_TENANT: "default",
-      AGENTBAY_GITHUB_CONNECTION: "github-production",
-      AGENTBAY_GITHUB_REPOSITORY_ID: "42",
-      AGENTBAY_GITHUB_PERMISSIONS: "contents:write,issues:write,pull_requests:write",
-      AGENTBAY_CONNECTIONS: JSON.stringify({ refs: ["github-production"], schemaVersion: 1, tenantId: "default" }),
+      DISPATCH_GITHUB_TENANT: "default",
+      DISPATCH_GITHUB_CONNECTION: "github-production",
+      DISPATCH_GITHUB_REPOSITORY_ID: "42",
+      DISPATCH_GITHUB_PERMISSIONS: "contents:write,issues:write,pull_requests:write",
+      DISPATCH_CONNECTIONS: JSON.stringify({ refs: ["github-production"], schemaVersion: 1, tenantId: "default" }),
     };
     expect(parseStartupConfig(env)).toMatchObject({ ...config, upstream: "http://127.0.0.1:8082/", port: 8083 });
-    expect(parseStartupConfig({ ...env, AGENTBAY_GITHUB_MAX_ISSUES_CREATED: "1" }).maxIssuesCreated).toBe(1);
-    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MAX_ISSUES_CREATED: "0" })).toThrow(/MAX_ISSUES/);
-    expect(() => parseStartupConfig({ ...env, AGENTBAY_CONNECTIONS: JSON.stringify({ refs: ["other"], schemaVersion: 1, tenantId: "default" }) })).toThrow();
-    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MCP_UPSTREAM: "https://example.com" })).toThrow(/loopback/);
-    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_PERMISSIONS: "contents:admin" })).toThrow();
-    expect(parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_IDS: "9,10", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 42,
+    expect(parseStartupConfig({ ...env, DISPATCH_GITHUB_MAX_ISSUES_CREATED: "1" }).maxIssuesCreated).toBe(1);
+    expect(() => parseStartupConfig({ ...env, DISPATCH_GITHUB_MAX_ISSUES_CREATED: "0" })).toThrow(/MAX_ISSUES/);
+    expect(() => parseStartupConfig({ ...env, DISPATCH_CONNECTIONS: JSON.stringify({ refs: ["other"], schemaVersion: 1, tenantId: "default" }) })).toThrow();
+    expect(() => parseStartupConfig({ ...env, DISPATCH_GITHUB_MCP_UPSTREAM: "https://example.com" })).toThrow(/loopback/);
+    expect(() => parseStartupConfig({ ...env, DISPATCH_GITHUB_PERMISSIONS: "contents:admin" })).toThrow();
+    expect(parseStartupConfig({ ...env, DISPATCH_GITHUB_MERGE_REVIEWER_IDS: "9,10", DISPATCH_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 42,
       repositoryFullName: "acme/repo", pullRequestNumber: 7, reviewerId: 9, commitSha: "a".repeat(40) }) }).mergeCapability)
       .toMatchObject({ repositoryId: 42, pullRequestNumber: 7, commitSha: "a".repeat(40) });
-    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_IDS: "9", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 43,
+    expect(() => parseStartupConfig({ ...env, DISPATCH_GITHUB_MERGE_REVIEWER_IDS: "9", DISPATCH_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 43,
       repositoryFullName: "acme/repo", pullRequestNumber: 7, reviewerId: 9, commitSha: "a".repeat(40) }) })).toThrow(/MERGE_CAPABILITY/);
-    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_IDS: "10", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 42,
+    expect(() => parseStartupConfig({ ...env, DISPATCH_GITHUB_MERGE_REVIEWER_IDS: "10", DISPATCH_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 42,
       repositoryFullName: "acme/repo", pullRequestNumber: 7, reviewerId: 9, commitSha: "a".repeat(40) }) })).toThrow(/MERGE_CAPABILITY/);
-    expect(() => parseStartupConfig({ ...env, AGENTBAY_GITHUB_MERGE_REVIEWER_IDS: "9,9", AGENTBAY_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 42,
+    expect(() => parseStartupConfig({ ...env, DISPATCH_GITHUB_MERGE_REVIEWER_IDS: "9,9", DISPATCH_GITHUB_MERGE_CAPABILITY: JSON.stringify({ schemaVersion: 1, repositoryId: 42,
       repositoryFullName: "acme/repo", pullRequestNumber: 7, reviewerId: 9, commitSha: "a".repeat(40) }) })).toThrow(/REVIEWER_IDS/);
   });
 

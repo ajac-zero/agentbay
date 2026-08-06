@@ -19,7 +19,7 @@ const dnsLabelSchema = z
   .min(1)
   .max(63)
   .regex(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/, "must be a valid DNS label");
-const reservedConnectionSidecars = new Set(["opencode", "workspace-materializer", "agentbay-gateway-proxy"]);
+const reservedConnectionSidecars = new Set(["opencode", "workspace-materializer", "dispatch-gateway-proxy"]);
 const connectionIdSchema = z.string().min(1).max(128).regex(/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/);
 const githubTools = new Set([
   "actions_get", "actions_list", "add_comment_to_pending_review", "add_issue_comment",

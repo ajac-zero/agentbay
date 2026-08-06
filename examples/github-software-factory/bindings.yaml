@@ -6,7 +6,7 @@ triggerId: bug-finder-cron
 profile: { id: bug-finder, version: 1 }
 definition:
   schemaVersion: 1
-  eventTypes: [dev.agentbay.repository.full_review.requested]
+  eventTypes: [dev.dispatch.repository.full_review.requested]
   filter:
     all:
       - { path: /repository/fullName, op: eq, value: acme/dispatch }
@@ -43,8 +43,8 @@ definition:
   filter:
     all:
       - { path: /repository/fullName, op: eq, value: acme/dispatch }
-      - { path: /issue/labels, op: contains, value: "agentbay/state:ready" }
-      - { path: /issue/labels, op: contains, value: "agentbay/difficulty:easy" }
+      - { path: /issue/labels, op: contains, value: "dispatch/state:ready" }
+      - { path: /issue/labels, op: contains, value: "dispatch/difficulty:easy" }
   activeSingleton:
     name: developer-issue
     key: [/repository/id, /issue/number]
@@ -141,7 +141,7 @@ definition:
   filter:
     all:
       - { path: /repository/fullName, op: eq, value: acme/dispatch }
-      - { path: /pullRequest/labels, op: contains, value: agentbay-review }
+      - { path: /pullRequest/labels, op: contains, value: dispatch-review }
   activeSingleton:
     name: reviewer-revision
     key: [/repository/id, /pullRequest/number, /pullRequest/head/sha]

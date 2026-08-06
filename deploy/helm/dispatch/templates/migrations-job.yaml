@@ -1,17 +1,17 @@
 {{- if .Values.migrations.enabled -}}
-{{- $databaseEnv := include "agentbay.databaseEnv" . | trim -}}
-{{- $databaseMode := include "agentbay.database.mode" . | trim -}}
-{{- $hookEvents := include "agentbay.migrations.hookEvents" . | trim -}}
-{{- if and (eq $databaseMode "none") .Values.secrets.create (not .Values.secrets.existingSecret) (or (hasKey .Values.secrets.data "AGENTBAY_DATABASE_URL") (hasKey .Values.secrets.data "DATABASE_URL")) -}}
-{{- fail "migrations.enabled=true cannot use secrets.data.AGENTBAY_DATABASE_URL or secrets.data.DATABASE_URL because the migration Job may run before the chart-managed Secret exists; set database.external.url or database.external.existingSecret instead" -}}
+{{- $databaseEnv := include "dispatch.databaseEnv" . | trim -}}
+{{- $databaseMode := include "dispatch.database.mode" . | trim -}}
+{{- $hookEvents := include "dispatch.migrations.hookEvents" . | trim -}}
+{{- if and (eq $databaseMode "none") .Values.secrets.create (not .Values.secrets.existingSecret) (or (hasKey .Values.secrets.data "DISPATCH_DATABASE_URL") (hasKey .Values.secrets.data "DATABASE_URL")) -}}
+{{- fail "migrations.enabled=true cannot use secrets.data.DISPATCH_DATABASE_URL or secrets.data.DATABASE_URL because the migration Job may run before the chart-managed Secret exists; set database.external.url or database.external.existingSecret instead" -}}
 {{- end -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "agentbay.migrations.jobName" . }}
+  name: {{ include "dispatch.migrations.jobName" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: migrations
   {{- if $hookEvents }}
   annotations:
@@ -24,7 +24,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "agentbay.selectorLabels" . | nindent 8 }}
+        {{- include "dispatch.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: migrations
     spec:
       restartPolicy: OnFailure

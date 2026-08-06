@@ -25,7 +25,7 @@ describe("revision resolution persistence", () => {
     const triggerId = `trigger-${randomUUID()}`;
     const admittedAt = new Date().toISOString();
     await store.createTrigger({
-      config: { schemaVersion: 1, webhookSecretEnv: "AGENTBAY_GITHUB_WEBHOOK_SECRET_TEST" },
+      config: { schemaVersion: 1, webhookSecretEnv: "DISPATCH_GITHUB_WEBHOOK_SECRET_TEST" },
       createdAt: admittedAt, disabledAt: null, enabled: true, id: triggerId, tenantId, type: "github.app.webhook",
     });
     await store.publishProfileVersion({
@@ -95,13 +95,13 @@ describe("revision resolution persistence", () => {
 
 async function startPostgres(): Promise<StartedTestContainer> {
   return new GenericContainer("postgres:16-alpine")
-    .withEnvironment({ POSTGRES_DB: "agentbay", POSTGRES_PASSWORD: "agentbay-password", POSTGRES_USER: "agentbay" })
+    .withEnvironment({ POSTGRES_DB: "dispatch", POSTGRES_PASSWORD: "dispatch-password", POSTGRES_USER: "dispatch" })
     .withExposedPorts(5432)
-    .withHealthCheck({ interval: 1_000, retries: 30, test: ["CMD-SHELL", "pg_isready -U agentbay -d agentbay"], timeout: 5_000 })
+    .withHealthCheck({ interval: 1_000, retries: 30, test: ["CMD-SHELL", "pg_isready -U dispatch -d dispatch"], timeout: 5_000 })
     .withWaitStrategy(Wait.forHealthCheck())
     .start();
 }
 
 function connectionString(container: StartedTestContainer): string {
-  return `postgresql://agentbay:agentbay-password@${container.getHost()}:${container.getMappedPort(5432)}/agentbay`;
+  return `postgresql://dispatch:dispatch-password@${container.getHost()}:${container.getMappedPort(5432)}/dispatch`;
 }

@@ -134,10 +134,10 @@ mountGitHubEffectsApi(app, runtimeStore);
 mountOpenApiDocs(app);
 
 const server = serve({ fetch: (request) => app.fetch(request), port: config.port }, (info) => {
-  logger.info("agentbay listening", { port: info.port });
+  logger.info("dispatch listening", { port: info.port });
 });
 const metricsServer = serve({ fetch: (request) => metricsApp.fetch(request), port: config.metricsPort ?? 9090 }, (info) => {
-  logger.info("agentbay metrics listening", { port: info.port });
+  logger.info("dispatch metrics listening", { port: info.port });
 });
 
 let shutdownPromise: Promise<void> | undefined;

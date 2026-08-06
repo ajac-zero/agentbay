@@ -1,5 +1,5 @@
 apiVersion: v2
-name: agentbay
+name: dispatch
 description: |
   Dispatch provides an API for durable asynchronous agent executions backed by
   Postgres and isolated Kubernetes sandboxes. This chart installs the API,

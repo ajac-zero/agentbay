@@ -78,15 +78,15 @@ users:
 function ownership(): Record<string, string> {
   const authorization = "[]";
   return {
-    "agentbay.dev/fencing-token": input.fencingToken,
-    "agentbay.dev/tenant-id": input.tenantId,
-    "agentbay.dev/execution-id": input.executionId,
-    "agentbay.dev/attempt": String(input.attempt),
-    "agentbay.dev/profile-version-id": input.profileVersion.id,
-    "agentbay.dev/profile-id": input.profileVersion.profileId,
-    "agentbay.dev/profile-version": String(input.profileVersion.version),
-    "agentbay.dev/workspace-digest": createHash("sha256").update('{"type":"empty"}').digest("hex"),
-    "agentbay.dev/connections-digest": createHash("sha256").update(authorization).digest("hex"),
+    "dispatch.dev/fencing-token": input.fencingToken,
+    "dispatch.dev/tenant-id": input.tenantId,
+    "dispatch.dev/execution-id": input.executionId,
+    "dispatch.dev/attempt": String(input.attempt),
+    "dispatch.dev/profile-version-id": input.profileVersion.id,
+    "dispatch.dev/profile-id": input.profileVersion.profileId,
+    "dispatch.dev/profile-version": String(input.profileVersion.version),
+    "dispatch.dev/workspace-digest": createHash("sha256").update('{"type":"empty"}').digest("hex"),
+    "dispatch.dev/connections-digest": createHash("sha256").update(authorization).digest("hex"),
   };
 }
 
@@ -97,7 +97,7 @@ function claim(ready = false): SandboxClaim {
     metadata: {
       name: claimNameForExecutionAttempt(input.executionId, input.attempt),
       annotations: ownership(),
-      labels: { "app.kubernetes.io/managed-by": "agentbay" },
+      labels: { "app.kubernetes.io/managed-by": "dispatch" },
     },
     spec: {
       sandboxTemplateRef: { name: input.sandboxTemplate },
@@ -173,10 +173,10 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     });
     const created = create.mock.calls[0]![0].body as SandboxClaim;
     expect(created.metadata.labels).toMatchObject({
-      "app.kubernetes.io/managed-by": "agentbay",
-      "agentbay.dev/execution": input.executionId,
-      "agentbay.dev/attempt": "2",
-      "agentbay.dev/profile": input.profileVersion.profileId,
+      "app.kubernetes.io/managed-by": "dispatch",
+      "dispatch.dev/execution": input.executionId,
+      "dispatch.dev/attempt": "2",
+      "dispatch.dev/profile": input.profileVersion.profileId,
     });
     expect(created.metadata.annotations).toEqual(ownership());
     expect(created.spec).toMatchObject({
@@ -191,16 +191,16 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     expect(created.spec?.env).toEqual(expect.arrayContaining([
       { containerName: "opencode", name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
       { containerName: "opencode", name: "OPENCODE_CONFIG_CONTENT", value: JSON.stringify(input.opencodeConfig) },
-      { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_TYPE", value: "empty" },
+      { containerName: "workspace-materializer", name: "DISPATCH_WORKSPACE_TYPE", value: "empty" },
     ]));
-    expect(created.spec?.env?.filter(({ name }) => name.startsWith("AGENTBAY_WORKSPACE_GIT_"))).toEqual([]);
-    expect(created.spec?.env?.filter(({ name }) => name === "AGENTBAY_CONNECTIONS")).toEqual([]);
+    expect(created.spec?.env?.filter(({ name }) => name.startsWith("DISPATCH_WORKSPACE_GIT_"))).toEqual([]);
+    expect(created.spec?.env?.filter(({ name }) => name === "DISPATCH_CONNECTIONS")).toEqual([]);
     expect(created.spec?.additionalPodMetadata?.annotations).toMatchObject({
-      "agentbay.dev/connections-digest": createHash("sha256").update("[]").digest("hex"),
-      "agentbay.dev/managed-by": "agentbay",
-      "agentbay.dev/execution": input.executionId,
-      "agentbay.dev/attempt": "2",
-      "agentbay.dev/profile": input.profileVersion.profileId,
+      "dispatch.dev/connections-digest": createHash("sha256").update("[]").digest("hex"),
+      "dispatch.dev/managed-by": "dispatch",
+      "dispatch.dev/execution": input.executionId,
+      "dispatch.dev/attempt": "2",
+      "dispatch.dev/profile": input.profileVersion.profileId,
     });
   });
 
@@ -225,24 +225,24 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     await provisioner().provision(connectionInput, new AbortController().signal);
 
     const created = create.mock.calls[0]![0].body as SandboxClaim;
-    expect(created.spec?.env?.filter(({ name }) => name === "AGENTBAY_CONNECTIONS")).toEqual([
+    expect(created.spec?.env?.filter(({ name }) => name === "DISPATCH_CONNECTIONS")).toEqual([
       {
         containerName: "mcp-a",
-        name: "AGENTBAY_CONNECTIONS",
+        name: "DISPATCH_CONNECTIONS",
         value: '{"refs":["alpha","charlie"],"schemaVersion":1,"tenantId":"tenant-1"}',
       },
       {
         containerName: "mcp-b",
-        name: "AGENTBAY_CONNECTIONS",
+        name: "DISPATCH_CONNECTIONS",
         value: '{"refs":["zeta"],"schemaVersion":1,"tenantId":"tenant-1"}',
       },
     ]);
     const authorization = '[{"id":"alpha","sidecar":"mcp-a"},{"id":"charlie","sidecar":"mcp-a"},{"id":"zeta","sidecar":"mcp-b"}]';
     const digest = createHash("sha256").update(authorization).digest("hex");
-    expect(created.metadata.annotations).toMatchObject({ "agentbay.dev/connections-digest": digest });
-    expect(created.metadata.annotations).not.toHaveProperty("agentbay.dev/connections");
+    expect(created.metadata.annotations).toMatchObject({ "dispatch.dev/connections-digest": digest });
+    expect(created.metadata.annotations).not.toHaveProperty("dispatch.dev/connections");
     expect(created.spec?.additionalPodMetadata?.annotations).toMatchObject({
-      "agentbay.dev/connections-digest": digest,
+      "dispatch.dev/connections-digest": digest,
     });
     expect(JSON.stringify(created)).not.toContain("secret");
     expect(JSON.stringify(created)).not.toContain("credential");
@@ -252,7 +252,7 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     const mergeInput: ExecutionAttemptProvisioningInput = {
       ...input,
       connections: [{ id: "github-production", sidecar: "github-token-broker" }],
-      controlPlaneUrl: "http://agentbay:3000/",
+      controlPlaneUrl: "http://dispatch:3000/",
       githubMergeCapability: {
         commitSha: "a".repeat(40),
         pullRequestNumber: 42,
@@ -270,9 +270,9 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     await provisioner().provision(mergeInput, new AbortController().signal);
 
     const created = create.mock.calls[0]![0].body as SandboxClaim;
-    expect(created.spec?.env?.filter(({ name }) => name === "AGENTBAY_GITHUB_MERGE_CAPABILITY")).toEqual([{
+    expect(created.spec?.env?.filter(({ name }) => name === "DISPATCH_GITHUB_MERGE_CAPABILITY")).toEqual([{
       containerName: "github-token-broker",
-      name: "AGENTBAY_GITHUB_MERGE_CAPABILITY",
+      name: "DISPATCH_GITHUB_MERGE_CAPABILITY",
       value: `{"commitSha":"${"a".repeat(40)}","pullRequestNumber":42,"repositoryFullName":"acme/repo","repositoryId":7,"reviewerId":9,"schemaVersion":1}`,
     }]);
     expect(JSON.stringify(created.metadata)).not.toContain("commitSha");
@@ -299,11 +299,11 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
 
     const created = create.mock.calls[0]![0].body as SandboxClaim;
     const authorization = '[{"id":"alpha","sidecar":"z-sidecar"},{"id":"zeta","sidecar":"a-sidecar"}]';
-    expect(created.metadata.annotations?.["agentbay.dev/connections-digest"]).toBe(
+    expect(created.metadata.annotations?.["dispatch.dev/connections-digest"]).toBe(
       createHash("sha256").update(authorization).digest("hex"),
     );
-    expect(created.metadata.annotations).not.toHaveProperty("agentbay.dev/connections");
-    expect(created.spec?.env?.filter(({ name }) => name === "AGENTBAY_CONNECTIONS").map(({ containerName }) => containerName)).toEqual([
+    expect(created.metadata.annotations).not.toHaveProperty("dispatch.dev/connections");
+    expect(created.spec?.env?.filter(({ name }) => name === "DISPATCH_CONNECTIONS").map(({ containerName }) => containerName)).toEqual([
       "a-sidecar",
       "z-sidecar",
     ]);
@@ -333,9 +333,9 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
     const workspace = gitInput.workspace;
     if (workspace.type !== "git") throw new Error("Expected git workspace");
     expect(created.spec?.env).toEqual(expect.arrayContaining([
-      { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_TYPE", value: "git" },
-      { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_GIT_URL", value: workspace.repository.url },
-      { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_GIT_COMMIT", value: workspace.revision.commit },
+      { containerName: "workspace-materializer", name: "DISPATCH_WORKSPACE_TYPE", value: "git" },
+      { containerName: "workspace-materializer", name: "DISPATCH_WORKSPACE_GIT_URL", value: workspace.repository.url },
+      { containerName: "workspace-materializer", name: "DISPATCH_WORKSPACE_GIT_COMMIT", value: workspace.revision.commit },
     ]));
     expect(created.spec).not.toHaveProperty("containers");
     expect(JSON.stringify(created)).not.toContain("credential");
@@ -397,10 +397,10 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
   it("adopts an existing claim by replacing its fence and returns its endpoint", async () => {
     const existing = claim(true);
     existing.metadata.resourceVersion = "17";
-    existing.metadata.annotations!["agentbay.dev/fencing-token"] = "old-fence";
+    existing.metadata.annotations!["dispatch.dev/fencing-token"] = "old-fence";
     const adopted = claim(true);
     adopted.metadata.resourceVersion = "18";
-    adopted.metadata.annotations!["agentbay.dev/fencing-token"] = input.fencingToken;
+    adopted.metadata.annotations!["dispatch.dev/fencing-token"] = input.fencingToken;
     const get = vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject")
       .mockResolvedValueOnce(existing)
       .mockResolvedValue(adopted);
@@ -422,7 +422,7 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
       name: claimNameForExecutionAttempt(input.executionId, input.attempt),
       body: {
         metadata: {
-          annotations: { "agentbay.dev/fencing-token": input.fencingToken },
+          annotations: { "dispatch.dev/fencing-token": input.fencingToken },
           resourceVersion: "17",
         },
       },
@@ -433,12 +433,12 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
   it("rereads and retries a conflicting fence transfer without deleting the claim", async () => {
     const existing = claim(true);
     existing.metadata.resourceVersion = "17";
-    existing.metadata.annotations!["agentbay.dev/fencing-token"] = "old-fence";
+    existing.metadata.annotations!["dispatch.dev/fencing-token"] = "old-fence";
     const refreshed = structuredClone(existing);
     refreshed.metadata.resourceVersion = "18";
     const adopted = claim(true);
     adopted.metadata.resourceVersion = "19";
-    adopted.metadata.annotations!["agentbay.dev/fencing-token"] = input.fencingToken;
+    adopted.metadata.annotations!["dispatch.dev/fencing-token"] = input.fencingToken;
     vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject")
       .mockResolvedValueOnce(existing)
       .mockResolvedValueOnce(refreshed)
@@ -474,7 +474,7 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
   it("preserves an adopted claim when readiness is aborted for takeover", async () => {
     const existing = claim();
     existing.metadata.resourceVersion = "17";
-    existing.metadata.annotations!["agentbay.dev/fencing-token"] = "old-fence";
+    existing.metadata.annotations!["dispatch.dev/fencing-token"] = "old-fence";
     const adopted = claim();
     adopted.metadata.resourceVersion = "18";
     let reads = 0;
@@ -508,7 +508,7 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
 
   it("does not let a stale fence release an adopted claim", async () => {
     const adopted = claim(true);
-    adopted.metadata.annotations!["agentbay.dev/fencing-token"] = "new-fence";
+    adopted.metadata.annotations!["dispatch.dev/fencing-token"] = "new-fence";
     vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(adopted);
     const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject");
 
@@ -518,7 +518,7 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
 
   it("throws on an ownership mismatch without deleting the claim", async () => {
     const existing = claim(true);
-    existing.metadata.annotations!["agentbay.dev/tenant-id"] = "other-tenant";
+    existing.metadata.annotations!["dispatch.dev/tenant-id"] = "other-tenant";
     vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(existing);
     const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject");
 
@@ -528,7 +528,7 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
 
   it("rejects an existing claim when its workspace digest differs", async () => {
     const existing = claim(true);
-    existing.metadata.annotations!["agentbay.dev/workspace-digest"] = "different";
+    existing.metadata.annotations!["dispatch.dev/workspace-digest"] = "different";
     vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(existing);
     const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject");
 
@@ -538,7 +538,7 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
 
   it("rejects an existing claim when its connection authorization digest differs", async () => {
     const existing = claim(true);
-    existing.metadata.annotations!["agentbay.dev/connections-digest"] = "different";
+    existing.metadata.annotations!["dispatch.dev/connections-digest"] = "different";
     vi.spyOn(CustomObjectsApi.prototype, "getNamespacedCustomObject").mockResolvedValue(existing);
     const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject");
 
@@ -734,9 +734,9 @@ describe("SandboxClaimExecutionAttemptProvisioner", () => {
   it("releases a cancelled execution claim using only cancellation ownership metadata", async () => {
     const cancellationClaim = claim(true);
     cancellationClaim.metadata.annotations = {
-      "agentbay.dev/tenant-id": input.tenantId,
-      "agentbay.dev/execution-id": input.executionId,
-      "agentbay.dev/attempt": String(input.attempt),
+      "dispatch.dev/tenant-id": input.tenantId,
+      "dispatch.dev/execution-id": input.executionId,
+      "dispatch.dev/attempt": String(input.attempt),
     };
     cancellationClaim.metadata.uid = "claim-uid";
     const remove = vi.spyOn(CustomObjectsApi.prototype, "deleteNamespacedCustomObject").mockResolvedValue({});

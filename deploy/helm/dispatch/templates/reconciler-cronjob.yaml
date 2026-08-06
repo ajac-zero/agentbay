@@ -2,10 +2,10 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ include "agentbay.fullname" . }}-reconciler
-  namespace: {{ include "agentbay.claimsNamespace" . }}
+  name: {{ include "dispatch.fullname" . }}-reconciler
+  namespace: {{ include "dispatch.claimsNamespace" . }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: reconciler
 spec:
   schedule: {{ .Values.reconciler.schedule | quote }}
@@ -18,10 +18,10 @@ spec:
       template:
         metadata:
           labels:
-            {{- include "agentbay.selectorLabels" . | nindent 12 }}
+            {{- include "dispatch.selectorLabels" . | nindent 12 }}
             app.kubernetes.io/component: reconciler
         spec:
-          serviceAccountName: {{ include "agentbay.reconciler.serviceAccountName" . }}
+          serviceAccountName: {{ include "dispatch.reconciler.serviceAccountName" . }}
           restartPolicy: OnFailure
           {{- with .Values.imagePullSecrets }}
           imagePullSecrets:
@@ -41,11 +41,11 @@ spec:
               {{- end }}
               command: ["node", "dist/reconcile.js"]
               env:
-                - name: AGENTBAY_KUBE_NAMESPACE
-                  value: {{ include "agentbay.claimsNamespace" . | quote }}
-                - name: AGENTBAY_SANDBOX_CLAIM_API_VERSION
+                - name: DISPATCH_KUBE_NAMESPACE
+                  value: {{ include "dispatch.claimsNamespace" . | quote }}
+                - name: DISPATCH_SANDBOX_CLAIM_API_VERSION
                   value: {{ .Values.claims.apiVersion | quote }}
-                - name: AGENTBAY_RECONCILER_GRACE_MINUTES
+                - name: DISPATCH_RECONCILER_GRACE_MINUTES
                   value: {{ .Values.reconciler.graceMinutes | quote }}
                 {{- with .Values.reconciler.extraEnv }}
                 {{- toYaml . | nindent 16 }}

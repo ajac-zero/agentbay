@@ -17,11 +17,11 @@ describe("wake admission persistence", () => {
 
   beforeAll(async () => {
     postgres = await new GenericContainer("postgres:16-alpine")
-      .withEnvironment({ POSTGRES_DB: "agentbay", POSTGRES_PASSWORD: "agentbay-password", POSTGRES_USER: "agentbay" })
+      .withEnvironment({ POSTGRES_DB: "dispatch", POSTGRES_PASSWORD: "dispatch-password", POSTGRES_USER: "dispatch" })
       .withExposedPorts(5432)
       .withWaitStrategy(Wait.forLogMessage("database system is ready to accept connections", 2))
       .start();
-    const connectionString = `postgresql://agentbay:agentbay-password@${postgres.getHost()}:${postgres.getMappedPort(5432)}/agentbay`;
+    const connectionString = `postgresql://dispatch:dispatch-password@${postgres.getHost()}:${postgres.getMappedPort(5432)}/dispatch`;
     store = await createPostgresRuntimeStore({ connectionString, runMigrations: true, ssl: false, sslRejectUnauthorized: false });
     pool = new Pool({ connectionString });
     profileId = randomUUID();
@@ -59,21 +59,21 @@ describe("wake admission persistence", () => {
       wakes: [{ executionId, action: "CONTINUED", inputSequence: 2, state: "QUEUED", binding: { id: "continue", version: 1 } }],
     });
     expect(replay).toEqual({ ...first, replayed: true });
-    const wait = (await pool.query("select state, ended_at from agentbay_event_waits where execution_id = $1", [executionId])).rows[0];
+    const wait = (await pool.query("select state, ended_at from dispatch_event_waits where execution_id = $1", [executionId])).rows[0];
     expect(wait).toMatchObject({ state: "CONSUMED", ended_at: expect.any(Date) });
-    expect((await pool.query("select kind, sequence, input from agentbay_execution_inputs where execution_id = $1 order by sequence", [executionId])).rows).toEqual([
+    expect((await pool.query("select kind, sequence, input from dispatch_execution_inputs where execution_id = $1 order by sequence", [executionId])).rows).toEqual([
       expect.objectContaining({ kind: "INITIAL", sequence: 1 }),
       {
         kind: "WAKE", sequence: 2,
         input: expect.objectContaining({ text: expect.stringContaining("Continue after review."), context: { event: { key: correlation, review: "changes requested" }, includeEvent: "data" } }),
       },
     ]);
-    expect((await pool.query("select count(*)::int as count from agentbay_event_wakes where execution_id = $1", [executionId])).rows[0]).toEqual({ count: 1 });
-    expect((await pool.query("select count(*)::int as count from agentbay_outbox where aggregate_type = 'event-wake' and payload->>'executionId' = $1", [executionId])).rows[0]).toEqual({ count: 1 });
+    expect((await pool.query("select count(*)::int as count from dispatch_event_wakes where execution_id = $1", [executionId])).rows[0]).toEqual({ count: 1 });
+    expect((await pool.query("select count(*)::int as count from dispatch_outbox where aggregate_type = 'event-wake' and payload->>'executionId' = $1", [executionId])).rows[0]).toEqual({ count: 1 });
     expect(await store.getExecution("default", executionId)).toMatchObject({
       input: { text: expect.stringContaining("Continue after review.") }, state: "QUEUED",
     });
-    const timeout = (await pool.query<{ timeout_at: Date }>("select timeout_at from agentbay_executions where id = $1", [executionId])).rows[0]!.timeout_at;
+    const timeout = (await pool.query<{ timeout_at: Date }>("select timeout_at from dispatch_executions where id = $1", [executionId])).rows[0]!.timeout_at;
     expect(timeout.getTime()).toBeGreaterThan(Date.now() + 3_500_000);
     expect(timeout.getTime()).toBeLessThan(Date.now() + 3_700_000);
 
@@ -102,15 +102,15 @@ describe("wake admission persistence", () => {
       type: "git", repository: { url: "https://github.com/acme/repo.git" }, revision: { type: "commit", commit: updatedCommit },
     };
     expect(await store.getExecution("default", executionId)).toMatchObject({ workspace: expectedWorkspace });
-    expect((await pool.query("select sequence, workspace from agentbay_execution_inputs where execution_id = $1 order by sequence", [executionId])).rows).toEqual([
+    expect((await pool.query("select sequence, workspace from dispatch_execution_inputs where execution_id = $1 order by sequence", [executionId])).rows).toEqual([
       { sequence: 1, workspace: { ...expectedWorkspace, revision: { type: "commit", commit: initialCommit } } },
       { sequence: 2, workspace: expectedWorkspace },
     ]);
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: `revision-worker-${correlation}`, leaseDurationMs: 60_000 });
     expect(claimed).toMatchObject({ executionId, workspace: expectedWorkspace, lease: { attempt: 2 } });
-    await pool.query("update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1 and attempt = 2", [executionId]);
-    await pool.query("update agentbay_executions set state = 'RUNNING' where id = $1", [executionId]);
-    await pool.query(`update agentbay_execution_attempts set state = 'RUNNING', workload_name = 'sandbox', opencode_session_id = 'session'
+    await pool.query("update dispatch_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1 and attempt = 2", [executionId]);
+    await pool.query("update dispatch_executions set state = 'RUNNING' where id = $1", [executionId]);
+    await pool.query(`update dispatch_execution_attempts set state = 'RUNNING', workload_name = 'sandbox', opencode_session_id = 'session'
       where execution_id = $1 and attempt = 2`, [executionId]);
     const retried = await store.claimExpiredRunningExecution({ leaseOwner: `retry-worker-${correlation}`, leaseDurationMs: 60_000 });
     expect(retried).toMatchObject({ executionId, workspace: expectedWorkspace, lease: { attempt: 2 } });
@@ -130,8 +130,8 @@ describe("wake admission persistence", () => {
 
     await expect(store.admitEvent(command)).rejects.toBeInstanceOf(WorkspaceResolutionError);
 
-    expect((await pool.query("select count(*)::int as count from agentbay_events where id = $1", [command.internalEventId])).rows[0]).toEqual({ count: 0 });
-    expect((await pool.query("select state from agentbay_event_waits where execution_id = $1", [executionId])).rows[0]).toEqual({ state: "ACTIVE" });
+    expect((await pool.query("select count(*)::int as count from dispatch_events where id = $1", [command.internalEventId])).rows[0]).toEqual({ count: 0 });
+    expect((await pool.query("select state from dispatch_event_waits where execution_id = $1", [executionId])).rows[0]).toEqual({ state: "ACTIVE" });
     expect(await store.getExecution("default", executionId)).toMatchObject({ state: "WAITING" });
   });
 
@@ -162,15 +162,15 @@ describe("wake admission persistence", () => {
       leaseOwner: claimed.lease.leaseOwner, reason: "complete", result: null, tenantId: "default",
     });
     expect(completion).toMatchObject({ applied: true, executionState: "QUEUED" });
-    expect((await pool.query("select count(*)::int as count from agentbay_event_waits where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 0 });
+    expect((await pool.query("select count(*)::int as count from dispatch_event_waits where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 0 });
     expect(await store.getExecution("default", executionId)).toMatchObject({
       input: { text: expect.stringContaining("Use latest revision.") },
       workspace: { revision: { commit: "b".repeat(40) } },
     });
-    expect((await pool.query("select count(*)::int as count from agentbay_execution_inputs where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 2 });
-    const appliedWake = (await pool.query<{ id: string }>("select id from agentbay_event_wakes where execution_id=$1 and wake_intent_id is not null", [executionId])).rows[0]!;
+    expect((await pool.query("select count(*)::int as count from dispatch_execution_inputs where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 2 });
+    const appliedWake = (await pool.query<{ id: string }>("select id from dispatch_event_wakes where execution_id=$1 and wake_intent_id is not null", [executionId])).rows[0]!;
     expect((await pool.query<{ aggregate_id: string; payload: { wakeId: string } }>(
-      "select aggregate_id, payload from agentbay_outbox where aggregate_type='event-wake' and aggregate_id=$1", [appliedWake.id],
+      "select aggregate_id, payload from dispatch_outbox where aggregate_type='event-wake' and aggregate_id=$1", [appliedWake.id],
     )).rows[0]).toMatchObject({ aggregate_id: appliedWake.id, payload: { wakeId: appliedWake.id } });
     const continuation = await store.claimNextQueuedExecution({ leaseOwner: `busy-continuation-${correlation}`, leaseDurationMs: 60_000 });
     if (!continuation || continuation.executionId !== executionId) throw new Error("Expected continuation claim");
@@ -208,8 +208,8 @@ describe("wake admission persistence", () => {
       leaseOwner: claimed.lease.leaseOwner, reason: "complete", result: null, tenantId: "default",
     });
     expect(completion).toMatchObject({ applied: true, executionState: "COMPLETED" });
-    expect((await pool.query("select count(*)::int as count from agentbay_execution_inputs where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 1 });
-    expect((await pool.query("select count(*)::int as count from agentbay_execution_pending_wakes where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 0 });
+    expect((await pool.query("select count(*)::int as count from dispatch_execution_inputs where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 1 });
+    expect((await pool.query("select count(*)::int as count from dispatch_execution_pending_wakes where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 0 });
   });
 
   it("does not apply a wake binding to the execution created by the same event", async () => {
@@ -229,7 +229,7 @@ describe("wake admission persistence", () => {
 
     expect(admitted.executions).toHaveLength(1);
     expect(admitted.pendingWakes).toEqual([]);
-    expect((await pool.query("select count(*)::int as count from agentbay_event_wake_intents where event_id=$1", [admitted.event.id])).rows[0]).toEqual({ count: 0 });
+    expect((await pool.query("select count(*)::int as count from dispatch_event_wake_intents where event_id=$1", [admitted.event.id])).rows[0]).toEqual({ count: 0 });
     await store.requestExecutionCancellation({
       actor: "test", executionId: admitted.executions[0]!.id, reason: "cleanup", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID(),
     });
@@ -245,8 +245,8 @@ describe("wake admission persistence", () => {
       actor: "test", executionId, reason: "cancel", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID(),
     });
 
-    expect((await pool.query("select count(*)::int as count from agentbay_execution_pending_wakes where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 0 });
-    expect((await pool.query("select count(*)::int as count from agentbay_event_wake_intents where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 1 });
+    expect((await pool.query("select count(*)::int as count from dispatch_execution_pending_wakes where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 0 });
+    expect((await pool.query("select count(*)::int as count from dispatch_event_wake_intents where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 1 });
   });
 
   it("terminally completes a waiting execution without queueing another attempt", async () => {
@@ -257,8 +257,8 @@ describe("wake admission persistence", () => {
 
     expect(result.wakes).toEqual([expect.objectContaining({ executionId, action: "COMPLETED", inputSequence: null, state: "COMPLETED" })]);
     expect(await store.getExecution("default", executionId)).toMatchObject({ state: "COMPLETED" });
-    expect((await pool.query("select count(*)::int as count from agentbay_execution_inputs where execution_id = $1", [executionId])).rows[0]).toEqual({ count: 1 });
-    expect((await pool.query("select count(*)::int as count from agentbay_outbox where aggregate_type = 'event-wake' and payload->>'executionId' = $1", [executionId])).rows[0]).toEqual({ count: 0 });
+    expect((await pool.query("select count(*)::int as count from dispatch_execution_inputs where execution_id = $1", [executionId])).rows[0]).toEqual({ count: 1 });
+    expect((await pool.query("select count(*)::int as count from dispatch_outbox where aggregate_type = 'event-wake' and payload->>'executionId' = $1", [executionId])).rows[0]).toEqual({ count: 0 });
   });
 
   it("uses stable binding order when multiple wake policies match one wait", async () => {
@@ -274,13 +274,13 @@ describe("wake admission persistence", () => {
     expect(result.wakes).toEqual([expect.objectContaining({
       executionId, action: "COMPLETED", binding: { id: `a-complete-${correlation}`, version: 1 },
     })]);
-    expect((await pool.query("select count(*)::int as count from agentbay_event_wakes where execution_id = $1", [executionId])).rows[0]).toEqual({ count: 1 });
+    expect((await pool.query("select count(*)::int as count from dispatch_event_wakes where execution_id = $1", [executionId])).rows[0]).toEqual({ count: 1 });
   });
 
   it("does not consume an overdue active wait before maintenance expires it", async () => {
     const correlation = randomUUID();
     const executionId = await createWaitingExecution(correlation);
-    await pool.query(`update agentbay_event_waits
+    await pool.query(`update dispatch_event_waits
       set activated_at = now() - interval '2 seconds', deadline_at = now() - interval '1 second'
       where execution_id = $1`, [executionId]);
     await publishWakeBinding(`late-${correlation}`, "work.late", {
@@ -290,7 +290,7 @@ describe("wake admission persistence", () => {
     const result = await store.admitEvent(admissionCommand("work.late", { key: correlation }));
 
     expect(result.wakes).toEqual([]);
-    expect((await pool.query("select state from agentbay_event_waits where execution_id = $1", [executionId])).rows[0]).toEqual({ state: "ACTIVE" });
+    expect((await pool.query("select state from dispatch_event_waits where execution_id = $1", [executionId])).rows[0]).toEqual({ state: "ACTIVE" });
     expect(await store.getExecution("default", executionId)).toMatchObject({ state: "WAITING" });
   });
 

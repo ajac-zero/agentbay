@@ -17,7 +17,7 @@ export function mountHealthRoute(app: OpenAPIHono): void {
     context.json(
       {
         ok: true,
-        service: "agentbay",
+        service: "dispatch",
       },
       200,
     ),
@@ -44,7 +44,7 @@ export function mountOpenApiDocs(app: OpenAPIHono): void {
 const healthResponseSchema = z
   .object({
     ok: z.boolean(),
-    service: z.literal("agentbay"),
+    service: z.literal("dispatch"),
   })
   .openapi("HealthResponse");
 

@@ -11,7 +11,7 @@ The resources in `bindings.yaml` use currently supported create bindings and
 the generic `contains` array predicate. They demonstrate:
 
 1. `issues.opened` starts triage.
-2. Triage applies one difficulty label and then `agentbay/state:ready`.
+2. Triage applies one difficulty label and then `dispatch/state:ready`.
 3. `issues.labeled` selects exactly one developer profile.
 4. All difficulty bindings share an active singleton keyed by repository ID and issue number, so later ready-label deliveries cannot create a second developer lifecycle while the first is nonterminal.
 5. The broker attributes the developer's primary PR through a fenced mutation receipt and matching signed webhook.
@@ -97,7 +97,7 @@ verified Dependabot npm patch/minor update
   -> github-actions[bot] submits an exact-SHA deterministic approval
 
 ineligible Dependabot update after required checks
-  -> trusted workflow applies agentbay-review
+  -> trusted workflow applies dispatch-review
   -> create the normal one-shot reviewer execution for the exact head SHA
 
 pull_request.closed
@@ -121,16 +121,16 @@ suspend/resume is validated against the pinned `v1beta1` controller.
 
 ## GitHub Labels
 
-- `agentbay/state:ready`
-- `agentbay/difficulty:easy`
-- `agentbay/difficulty:medium`
-- `agentbay/difficulty:hard`
+- `dispatch/state:ready`
+- `dispatch/difficulty:easy`
+- `dispatch/difficulty:medium`
+- `dispatch/difficulty:hard`
 
 The triager must apply the difficulty label before the final ready label. Each
 developer binding requires both, preventing Dispatch from an intermediate
 label event.
 
-Replaying the `agentbay/state:ready` label while a developer lifecycle is already active does not create another execution or pull request.
+Replaying the `dispatch/state:ready` label while a developer lifecycle is already active does not create another execution or pull request.
 
 ## Capabilities
 

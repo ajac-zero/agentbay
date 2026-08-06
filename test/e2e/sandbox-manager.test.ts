@@ -39,8 +39,8 @@ const PLURAL = "sandboxclaims";
 const CRD_NAME = `${PLURAL}.${GROUP}`;
 const AGENT_SANDBOX_NAMESPACE = "agent-sandbox-system";
 const AGENT_SANDBOX_CONTROLLER = "agent-sandbox-controller";
-const NAMESPACE = "agentbay-e2e";
-const K3S_IMAGE = process.env.AGENTBAY_E2E_K3S_IMAGE ?? "rancher/k3s:v1.31.2-k3s1";
+const NAMESPACE = "dispatch-e2e";
+const K3S_IMAGE = process.env.DISPATCH_E2E_K3S_IMAGE ?? "rancher/k3s:v1.31.2-k3s1";
 const AGENT_SANDBOX_VERSION = "v0.5.2";
 const AGENT_SANDBOX_MANIFEST_URLS = [
   `https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${AGENT_SANDBOX_VERSION}/sandbox.yaml`,
@@ -102,19 +102,19 @@ describe("SandboxClaimExecutionAttemptProvisioner e2e", () => {
 
     expect(createdClaim.metadata.namespace).toBe(NAMESPACE);
     expect(createdClaim.metadata.labels).toMatchObject({
-      "app.kubernetes.io/managed-by": "agentbay",
-      "agentbay.dev/execution": executionId,
-      "agentbay.dev/attempt": String(attempt),
-      "agentbay.dev/profile": input.profileVersion.profileId,
+      "app.kubernetes.io/managed-by": "dispatch",
+      "dispatch.dev/execution": executionId,
+      "dispatch.dev/attempt": String(attempt),
+      "dispatch.dev/profile": input.profileVersion.profileId,
     });
     expect(createdClaim.metadata.annotations).toMatchObject({
-      "agentbay.dev/fencing-token": input.fencingToken,
-      "agentbay.dev/tenant-id": input.tenantId,
-      "agentbay.dev/execution-id": executionId,
-      "agentbay.dev/attempt": String(attempt),
-      "agentbay.dev/profile-version-id": input.profileVersion.id,
-      "agentbay.dev/profile-id": input.profileVersion.profileId,
-      "agentbay.dev/profile-version": String(input.profileVersion.version),
+      "dispatch.dev/fencing-token": input.fencingToken,
+      "dispatch.dev/tenant-id": input.tenantId,
+      "dispatch.dev/execution-id": executionId,
+      "dispatch.dev/attempt": String(attempt),
+      "dispatch.dev/profile-version-id": input.profileVersion.id,
+      "dispatch.dev/profile-id": input.profileVersion.profileId,
+      "dispatch.dev/profile-version": String(input.profileVersion.version),
     });
     expect(createdClaim.spec).toMatchObject({
       warmPoolRef: { name: "opencode-pool" },
@@ -125,21 +125,21 @@ describe("SandboxClaimExecutionAttemptProvisioner e2e", () => {
       },
       additionalPodMetadata: {
         annotations: {
-          "agentbay.dev/managed-by": "agentbay",
-          "agentbay.dev/execution": executionId,
-          "agentbay.dev/attempt": String(attempt),
-          "agentbay.dev/profile": input.profileVersion.profileId,
-          "agentbay.dev/claim": claimName,
+          "dispatch.dev/managed-by": "dispatch",
+          "dispatch.dev/execution": executionId,
+          "dispatch.dev/attempt": String(attempt),
+          "dispatch.dev/profile": input.profileVersion.profileId,
+          "dispatch.dev/claim": claimName,
         },
       },
     });
     expect(createdClaim.spec?.env).toEqual(
       expect.arrayContaining([
         { containerName: "opencode", name: "OPENCODE_SERVER_USERNAME", value: "opencode" },
-        { containerName: "workspace-materializer", name: "AGENTBAY_WORKSPACE_TYPE", value: "empty" },
+        { containerName: "workspace-materializer", name: "DISPATCH_WORKSPACE_TYPE", value: "empty" },
         {
           containerName: "github-api",
-          name: "AGENTBAY_CONNECTIONS",
+          name: "DISPATCH_CONNECTIONS",
           value: '{"refs":["github-production"],"schemaVersion":1,"tenantId":"tenant-e2e"}',
         },
         {
@@ -294,7 +294,7 @@ async function fetchAgentSandboxObjects(): Promise<ManifestObject[]> {
 }
 
 async function applyObject(api: KubernetesObjectApi, object: ManifestObject): Promise<void> {
-  await api.patch(object, undefined, undefined, "agentbay-e2e", true, PatchStrategy.ServerSideApply);
+  await api.patch(object, undefined, undefined, "dispatch-e2e", true, PatchStrategy.ServerSideApply);
 }
 
 function nonEmptyYamlDocuments(yaml: string): string {
@@ -402,7 +402,7 @@ async function startPortForward(
   podName: string,
 ): Promise<{ localPort: number; stop: () => Promise<void> }> {
   const localPort = await getFreePort();
-  const directory = await mkdtemp(join(tmpdir(), "agentbay-e2e-"));
+  const directory = await mkdtemp(join(tmpdir(), "dispatch-e2e-"));
   const kubeConfigPath = join(directory, "kubeconfig.yaml");
   await writeFile(kubeConfigPath, kubeConfig);
 
@@ -495,7 +495,7 @@ function sandboxTemplate(): ManifestObject {
               name: "workspace-materializer",
               image: "node:25-alpine",
               imagePullPolicy: "IfNotPresent",
-              command: ["node", "-e", "if (process.env.AGENTBAY_WORKSPACE_TYPE !== 'empty') process.exit(1)"],
+              command: ["node", "-e", "if (process.env.DISPATCH_WORKSPACE_TYPE !== 'empty') process.exit(1)"],
             },
           ],
           containers: [
@@ -518,7 +518,7 @@ function sandboxTemplate(): ManifestObject {
                 "node",
                 "-e",
                 `const expected = '{"refs":["github-production"],"schemaVersion":1,"tenantId":"tenant-e2e"}';
-if (process.env.AGENTBAY_CONNECTIONS !== expected) process.exit(1);
+if (process.env.DISPATCH_CONNECTIONS !== expected) process.exit(1);
 setInterval(() => {}, 60_000);`,
               ],
             },

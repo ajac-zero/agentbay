@@ -44,8 +44,8 @@ describe("readApiVersion", () => {
   });
 
   it("throws on unsupported version string", () => {
-    expect(() => readApiVersion("v2")).toThrow(/Expected AGENTBAY_SANDBOX_CLAIM_API_VERSION/);
-    expect(() => readApiVersion("latest")).toThrow(/Expected AGENTBAY_SANDBOX_CLAIM_API_VERSION/);
+    expect(() => readApiVersion("v2")).toThrow(/Expected DISPATCH_SANDBOX_CLAIM_API_VERSION/);
+    expect(() => readApiVersion("latest")).toThrow(/Expected DISPATCH_SANDBOX_CLAIM_API_VERSION/);
   });
 });
 
@@ -234,7 +234,7 @@ describe("reconcileOnce", () => {
       version: "v1beta1",
       namespace: "custom-ns",
       plural: "sandboxclaims",
-      labelSelector: "app.kubernetes.io/managed-by=agentbay",
+      labelSelector: "app.kubernetes.io/managed-by=dispatch",
     });
   });
 

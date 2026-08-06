@@ -5,10 +5,10 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ include "agentbay.fullname" $ }}-bug-finder
+  name: {{ include "dispatch.fullname" $ }}-bug-finder
   namespace: {{ $.Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" $ | nindent 4 }}
+    {{- include "dispatch.labels" $ | nindent 4 }}
     app.kubernetes.io/component: bug-finder
 spec:
   schedule: {{ .schedule | quote }}
@@ -25,11 +25,11 @@ spec:
       template:
         metadata:
           labels:
-            {{- include "agentbay.selectorLabels" $ | nindent 12 }}
+            {{- include "dispatch.selectorLabels" $ | nindent 12 }}
             app.kubernetes.io/component: bug-finder
         spec:
           restartPolicy: Never
-          serviceAccountName: {{ include "agentbay.serviceAccountName" $ }}
+          serviceAccountName: {{ include "dispatch.serviceAccountName" $ }}
           automountServiceAccountToken: false
           {{- with $.Values.imagePullSecrets }}
           imagePullSecrets:
@@ -43,18 +43,18 @@ spec:
               env:
                 - name: BUG_FINDER_RUN_ID
                   valueFrom: { fieldRef: { fieldPath: metadata.uid } }
-                - { name: BUG_FINDER_AGENTBAY_URL, value: {{ printf "http://%s.%s.svc:%v" (include "agentbay.fullname" $) $.Release.Namespace $.Values.service.port | quote }} }
+                - { name: BUG_FINDER_DISPATCH_URL, value: {{ printf "http://%s.%s.svc:%v" (include "dispatch.fullname" $) $.Release.Namespace $.Values.service.port | quote }} }
                 - { name: BUG_FINDER_TRIGGER_ID, value: {{ .triggerId | quote }} }
                 - { name: BUG_FINDER_REPOSITORY_ID, value: {{ .repository.id | quote }} }
                 - { name: BUG_FINDER_REPOSITORY_FULL_NAME, value: {{ .repository.fullName | quote }} }
                 - { name: BUG_FINDER_DEFAULT_BRANCH, value: {{ .repository.defaultBranch | quote }} }
-                - { name: BUG_FINDER_AGENTBAY_TOKEN_FILE, value: /var/run/agentbay/runtime/AGENTBAY_ADMIN_TOKEN }
-                - { name: BUG_FINDER_GITHUB_APP_ID_FILE, value: /var/run/agentbay/github-app/app-id }
-                - { name: BUG_FINDER_GITHUB_INSTALLATION_ID_FILE, value: /var/run/agentbay/github-app/installation-id }
-                - { name: BUG_FINDER_GITHUB_PRIVATE_KEY_FILE, value: /var/run/agentbay/github-app/private-key.pem }
+                - { name: BUG_FINDER_DISPATCH_TOKEN_FILE, value: /var/run/dispatch/runtime/DISPATCH_ADMIN_TOKEN }
+                - { name: BUG_FINDER_GITHUB_APP_ID_FILE, value: /var/run/dispatch/github-app/app-id }
+                - { name: BUG_FINDER_GITHUB_INSTALLATION_ID_FILE, value: /var/run/dispatch/github-app/installation-id }
+                - { name: BUG_FINDER_GITHUB_PRIVATE_KEY_FILE, value: /var/run/dispatch/github-app/private-key.pem }
               volumeMounts:
-                - { name: runtime, mountPath: /var/run/agentbay/runtime, readOnly: true }
-                - { name: github-app, mountPath: /var/run/agentbay/github-app, readOnly: true }
+                - { name: runtime, mountPath: /var/run/dispatch/runtime, readOnly: true }
+                - { name: github-app, mountPath: /var/run/dispatch/github-app, readOnly: true }
               securityContext:
                 allowPrivilegeEscalation: false
                 capabilities: { drop: ["ALL"] }
@@ -65,9 +65,9 @@ spec:
           volumes:
             - name: runtime
               secret:
-                secretName: {{ include "agentbay.secretName" $ | quote }}
+                secretName: {{ include "dispatch.secretName" $ | quote }}
                 items:
-                  - { key: AGENTBAY_ADMIN_TOKEN, path: AGENTBAY_ADMIN_TOKEN }
+                  - { key: DISPATCH_ADMIN_TOKEN, path: DISPATCH_ADMIN_TOKEN }
             - name: github-app
               secret:
                 secretName: {{ required "bugFinderCron.githubCredentialsSecret is required when bugFinderCron.enabled=true" .githubCredentialsSecret | quote }}

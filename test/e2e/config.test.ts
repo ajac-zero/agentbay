@@ -7,11 +7,11 @@ describe("loadConfig", () => {
   });
 
   it("allows deprecated alpha agent-sandbox API compatibility", () => {
-    expect(loadConfig({ AGENTBAY_SANDBOX_CLAIM_API_VERSION: "v1alpha1" }).sandboxClaimApiVersion).toBe("v1alpha1");
+    expect(loadConfig({ DISPATCH_SANDBOX_CLAIM_API_VERSION: "v1alpha1" }).sandboxClaimApiVersion).toBe("v1alpha1");
   });
 
   it("rejects unsupported agent-sandbox API versions", () => {
-    expect(() => loadConfig({ AGENTBAY_SANDBOX_CLAIM_API_VERSION: "v2" })).toThrow(/v1alpha1 or v1beta1/);
+    expect(() => loadConfig({ DISPATCH_SANDBOX_CLAIM_API_VERSION: "v2" })).toThrow(/v1alpha1 or v1beta1/);
   });
 
   it("provides execution maintenance defaults", () => {
@@ -28,19 +28,19 @@ describe("loadConfig", () => {
     ["PORT", "-1"],
     ["PORT", "1.5"],
     ["PORT", "65536"],
-    ["AGENTBAY_METRICS_PORT", "-1"],
-    ["AGENTBAY_METRICS_PORT", "1.5"],
-    ["AGENTBAY_METRICS_PORT", "65536"],
-    ["AGENTBAY_OPENCODE_PORT", "-1"],
-    ["AGENTBAY_OPENCODE_PORT", "1.5"],
-    ["AGENTBAY_OPENCODE_PORT", "65536"],
+    ["DISPATCH_METRICS_PORT", "-1"],
+    ["DISPATCH_METRICS_PORT", "1.5"],
+    ["DISPATCH_METRICS_PORT", "65536"],
+    ["DISPATCH_OPENCODE_PORT", "-1"],
+    ["DISPATCH_OPENCODE_PORT", "1.5"],
+    ["DISPATCH_OPENCODE_PORT", "65536"],
   ])("rejects invalid TCP port %s=%s", (name, value) => {
     expect(() => loadConfig({ [name]: value })).toThrow(/port|integer/i);
   });
 
   it("allows ephemeral listener ports but requires a concrete OpenCode port", () => {
-    expect(loadConfig({ PORT: "0", AGENTBAY_METRICS_PORT: "0" })).toMatchObject({ port: 0, metricsPort: 0 });
-    expect(() => loadConfig({ AGENTBAY_OPENCODE_PORT: "0" })).toThrow(/port/i);
+    expect(loadConfig({ PORT: "0", DISPATCH_METRICS_PORT: "0" })).toMatchObject({ port: 0, metricsPort: 0 });
+    expect(() => loadConfig({ DISPATCH_OPENCODE_PORT: "0" })).toThrow(/port/i);
   });
 
   it("provides dispatcher defaults", () => {
@@ -63,11 +63,11 @@ describe("loadConfig", () => {
       revisionResolverRetryDelayMs: 30_000,
       revisionResolverWorkerId: "worker-1",
     });
-    expect(() => loadConfig({ AGENTBAY_REVISION_RESOLVER_ENABLED: "true" })).toThrow(/APP_ID_FILE/);
+    expect(() => loadConfig({ DISPATCH_REVISION_RESOLVER_ENABLED: "true" })).toThrow(/APP_ID_FILE/);
     expect(loadConfig({
-      AGENTBAY_REVISION_RESOLVER_ENABLED: "true",
-      AGENTBAY_GITHUB_APP_ID_FILE: "/app-id",
-      AGENTBAY_GITHUB_PRIVATE_KEY_FILE: "/private-key",
+      DISPATCH_REVISION_RESOLVER_ENABLED: "true",
+      DISPATCH_GITHUB_APP_ID_FILE: "/app-id",
+      DISPATCH_GITHUB_PRIVATE_KEY_FILE: "/private-key",
     })).toMatchObject({
       revisionResolverEnabled: true,
       githubAppIdFile: "/app-id",
@@ -83,11 +83,11 @@ describe("loadConfig", () => {
       githubIssueAcknowledgmentRequestTimeoutMs: 30_000,
       githubIssueAcknowledgmentRetryDelayMs: 5_000,
     });
-    expect(() => loadConfig({ AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED: "true" })).toThrow(/APP_ID_FILE/);
+    expect(() => loadConfig({ DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED: "true" })).toThrow(/APP_ID_FILE/);
     expect(loadConfig({
-      AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED: "true",
-      AGENTBAY_GITHUB_APP_ID_FILE: "/app-id",
-      AGENTBAY_GITHUB_PRIVATE_KEY_FILE: "/private-key",
+      DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED: "true",
+      DISPATCH_GITHUB_APP_ID_FILE: "/app-id",
+      DISPATCH_GITHUB_PRIVATE_KEY_FILE: "/private-key",
     })).toMatchObject({ githubIssueAcknowledgmentEnabled: true });
   });
 
@@ -105,32 +105,32 @@ describe("loadConfig", () => {
 
   it("requires dispatcher renewal before lease expiry", () => {
     expect(() => loadConfig({
-      AGENTBAY_DISPATCHER_LEASE_DURATION_MS: "1000",
-      AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS: "1000",
+      DISPATCH_DISPATCHER_LEASE_DURATION_MS: "1000",
+      DISPATCH_DISPATCHER_RENEW_INTERVAL_MS: "1000",
     })).toThrow(/must be less/);
   });
 
   it("requires revision requests to finish before lease expiry", () => {
     expect(() => loadConfig({
-      AGENTBAY_REVISION_RESOLVER_LEASE_DURATION_MS: "1000",
-      AGENTBAY_REVISION_RESOLVER_REQUEST_TIMEOUT_MS: "1000",
+      DISPATCH_REVISION_RESOLVER_LEASE_DURATION_MS: "1000",
+      DISPATCH_REVISION_RESOLVER_REQUEST_TIMEOUT_MS: "1000",
     })).toThrow(/must be less/);
   });
 
   it("requires issue acknowledgment requests to finish before lease expiry", () => {
     expect(() => loadConfig({
-      AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS: "1000",
-      AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS: "1000",
+      DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS: "1000",
+      DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS: "1000",
     })).toThrow(/must be less/);
   });
 
   it("reads execution maintenance overrides", () => {
     expect(loadConfig({
-      AGENTBAY_EXECUTION_MAINTENANCE_BATCH_SIZE: "20",
-      AGENTBAY_EXECUTION_MAINTENANCE_ENABLED: "false",
-      AGENTBAY_EXECUTION_MAINTENANCE_INTERVAL_MS: "1000",
-      AGENTBAY_EXECUTION_MAX_ATTEMPTS: "5",
-      AGENTBAY_EXECUTION_RETRY_DELAY_MS: "0",
+      DISPATCH_EXECUTION_MAINTENANCE_BATCH_SIZE: "20",
+      DISPATCH_EXECUTION_MAINTENANCE_ENABLED: "false",
+      DISPATCH_EXECUTION_MAINTENANCE_INTERVAL_MS: "1000",
+      DISPATCH_EXECUTION_MAX_ATTEMPTS: "5",
+      DISPATCH_EXECUTION_RETRY_DELAY_MS: "0",
     })).toMatchObject({
       executionMaintenanceBatchSize: 20,
       executionMaintenanceEnabled: false,
@@ -141,17 +141,17 @@ describe("loadConfig", () => {
   });
 
   it.each([
-    ["AGENTBAY_EXECUTION_MAINTENANCE_BATCH_SIZE", "0"],
-    ["AGENTBAY_EXECUTION_MAINTENANCE_INTERVAL_MS", "-1"],
-    ["AGENTBAY_EXECUTION_MAINTENANCE_INTERVAL_MS", "2147483648"],
-    ["AGENTBAY_EXECUTION_MAX_ATTEMPTS", "1.5"],
-    ["AGENTBAY_EXECUTION_RETRY_DELAY_MS", "-1"],
-    ["AGENTBAY_EXECUTION_RETRY_DELAY_MS", "Infinity"],
+    ["DISPATCH_EXECUTION_MAINTENANCE_BATCH_SIZE", "0"],
+    ["DISPATCH_EXECUTION_MAINTENANCE_INTERVAL_MS", "-1"],
+    ["DISPATCH_EXECUTION_MAINTENANCE_INTERVAL_MS", "2147483648"],
+    ["DISPATCH_EXECUTION_MAX_ATTEMPTS", "1.5"],
+    ["DISPATCH_EXECUTION_RETRY_DELAY_MS", "-1"],
+    ["DISPATCH_EXECUTION_RETRY_DELAY_MS", "Infinity"],
   ])("rejects invalid execution maintenance setting %s=%s", (name, value) => {
     expect(() => loadConfig({ [name]: value })).toThrow(/integer|timer delay/);
   });
 
   it("rejects an invalid execution maintenance boolean", () => {
-    expect(() => loadConfig({ AGENTBAY_EXECUTION_MAINTENANCE_ENABLED: "treu" })).toThrow(/true or false/);
+    expect(() => loadConfig({ DISPATCH_EXECUTION_MAINTENANCE_ENABLED: "treu" })).toThrow(/true or false/);
   });
 });

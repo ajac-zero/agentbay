@@ -7,7 +7,7 @@ import { createOpenApiApp } from "../../src/openapi.js";
 import { createPostgresRuntimeStore, type PostgresRuntimeStore } from "../../src/runtime/postgres.js";
 
 const { Pool } = pg;
-const SECRET_ENV = "AGENTBAY_GITHUB_WEBHOOK_SECRET_PERSISTENCE_TEST";
+const SECRET_ENV = "DISPATCH_GITHUB_WEBHOOK_SECRET_PERSISTENCE_TEST";
 const SECRET = "a sufficiently long persistence webhook secret";
 const TRIGGER_ID = "github-persistence";
 
@@ -86,7 +86,7 @@ describe("GitHub webhook persistence", () => {
     expect(await store.getProfileVersion("default", "github-reviewer", 1)).toEqual(profileVersion);
     expect(await store.getTrigger("default", TRIGGER_ID)).toEqual(trigger);
     const persistedTrigger = (await pool.query(
-      "select config, config::text as config_text from agentbay_triggers where tenant_id = $1 and id = $2",
+      "select config, config::text as config_text from dispatch_triggers where tenant_id = $1 and id = $2",
       ["default", TRIGGER_ID],
     )).rows[0];
     expect(persistedTrigger.config).toEqual({ schemaVersion: 1, webhookSecretEnv: SECRET_ENV });
@@ -141,7 +141,7 @@ describe("GitHub webhook persistence", () => {
 
   async function persistedAdmission() {
     const events = (await pool.query(
-      "select id, event_id, source, type, admission_hash, extensions from agentbay_events where tenant_id = $1 and trigger_id = $2 order by id",
+      "select id, event_id, source, type, admission_hash, extensions from dispatch_events where tenant_id = $1 and trigger_id = $2 order by id",
       ["default", TRIGGER_ID],
     )).rows as Array<{
       admission_hash: string;
@@ -153,8 +153,8 @@ describe("GitHub webhook persistence", () => {
     }>;
     const executions = (await pool.query(
       `select execution.id, execution.event_id, execution.state, execution.workspace
-       from agentbay_executions as execution
-       join agentbay_events as event on event.id = execution.event_id and event.tenant_id = execution.tenant_id
+       from dispatch_executions as execution
+       join dispatch_events as event on event.id = execution.event_id and event.tenant_id = execution.tenant_id
        where event.tenant_id = $1 and event.trigger_id = $2 order by execution.id`,
       ["default", TRIGGER_ID],
     )).rows as Array<{ event_id: string; id: string; state: string; workspace: Record<string, unknown> }>;
@@ -228,15 +228,15 @@ function pullRequestPayload(overrides: { title?: string } = {}) {
 async function startPostgres(): Promise<StartedTestContainer> {
   return new GenericContainer("postgres:16-alpine")
     .withEnvironment({
-      POSTGRES_DB: "agentbay",
-      POSTGRES_PASSWORD: "agentbay-password",
-      POSTGRES_USER: "agentbay",
+      POSTGRES_DB: "dispatch",
+      POSTGRES_PASSWORD: "dispatch-password",
+      POSTGRES_USER: "dispatch",
     })
     .withExposedPorts(5432)
     .withHealthCheck({
       interval: 1_000,
       retries: 30,
-      test: ["CMD-SHELL", "pg_isready -U agentbay -d agentbay"],
+      test: ["CMD-SHELL", "pg_isready -U dispatch -d dispatch"],
       timeout: 5_000,
     })
     .withWaitStrategy(Wait.forHealthCheck())
@@ -244,5 +244,5 @@ async function startPostgres(): Promise<StartedTestContainer> {
 }
 
 function postgresConnectionString(container: StartedTestContainer): string {
-  return `postgresql://agentbay:agentbay-password@${container.getHost()}:${container.getMappedPort(5432)}/agentbay`;
+  return `postgresql://dispatch:dispatch-password@${container.getHost()}:${container.getMappedPort(5432)}/dispatch`;
 }

@@ -130,7 +130,7 @@ describe("normalizeGitHubEvent", () => {
     const event = normalizeGitHubEvent(input({
       ...common,
       action: "created",
-      issue: { ...issue, labels: [{ name: "agentbay/state:ready" }, { name: "agentbay/difficulty:hard" }] },
+      issue: { ...issue, labels: [{ name: "dispatch/state:ready" }, { name: "dispatch/difficulty:hard" }] },
       comment: {
         id: 91,
         body: "Please continue",
@@ -144,7 +144,7 @@ describe("normalizeGitHubEvent", () => {
       type: "com.github.issue_comment.created",
       subject: "issues/7",
       data: {
-        issue: { labels: ["agentbay/difficulty:hard", "agentbay/state:ready"] },
+        issue: { labels: ["dispatch/difficulty:hard", "dispatch/state:ready"] },
         comment: { id: 91, body: "Please continue", bodyTruncated: false, user: { login: "maintainer" } },
       },
     });
@@ -178,7 +178,7 @@ describe("normalizeGitHubEvent", () => {
       subject: "pulls/7",
       data: { review: { id: 92, state: "changes_requested", commitSha: "a".repeat(40) } },
     });
-    expect(review).not.toHaveProperty("data.review.agentbayVerdict");
+    expect(review).not.toHaveProperty("data.review.dispatchVerdict");
 
     expect(normalizeGitHubEvent(input({
       ...common,
@@ -203,7 +203,7 @@ describe("normalizeGitHubEvent", () => {
       pull_request: reviewPullRequest,
       review: {
         id: 94,
-        body: "Agentbay-Verdict: approved\n\nNo issues found.",
+        body: "Dispatch-Verdict: approved\n\nNo issues found.",
         user: actor(9, "factory[bot]"),
         state: "commented",
         commit_id: "a".repeat(40),
@@ -213,25 +213,25 @@ describe("normalizeGitHubEvent", () => {
     expect(normalizeGitHubEvent(input(appReviewPayload, "pull_request_review"))).toMatchObject({
       data: {
         pullRequest: { merged: false },
-        review: { state: "commented", agentbayVerdict: "approved" },
+        review: { state: "commented", dispatchVerdict: "approved" },
       },
     });
     expect(normalizeGitHubEvent(input({
       ...appReviewPayload,
-      review: { ...appReviewPayload.review, body: "Summary\nAgentbay-Verdict: changes_requested" },
-    }, "pull_request_review"))).not.toHaveProperty("data.review.agentbayVerdict");
+      review: { ...appReviewPayload.review, body: "Summary\nDispatch-Verdict: changes_requested" },
+    }, "pull_request_review"))).not.toHaveProperty("data.review.dispatchVerdict");
 
     expect(normalizeGitHubEvent(input({
       ...appReviewPayload,
-      review: { ...appReviewPayload.review, id: 95, body: "Agentbay-Verdict: APPROVED\n\nLGTM." },
+      review: { ...appReviewPayload.review, id: 95, body: "Dispatch-Verdict: APPROVED\n\nLGTM." },
     }, "pull_request_review"))).toMatchObject({
-      data: { review: { agentbayVerdict: "approved" } },
+      data: { review: { dispatchVerdict: "approved" } },
     });
     expect(normalizeGitHubEvent(input({
       ...appReviewPayload,
-      review: { ...appReviewPayload.review, id: 96, body: "Agentbay-Verdict:Changes_Requested\n" },
+      review: { ...appReviewPayload.review, id: 96, body: "Dispatch-Verdict:Changes_Requested\n" },
     }, "pull_request_review"))).toMatchObject({
-      data: { review: { agentbayVerdict: "changes_requested" } },
+      data: { review: { dispatchVerdict: "changes_requested" } },
     });
 
     const comment = normalizeGitHubEvent(input({

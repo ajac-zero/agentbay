@@ -111,7 +111,7 @@ describe("OpenAPI docs", () => {
     const response = await createTestApp().request("/healthz");
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, service: "agentbay" });
+    await expect(response.json()).resolves.toEqual({ ok: true, service: "dispatch" });
   });
 
   it("serves Prometheus metrics without adding the endpoint to OpenAPI", async () => {

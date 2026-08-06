@@ -62,7 +62,7 @@ describe("execution persistence", () => {
     expect(await store.getBindingVersion("default", "review", 1)).toMatchObject({
       enabled: true, profile: { id: "coder", version: 1 }, triggerId: "webhook",
     });
-    expect(await store.listBindingCandidates("default", "webhook", "dev.agentbay.review.requested")).toHaveLength(1);
+    expect(await store.listBindingCandidates("default", "webhook", "dev.dispatch.review.requested")).toHaveLength(1);
     const command = admissionCommand(createdAt);
     const first = await store.admitEvent(command);
     const replay = await store.admitEvent(command);
@@ -73,7 +73,7 @@ describe("execution persistence", () => {
     expect(await store.getExecution("default", execution.id)).toEqual(execution);
 
     const executionIdentity = (await pool.query(
-      "select id, idempotency_key from agentbay_executions where id = $1",
+      "select id, idempotency_key from dispatch_executions where id = $1",
       [execution.id],
     )).rows[0];
     expect(executionIdentity).toEqual({
@@ -83,7 +83,7 @@ describe("execution persistence", () => {
     expect(execution.id).not.toBe(executionIdentity.idempotency_key);
 
     const transitions = await pool.query(
-      "select sequence, from_state, to_state from agentbay_execution_transitions where execution_id = $1 order by sequence",
+      "select sequence, from_state, to_state from dispatch_execution_transitions where execution_id = $1 order by sequence",
       [execution.id],
     );
     expect(transitions.rows).toEqual([
@@ -93,7 +93,7 @@ describe("execution persistence", () => {
     ]);
 
     const outbox = await pool.query(
-      "select topic, aggregate_type, aggregate_id, payload, publish_attempts, published_at from agentbay_outbox where aggregate_id = $1",
+      "select topic, aggregate_type, aggregate_id, payload, publish_attempts, published_at from dispatch_outbox where aggregate_id = $1",
       [execution.id],
     );
     expect(outbox.rows).toEqual([
@@ -106,7 +106,7 @@ describe("execution persistence", () => {
         topic: "execution.requested",
       },
     ]);
-    expect((await pool.query("select count(*)::int as count from agentbay_events")).rows[0]).toEqual({ count: 1 });
+    expect((await pool.query("select count(*)::int as count from dispatch_events")).rows[0]).toEqual({ count: 1 });
 
     const snapshot = await store.collectObservabilitySnapshot();
     expect(snapshot.rows).toEqual(expect.arrayContaining([
@@ -117,7 +117,7 @@ describe("execution persistence", () => {
   });
 
   it("withholds execution claims until the issue acknowledgment is published", async () => {
-    await pool.query("update agentbay_executions set state = 'CANCELLED' where state = 'QUEUED'");
+    await pool.query("update dispatch_executions set state = 'CANCELLED' where state = 'QUEUED'");
     const command = {
       ...freshAdmissionCommand(),
       githubIssueAcknowledgment: {
@@ -149,7 +149,7 @@ describe("execution persistence", () => {
   });
 
   it("rejects conflicting event replay without rematching", async () => {
-    const before = (await pool.query("select count(*)::int as count from agentbay_events")).rows[0].count as number;
+    const before = (await pool.query("select count(*)::int as count from dispatch_events")).rows[0].count as number;
     const original = admissionCommand(new Date().toISOString());
     const conflicting = withAdmissionHash({
       ...original,
@@ -158,13 +158,13 @@ describe("execution persistence", () => {
 
     await expect(store.admitEvent(conflicting)).rejects.toBeInstanceOf(IdempotencyConflictError);
 
-    expect((await pool.query("select count(*)::int as count from agentbay_events")).rows[0]).toEqual({ count: before });
+    expect((await pool.query("select count(*)::int as count from dispatch_events")).rows[0]).toEqual({ count: before });
   });
 
   it("rejects an invalid admission hash before starting persistence", async () => {
     const command = freshAdmissionCommand();
     await expect(store.admitEvent({ ...command, admissionHash: "caller-controlled" })).rejects.toBeInstanceOf(IdempotencyConflictError);
-    expect((await pool.query("select count(*)::int as count from agentbay_events where id = $1", [command.internalEventId])).rows[0]).toEqual({ count: 0 });
+    expect((await pool.query("select count(*)::int as count from dispatch_events where id = $1", [command.internalEventId])).rows[0]).toEqual({ count: 0 });
   });
 
   it.each([
@@ -178,7 +178,7 @@ describe("execution persistence", () => {
   ])("rejects malformed persisted execution workspaces on API reads", async (workspace) => {
     const admitted = await store.admitEvent(freshAdmissionCommand());
     const execution = admitted.executions[0]!;
-    await pool.query("update agentbay_execution_inputs set workspace = $1 where execution_id = $2 and sequence = 1", [workspace, execution.id]);
+    await pool.query("update dispatch_execution_inputs set workspace = $1 where execution_id = $2 and sequence = 1", [workspace, execution.id]);
 
     await expect(store.getExecution("default", execution.id)).rejects.toBeInstanceOf(PersistedExecutionCorruptionError);
   });
@@ -196,7 +196,7 @@ describe("execution persistence", () => {
 
     expect([first.replayed, second.replayed].sort()).toEqual([false, true]);
     expect(first.executions).toEqual(second.executions);
-    expect((await pool.query("select count(*)::int as count from agentbay_events where id = $1", [command.internalEventId])).rows[0]).toEqual({ count: 1 });
+    expect((await pool.query("select count(*)::int as count from dispatch_events where id = $1", [command.internalEventId])).rows[0]).toEqual({ count: 1 });
   });
 
   it("admits distinct singleton events without creating concurrent executions", async () => {
@@ -214,7 +214,7 @@ describe("execution persistence", () => {
       createdAt,
       definition: {
         schemaVersion: 1,
-        eventTypes: ["dev.agentbay.issue.ready"],
+        eventTypes: ["dev.dispatch.issue.ready"],
         filter: { all: [] },
         activeSingleton: { name: "developer-issue", key: ["/repository/id", "/issue/number"] },
         prompt: { literal: "Develop this issue", includeEvent: "data" },
@@ -235,7 +235,7 @@ describe("execution persistence", () => {
           specversion: "1.0" as const,
           id: eventId,
           source: "/test/issues",
-          type: "dev.agentbay.issue.ready",
+          type: "dev.dispatch.issue.ready",
           datacontenttype: "application/json",
           data: { repository: { id: 42 }, issue: { number: issue } },
         },
@@ -255,10 +255,10 @@ describe("execution persistence", () => {
     expect([first.executions.length, second.executions.length].sort()).toEqual([0, 1]);
     expect((await store.admitEvent(suppressed)).executions).toEqual([]);
     expect((await pool.query(
-      "select count(*)::int as count from agentbay_executions where active_singleton_name = 'developer-issue' and state not in ('SUCCEEDED','COMPLETED','CANCELLED','TIMED_OUT','FAILED','DEAD_LETTERED')",
+      "select count(*)::int as count from dispatch_executions where active_singleton_name = 'developer-issue' and state not in ('SUCCEEDED','COMPLETED','CANCELLED','TIMED_OUT','FAILED','DEAD_LETTERED')",
     )).rows[0]).toEqual({ count: 1 });
 
-    await pool.query("update agentbay_executions set state = 'SUCCEEDED' where id = $1", [owner[0]!.id]);
+    await pool.query("update dispatch_executions set state = 'SUCCEEDED' where id = $1", [owner[0]!.id]);
     expect((await store.admitEvent(suppressed)).executions).toEqual([]);
     const replacement = await store.admitEvent(singletonCommand(7));
     const otherIssue = await store.admitEvent(singletonCommand(8));
@@ -355,7 +355,7 @@ describe("execution persistence", () => {
   });
 
   it("claims available outbox messages without overlapping concurrent publishers", async () => {
-    await pool.query("delete from agentbay_outbox");
+    await pool.query("delete from dispatch_outbox");
     const ready = await Promise.all(Array.from({ length: 4 }, () => insertOutbox(pool)));
     await insertOutbox(pool, { available: false });
 
@@ -370,12 +370,12 @@ describe("execution persistence", () => {
     expect(new Set(claimed.map((entry) => entry.id))).toEqual(new Set(ready));
     expect(new Set(claimed.map((entry) => entry.claimToken))).toEqual(new Set(["publisher-a", "publisher-b"]));
     expect((await pool.query(
-      "select count(*)::int as count from agentbay_outbox where publish_attempts = 1 and lease_expires_at > now()",
+      "select count(*)::int as count from dispatch_outbox where publish_attempts = 1 and lease_expires_at > now()",
     )).rows[0]).toEqual({ count: 4 });
   });
 
   it("publishes and retries outbox messages through fenced leases", async () => {
-    await pool.query("delete from agentbay_outbox");
+    await pool.query("delete from dispatch_outbox");
     const publishedID = await insertOutbox(pool);
     const [published] = await store.claimAvailable({ claimToken: "publisher-success", limit: 1, leaseDurationMs: 60_000 });
     if (!published) throw new Error("Expected outbox message to be claimed");
@@ -395,17 +395,17 @@ describe("execution persistence", () => {
     })).toBe(true);
     expect(await store.claimAvailable({ claimToken: "publisher-early", limit: 1, leaseDurationMs: 60_000 })).toEqual([]);
 
-    await pool.query("update agentbay_outbox set available_at = now() - interval '1 second' where id = $1", [failedID]);
+    await pool.query("update dispatch_outbox set available_at = now() - interval '1 second' where id = $1", [failedID]);
     const [retried] = await store.claimAvailable({ claimToken: "publisher-retry", limit: 1, leaseDurationMs: 60_000 });
     expect(retried).toMatchObject({ id: failedID, claimToken: "publisher-retry", publishAttempts: 2 });
   });
 
   it("reclaims expired outbox leases and rejects stale publishers", async () => {
-    await pool.query("delete from agentbay_outbox");
+    await pool.query("delete from dispatch_outbox");
     const id = await insertOutbox(pool);
     const [stale] = await store.claimAvailable({ claimToken: "publisher-stale", limit: 1, leaseDurationMs: 60_000 });
     if (!stale) throw new Error("Expected outbox message to be claimed");
-    await pool.query("update agentbay_outbox set lease_expires_at = now() - interval '1 second' where id = $1", [id]);
+    await pool.query("update dispatch_outbox set lease_expires_at = now() - interval '1 second' where id = $1", [id]);
 
     const [current] = await store.claimAvailable({ claimToken: "publisher-current", limit: 1, leaseDurationMs: 60_000 });
     if (!current) throw new Error("Expected expired outbox message to be reclaimed");
@@ -426,7 +426,7 @@ function admissionCommand(createdAt: string) {
       source: "/test/events",
       specversion: "1.0" as const,
       time: createdAt,
-      type: "dev.agentbay.review.requested",
+      type: "dev.dispatch.review.requested",
     },
     internalEventId: "internal-event-1",
     sourceDeduplicationKey: "delivery-1",
@@ -462,7 +462,7 @@ async function setupTriggerAndBinding(store: PostgresRuntimeStore, profileVersio
   await store.publishBindingVersion({
     bindingId: "review", createdAt,
     definition: {
-      eventTypes: ["dev.agentbay.review.requested"], filter: { all: [{ op: "eq", path: "/action", value: "review" }] },
+      eventTypes: ["dev.dispatch.review.requested"], filter: { all: [{ op: "eq", path: "/action", value: "review" }] },
       prompt: { includeEvent: "data", literal: "Review this" }, schemaVersion: 1, workspace: { type: "empty" },
     },
     disabledAt: null, enabled: true, id: "review-v1", profile: { id: "coder", version: 1 },
@@ -475,7 +475,7 @@ async function insertOutbox(pool: pg.Pool, options: { available?: boolean } = {}
   const id = randomUUID();
   const aggregateID = randomUUID();
   await pool.query(`
-    insert into agentbay_outbox (
+    insert into dispatch_outbox (
       id, tenant_id, topic, aggregate_type, aggregate_id, payload, headers, available_at, created_at
     ) values ($1, 'default', 'execution.requested', 'execution', $2, $3, '{}',
       case when $4 then now() - interval '1 minute' else now() + interval '1 hour' end,
@@ -487,15 +487,15 @@ async function insertOutbox(pool: pg.Pool, options: { available?: boolean } = {}
 async function startPostgres(): Promise<StartedTestContainer> {
   return new GenericContainer("postgres:16-alpine")
     .withEnvironment({
-      POSTGRES_DB: "agentbay",
-      POSTGRES_PASSWORD: "agentbay-password",
-      POSTGRES_USER: "agentbay",
+      POSTGRES_DB: "dispatch",
+      POSTGRES_PASSWORD: "dispatch-password",
+      POSTGRES_USER: "dispatch",
     })
     .withExposedPorts(5432)
     .withHealthCheck({
       interval: 1_000,
       retries: 30,
-      test: ["CMD-SHELL", "pg_isready -U agentbay -d agentbay"],
+      test: ["CMD-SHELL", "pg_isready -U dispatch -d dispatch"],
       timeout: 5_000,
     })
     .withWaitStrategy(Wait.forHealthCheck())
@@ -503,5 +503,5 @@ async function startPostgres(): Promise<StartedTestContainer> {
 }
 
 function postgresConnectionString(container: StartedTestContainer): string {
-  return `postgresql://agentbay:agentbay-password@${container.getHost()}:${container.getMappedPort(5432)}/agentbay`;
+  return `postgresql://dispatch:dispatch-password@${container.getHost()}:${container.getMappedPort(5432)}/dispatch`;
 }

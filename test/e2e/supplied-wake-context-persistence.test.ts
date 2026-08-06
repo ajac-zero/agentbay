@@ -14,9 +14,9 @@ describe("supplied wake context persistence", () => {
 
   beforeAll(async () => {
     container = await new GenericContainer("postgres:17-alpine")
-      .withEnvironment({ POSTGRES_DB: "agentbay", POSTGRES_PASSWORD: "agentbay-password", POSTGRES_USER: "agentbay" })
+      .withEnvironment({ POSTGRES_DB: "dispatch", POSTGRES_PASSWORD: "dispatch-password", POSTGRES_USER: "dispatch" })
       .withExposedPorts(5432).withWaitStrategy(Wait.forLogMessage("database system is ready to accept connections", 2)).start();
-    const connectionString = `postgres://agentbay:agentbay-password@${container.getHost()}:${container.getMappedPort(5432)}/agentbay`;
+    const connectionString = `postgres://dispatch:dispatch-password@${container.getHost()}:${container.getMappedPort(5432)}/dispatch`;
     store = await createPostgresRuntimeStore({ connectionString, runMigrations: true, ssl: false, sslRejectUnauthorized: false });
     pool = new Pool({ connectionString });
     await store.createTrigger({ config: { schemaVersion: 1 }, createdAt: new Date().toISOString(), disabledAt: null, enabled: true, id: "events", tenantId: "default", type: "cloudevents.http" });
@@ -31,13 +31,13 @@ describe("supplied wake context persistence", () => {
   it("activates a pending-context wait after trusted slot binding", async () => {
     const executionId = await createDeveloper();
     const claimed = await runDeveloperToCompletion(executionId);
-    expect((await pool.query("select state from agentbay_event_waits where execution_id=$1", [executionId])).rows[0]).toEqual({ state: "PENDING_CONTEXT" });
+    expect((await pool.query("select state from dispatch_event_waits where execution_id=$1", [executionId])).rows[0]).toEqual({ state: "PENDING_CONTEXT" });
 
     await expect(store.bindExecutionWakeContextValue({
       authorityId: "effect-1", authorityType: "github.pull-request-effect", boundAt: new Date().toISOString(),
       executionId, slot: "primaryPullRequestNumber", tenantId: "default", value: 42, waitName: "developer-pr-lifecycle",
     })).resolves.toEqual({ correlation: { repositoryId: 7, pullRequestNumber: 42 }, ready: true });
-    expect((await pool.query("select state, correlation from agentbay_event_waits where execution_id=$1", [executionId])).rows[0]).toEqual({ state: "ACTIVE", correlation: { repositoryId: 7, pullRequestNumber: 42 } });
+    expect((await pool.query("select state, correlation from dispatch_event_waits where execution_id=$1", [executionId])).rows[0]).toEqual({ state: "ACTIVE", correlation: { repositoryId: 7, pullRequestNumber: 42 } });
     await expect(store.bindExecutionWakeContextValue({
       authorityId: "effect-1", authorityType: "github.pull-request-effect", boundAt: new Date().toISOString(),
       executionId, slot: "primaryPullRequestNumber", tenantId: "default", value: 42, waitName: "developer-pr-lifecycle",
@@ -57,13 +57,13 @@ describe("supplied wake context persistence", () => {
     });
     const admitted = await store.admitEvent(review);
     expect(admitted.pendingWakes).toEqual([]);
-    expect((await pool.query("select count(*)::int as count from agentbay_event_wake_offers where event_id=$1", [review.internalEventId])).rows[0]).toEqual({ count: 1 });
+    expect((await pool.query("select count(*)::int as count from dispatch_event_wake_offers where event_id=$1", [review.internalEventId])).rows[0]).toEqual({ count: 1 });
 
     await store.bindExecutionWakeContextValue({
       authorityId: "effect-51", authorityType: "github.pull-request-effect", boundAt: new Date().toISOString(),
       executionId, slot: "primaryPullRequestNumber", tenantId: "default", value: 51, waitName: "developer-pr-lifecycle",
     });
-    expect((await pool.query("select count(*)::int as count from agentbay_execution_pending_wakes where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 1 });
+    expect((await pool.query("select count(*)::int as count from dispatch_execution_pending_wakes where execution_id=$1", [executionId])).rows[0]).toEqual({ count: 1 });
     await runDeveloperToCompletion(executionId);
     expect(await store.getExecution("default", executionId)).toMatchObject({ state: "QUEUED", workspace: { revision: { commit: "b".repeat(40) } } });
     await store.requestExecutionCancellation({ actor: "test", executionId, reason: "cleanup", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID() });
@@ -80,18 +80,18 @@ describe("supplied wake context persistence", () => {
     await expect(store.registerGitHubPullRequestEffect({ baseRef: "main", executionId, fencingToken: claimed.lease.fencingToken, headRef: "feature", pullRequestTitle: "PR",
       registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo", repositoryId: 7, requestHash: hashCanonicalJson(request), tenantId: "default" }))
       .resolves.toMatchObject({ created: false, id: effect.id });
-    await pool.query("update agentbay_execution_attempts set lease_expires_at=now()-interval '1 second' where execution_id=$1", [executionId]);
+    await pool.query("update dispatch_execution_attempts set lease_expires_at=now()-interval '1 second' where execution_id=$1", [executionId]);
     await store.reportGitHubPullRequestEffect({ effectId: effect.id, executionId, fencingToken: claimed.lease.fencingToken,
       githubPullRequestId: "9001", pullRequestNumber: 61, pullRequestUrl: "https://github.com/acme/repo/pull/61", reportedAt: new Date().toISOString(), tenantId: "default" });
-    expect((await pool.query("select state from agentbay_github_pull_request_effects where id=$1", [effect.id])).rows[0]).toEqual({ state: "REPORTED" });
+    expect((await pool.query("select state from dispatch_github_pull_request_effects where id=$1", [effect.id])).rows[0]).toEqual({ state: "REPORTED" });
 
     await store.admitEvent(admissionCommand("com.github.pull_request.opened", {
       repository: { id: 7 }, pullRequest: { id: 9001, number: 61, title: "PR", head: { ref: "feature" }, base: { ref: "main" } },
     }));
     await store.reconcileGitHubPullRequestEffects("default");
 
-    expect((await pool.query("select state from agentbay_github_pull_request_effects where id=$1", [effect.id])).rows[0]).toEqual({ state: "CONFIRMED" });
-    expect((await pool.query("select correlation from agentbay_execution_wake_contexts where execution_id=$1", [executionId])).rows[0]).toEqual({ correlation: { repositoryId: 7, pullRequestNumber: 61 } });
+    expect((await pool.query("select state from dispatch_github_pull_request_effects where id=$1", [effect.id])).rows[0]).toEqual({ state: "CONFIRMED" });
+    expect((await pool.query("select correlation from dispatch_execution_wake_contexts where execution_id=$1", [executionId])).rows[0]).toEqual({ correlation: { repositoryId: 7, pullRequestNumber: 61 } });
     await store.requestExecutionCancellation({ actor: "test", executionId, reason: "cleanup", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID() });
   });
 
@@ -100,14 +100,14 @@ describe("supplied wake context persistence", () => {
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: `recovery-worker-${randomUUID()}`, leaseDurationMs: 60_000 });
     if (!claimed || claimed.executionId !== executionId) throw new Error("Expected developer claim");
     const effect = await store.registerGitHubPullRequestEffect({ baseRef: "main", executionId, fencingToken: claimed.lease.fencingToken,
-      headRef: "agentbay/issue-7", pullRequestTitle: "Fix issue 7", registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo",
-      repositoryId: 7, requestHash: hashCanonicalJson({ owner: "acme", repo: "repo", title: "Fix issue 7", head: "agentbay/issue-7", base: "main" }), tenantId: "default" });
+      headRef: "dispatch/issue-7", pullRequestTitle: "Fix issue 7", registeredAt: new Date().toISOString(), repositoryFullName: "acme/repo",
+      repositoryId: 7, requestHash: hashCanonicalJson({ owner: "acme", repo: "repo", title: "Fix issue 7", head: "dispatch/issue-7", base: "main" }), tenantId: "default" });
     await store.admitEvent(admissionCommand("com.github.pull_request.opened", {
-      repository: { id: 7 }, pullRequest: { id: 9010, number: 70, title: "Fix issue 7", head: { ref: "agentbay/issue-7" }, base: { ref: "main" } },
+      repository: { id: 7 }, pullRequest: { id: 9010, number: 70, title: "Fix issue 7", head: { ref: "dispatch/issue-7" }, base: { ref: "main" } },
     }));
     await store.reconcileGitHubPullRequestEffects("default", { repositoryId: 7, githubPullRequestId: "9010", pullRequestNumber: 70 });
-    expect((await pool.query("select state,pull_request_number from agentbay_github_pull_request_effects where id=$1", [effect.id])).rows[0]).toEqual({ state: "CONFIRMED", pull_request_number: 70 });
-    expect((await pool.query("select correlation from agentbay_execution_wake_contexts where execution_id=$1", [executionId])).rows[0].correlation.pullRequestNumber).toBe(70);
+    expect((await pool.query("select state,pull_request_number from dispatch_github_pull_request_effects where id=$1", [effect.id])).rows[0]).toEqual({ state: "CONFIRMED", pull_request_number: 70 });
+    expect((await pool.query("select correlation from dispatch_execution_wake_contexts where execution_id=$1", [executionId])).rows[0].correlation.pullRequestNumber).toBe(70);
     await store.requestExecutionCancellation({ actor: "test", executionId, reason: "cleanup", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID() });
   });
 

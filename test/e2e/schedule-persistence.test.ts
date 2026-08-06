@@ -10,12 +10,12 @@ describe("schedule persistence", () => {
 
   beforeAll(async () => {
     postgres = await new GenericContainer("postgres:16-alpine")
-      .withEnvironment({ POSTGRES_DB: "agentbay", POSTGRES_PASSWORD: "agentbay-password", POSTGRES_USER: "agentbay" })
+      .withEnvironment({ POSTGRES_DB: "dispatch", POSTGRES_PASSWORD: "dispatch-password", POSTGRES_USER: "dispatch" })
       .withExposedPorts(5432)
-      .withHealthCheck({ interval: 1_000, retries: 30, test: ["CMD-SHELL", "pg_isready -U agentbay -d agentbay"], timeout: 5_000 })
+      .withHealthCheck({ interval: 1_000, retries: 30, test: ["CMD-SHELL", "pg_isready -U dispatch -d dispatch"], timeout: 5_000 })
       .withWaitStrategy(Wait.forHealthCheck()).start();
     store = await createPostgresRuntimeStore({
-      connectionString: `postgresql://agentbay:agentbay-password@${postgres.getHost()}:${postgres.getMappedPort(5432)}/agentbay`,
+      connectionString: `postgresql://dispatch:dispatch-password@${postgres.getHost()}:${postgres.getMappedPort(5432)}/dispatch`,
       runMigrations: true, ssl: false, sslRejectUnauthorized: false,
     });
   });
@@ -34,7 +34,7 @@ describe("schedule persistence", () => {
         sandbox: { templateName: "opencode", warmPool: "none" }, connections: [], permissions: { onRequest: "fail" }, timeoutSeconds: 1800 } });
     await store.publishBindingVersion({ id: randomUUID(), bindingId: "hourly-bug-finder", version: 1, tenantId: "default", triggerId,
       profile: { id: "bug-finder", version: 1 }, enabled: true, createdAt, disabledAt: null,
-      definition: { schemaVersion: 1, eventTypes: ["dev.agentbay.schedule.triggered"], filter: { all: [] },
+      definition: { schemaVersion: 1, eventTypes: ["dev.dispatch.schedule.triggered"], filter: { all: [] },
         activeSingleton: { name: "scheduled-bug-finder", key: ["/repository/id"] },
         prompt: { literal: "Audit", includeEvent: "data" }, workspace: { type: "git",
           repository: { url: { path: "/repository/cloneUrl" } }, revision: { commit: { path: "/repository/defaultBranchRevision/commit" } } } } });

@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { claimNameForExecutionAttempt, claimNameForThread } from "../../src/sandbox/naming.js";
 
 describe("claimNameForThread", () => {
-  it("always prefixes the name with agentbay-", () => {
-    expect(claimNameForThread("thread-1")).toMatch(/^agentbay-/);
+  it("always prefixes the name with dispatch-", () => {
+    expect(claimNameForThread("thread-1")).toMatch(/^dispatch-/);
   });
 
-  it("produces a name with exactly 25 characters (agentbay- + 16 hex chars)", () => {
+  it("produces a name with exactly 25 characters (dispatch- + 16 hex chars)", () => {
     expect(claimNameForThread("any-thread-id")).toHaveLength(25);
   });
 
@@ -28,7 +28,7 @@ describe("claimNameForThread", () => {
   it("produces a stable known value for a fixed input", () => {
     // Pin a specific hash to catch accidental algorithm changes.
     // sha256("thread-1") first 16 hex chars: 4b0a5fefc328e6b9
-    expect(claimNameForThread("thread-1")).toBe("agentbay-4b0a5fefc328e6b9");
+    expect(claimNameForThread("thread-1")).toBe("dispatch-4b0a5fefc328e6b9");
   });
 });
 

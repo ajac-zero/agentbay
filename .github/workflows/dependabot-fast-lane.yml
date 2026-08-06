@@ -119,5 +119,5 @@ jobs:
           [[ "$(jq -r .head.sha <<<"$pr")" == "$EXPECTED_HEAD" ]]
           gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
             -X POST --input - <<'JSON'
-          {"labels":["agentbay-review"]}
+          {"labels":["dispatch-review"]}
           JSON

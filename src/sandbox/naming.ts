@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 export function claimNameForThread(threadId: string): string {
   const hash = createHash("sha256").update(threadId).digest("hex").slice(0, 16);
-  return `agentbay-${hash}`;
+  return `dispatch-${hash}`;
 }
 
 export function claimNameForExecutionAttempt(executionId: string, attempt: number): string {
@@ -11,7 +11,7 @@ export function claimNameForExecutionAttempt(executionId: string, attempt: numbe
   const identity = `${executionId}\u0000${attempt}`;
   const hash = createHash("sha256").update(identity).digest("hex").slice(0, 16);
   const suffix = `-${attempt}-${hash}`;
-  const availableIdLength = 63 - "agentbay-".length - suffix.length;
+  const availableIdLength = 63 - "dispatch-".length - suffix.length;
   const safeExecutionId = executionId
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -19,5 +19,5 @@ export function claimNameForExecutionAttempt(executionId: string, attempt: numbe
     .slice(0, availableIdLength)
     .replace(/-+$/g, "") || "execution";
 
-  return `agentbay-${safeExecutionId}${suffix}`;
+  return `dispatch-${safeExecutionId}${suffix}`;
 }

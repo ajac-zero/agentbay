@@ -4,7 +4,7 @@ import { cronExpressionSchema } from "../schedule/cron.js";
 export const cloudEventsHttpTriggerConfigSchema = z.object({ schemaVersion: z.literal(1) }).strict();
 export const githubAppWebhookTriggerConfigSchema = z.object({
   schemaVersion: z.literal(1),
-  webhookSecretEnv: z.string().regex(/^AGENTBAY_GITHUB_WEBHOOK_SECRET_[A-Z0-9_]{1,96}$/),
+  webhookSecretEnv: z.string().regex(/^DISPATCH_GITHUB_WEBHOOK_SECRET_[A-Z0-9_]{1,96}$/),
 }).strict();
 export const scheduleCronTriggerConfigSchema = z.object({
   schemaVersion: z.literal(1),

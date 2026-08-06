@@ -1,7 +1,7 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "agentbay.name" -}}
+{{- define "dispatch.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
@@ -9,7 +9,7 @@ Expand the name of the chart.
 Create a fully qualified app name. Truncate to 63 chars because some
 Kubernetes name fields are limited to this.
 */}}
-{{- define "agentbay.fullname" -}}
+{{- define "dispatch.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
@@ -25,16 +25,16 @@ Kubernetes name fields are limited to this.
 {{/*
 Chart label suitable for the helm.sh/chart label.
 */}}
-{{- define "agentbay.chart" -}}
+{{- define "dispatch.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/*
 Common labels applied to every chart-managed resource.
 */}}
-{{- define "agentbay.labels" -}}
-helm.sh/chart: {{ include "agentbay.chart" . }}
-{{ include "agentbay.selectorLabels" . }}
+{{- define "dispatch.labels" -}}
+helm.sh/chart: {{ include "dispatch.chart" . }}
+{{ include "dispatch.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- with .Values.extraLabels }}
@@ -47,38 +47,38 @@ Selector labels for the orchestrator. The SandboxTemplate's NetworkPolicy
 selects orchestrator Pods using app.kubernetes.io/name, so we keep that
 value stable and explicit.
 */}}
-{{- define "agentbay.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "agentbay.name" . }}
+{{- define "dispatch.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "dispatch.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
 Name of the ServiceAccount used by the orchestrator.
 */}}
-{{- define "agentbay.serviceAccountName" -}}
+{{- define "dispatch.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
-{{- default (include "agentbay.fullname" .) .Values.serviceAccount.name -}}
+{{- default (include "dispatch.fullname" .) .Values.serviceAccount.name -}}
 {{- else -}}
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
-Name of the ServiceAccount used by the optional agentbay-authz Deployment.
+Name of the ServiceAccount used by the optional dispatch-authz Deployment.
 */}}
-{{- define "agentbay.aiGatewayAuthz.serviceAccountName" -}}
+{{- define "dispatch.aiGatewayAuthz.serviceAccountName" -}}
 {{- if .Values.aiGatewayAuthz.authz.serviceAccount.create -}}
-{{- default (printf "%s-authz" (include "agentbay.fullname" .)) .Values.aiGatewayAuthz.authz.serviceAccount.name | trunc 63 | trimSuffix "-" -}}
+{{- default (printf "%s-authz" (include "dispatch.fullname" .)) .Values.aiGatewayAuthz.authz.serviceAccount.name | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- default "default" .Values.aiGatewayAuthz.authz.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
-Selector labels for the optional agentbay-authz Deployment.
+Selector labels for the optional dispatch-authz Deployment.
 */}}
-{{- define "agentbay.aiGatewayAuthz.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "agentbay.name" . }}-authz
+{{- define "dispatch.aiGatewayAuthz.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "dispatch.name" . }}-authz
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: ai-gateway-authz
 {{- end -}}
@@ -86,14 +86,14 @@ app.kubernetes.io/component: ai-gateway-authz
 {{/*
 Name of the ServiceAccount used by sandbox Pods for projected gateway tokens.
 */}}
-{{- define "agentbay.aiGatewayAuthz.sandboxServiceAccountName" -}}
+{{- define "dispatch.aiGatewayAuthz.sandboxServiceAccountName" -}}
 {{- default "sandbox-runtime" .Values.aiGatewayAuthz.sandboxServiceAccount.name -}}
 {{- end -}}
 
 {{/*
 Namespace where SandboxClaims are created. Defaults to the release namespace.
 */}}
-{{- define "agentbay.claimsNamespace" -}}
+{{- define "dispatch.claimsNamespace" -}}
 {{- default .Release.Namespace .Values.claims.namespace -}}
 {{- end -}}
 
@@ -101,19 +101,19 @@ Namespace where SandboxClaims are created. Defaults to the release namespace.
 Name of the Secret read by the orchestrator. Either the chart-managed
 Secret or the user-provided existing Secret.
 */}}
-{{- define "agentbay.secretName" -}}
+{{- define "dispatch.secretName" -}}
 {{- if .Values.secrets.existingSecret -}}
 {{- .Values.secrets.existingSecret -}}
 {{- else -}}
-{{- include "agentbay.fullname" . -}}
+{{- include "dispatch.fullname" . -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
 Selector labels for the in-cluster Postgres Deployment.
 */}}
-{{- define "agentbay.postgres.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "agentbay.name" . }}-postgres
+{{- define "dispatch.postgres.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "dispatch.name" . }}-postgres
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: postgres
 {{- end -}}
@@ -121,8 +121,8 @@ app.kubernetes.io/component: postgres
 {{/*
 Name of the in-cluster Postgres Service and Secret.
 */}}
-{{- define "agentbay.postgres.fullname" -}}
-{{- printf "%s-postgres" (include "agentbay.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- define "dispatch.postgres.fullname" -}}
+{{- printf "%s-postgres" (include "dispatch.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/*
@@ -132,7 +132,7 @@ Resolve which Postgres URL strategy is active. Output is one of:
   "external-secret"   - use a key from an existing Secret
   "none"              - no chart-managed database URL
 */}}
-{{- define "agentbay.database.mode" -}}
+{{- define "dispatch.database.mode" -}}
 {{- if .Values.database.enabled -}}
 in-cluster
 {{- else if .Values.database.external.url -}}
@@ -147,34 +147,34 @@ none
 {{/*
 Database environment variables shared by the orchestrator and migration Job.
 */}}
-{{- define "agentbay.databaseEnv" -}}
-{{- $databaseMode := include "agentbay.database.mode" . -}}
+{{- define "dispatch.databaseEnv" -}}
+{{- $databaseMode := include "dispatch.database.mode" . -}}
 {{- if eq $databaseMode "in-cluster" }}
-- name: AGENTBAY_DATABASE_HOST
-  value: "{{ include "agentbay.postgres.fullname" . }}.{{ .Release.Namespace }}.svc"
-- name: AGENTBAY_DATABASE_PORT
+- name: DISPATCH_DATABASE_HOST
+  value: "{{ include "dispatch.postgres.fullname" . }}.{{ .Release.Namespace }}.svc"
+- name: DISPATCH_DATABASE_PORT
   value: "5432"
-- name: AGENTBAY_DATABASE_NAME
+- name: DISPATCH_DATABASE_NAME
   value: {{ .Values.database.auth.database | quote }}
-- name: AGENTBAY_DATABASE_USER
+- name: DISPATCH_DATABASE_USER
   value: {{ .Values.database.auth.username | quote }}
-- name: AGENTBAY_DATABASE_PASSWORD
+- name: DISPATCH_DATABASE_PASSWORD
   valueFrom:
     secretKeyRef:
-      name: {{ include "agentbay.postgres.fullname" . }}
+      name: {{ include "dispatch.postgres.fullname" . }}
       key: POSTGRES_PASSWORD
 {{- else if eq $databaseMode "external-url" }}
-- name: AGENTBAY_DATABASE_URL
+- name: DISPATCH_DATABASE_URL
   value: {{ .Values.database.external.url | quote }}
 {{- else if eq $databaseMode "external-secret" }}
-- name: AGENTBAY_DATABASE_URL
+- name: DISPATCH_DATABASE_URL
   valueFrom:
     secretKeyRef:
       name: {{ .Values.database.external.existingSecret }}
       key: {{ .Values.database.external.existingSecretKey }}
 {{- end }}
 {{- if .Values.database.ssl }}
-- name: AGENTBAY_DATABASE_SSL
+- name: DISPATCH_DATABASE_SSL
   value: "true"
 {{- end }}
 {{- end -}}
@@ -184,7 +184,7 @@ Default migration hook timing. External databases can migrate before install.
 Chart-managed Postgres migrations are rendered as a normal Job so the app can
 stay unready until the schema exists without deadlocking Helm post-install hooks.
 */}}
-{{- define "agentbay.migrations.hookEvents" -}}
+{{- define "dispatch.migrations.hookEvents" -}}
 {{- if .Values.migrations.hookEvents -}}
 {{- join "," .Values.migrations.hookEvents -}}
 {{- else if .Values.database.enabled -}}
@@ -198,12 +198,12 @@ Name for the migration Job. Hook Jobs can reuse a stable name because Helm
 deletes them before recreation; regular Jobs include the release revision so
 upgrades can create a new immutable Job spec.
 */}}
-{{- define "agentbay.migrations.jobName" -}}
-{{- $hookEvents := include "agentbay.migrations.hookEvents" . | trim -}}
+{{- define "dispatch.migrations.jobName" -}}
+{{- $hookEvents := include "dispatch.migrations.hookEvents" . | trim -}}
 {{- if $hookEvents -}}
-{{- printf "%s-migrate" (include "agentbay.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-migrate" (include "dispatch.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- $base := printf "%s-migrate" (include "agentbay.fullname" .) | trunc 50 | trimSuffix "-" -}}
+{{- $base := printf "%s-migrate" (include "dispatch.fullname" .) | trunc 50 | trimSuffix "-" -}}
 {{- printf "%s-%d" $base .Release.Revision | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
@@ -211,9 +211,9 @@ upgrades can create a new immutable Job spec.
 {{/*
 Name of the ServiceAccount used by the reconciler CronJob.
 */}}
-{{- define "agentbay.reconciler.serviceAccountName" -}}
+{{- define "dispatch.reconciler.serviceAccountName" -}}
 {{- if .Values.reconciler.serviceAccount.create -}}
-{{- default (printf "%s-reconciler" (include "agentbay.fullname" .)) .Values.reconciler.serviceAccount.name | trunc 63 | trimSuffix "-" -}}
+{{- default (printf "%s-reconciler" (include "dispatch.fullname" .)) .Values.reconciler.serviceAccount.name | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- default "default" .Values.reconciler.serviceAccount.name -}}
 {{- end -}}

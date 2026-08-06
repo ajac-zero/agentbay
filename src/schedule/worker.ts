@@ -29,8 +29,8 @@ export class ScheduleWorker {
       const event = {
         specversion: "1.0" as const,
         id: occurrence.id,
-        source: `urn:agentbay:schedule:${occurrence.triggerId}`,
-        type: "dev.agentbay.schedule.triggered",
+        source: `urn:dispatch:schedule:${occurrence.triggerId}`,
+        type: "dev.dispatch.schedule.triggered",
         subject: `schedules/${occurrence.triggerId}`,
         time: occurrence.scheduledAt,
         datacontenttype: "application/json" as const,

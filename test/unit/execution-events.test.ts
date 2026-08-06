@@ -60,7 +60,7 @@ describe("normalizedCloudEventSchema", () => {
     expect(normalizedCloudEventSchema.safeParse({ ...validEvent, ...extensions }).success).toBe(false);
   });
 
-  it.each(["tenantid", "agentbay"])("explicitly rejects the reserved %s extension", (name) => {
+  it.each(["tenantid", "dispatch"])("explicitly rejects the reserved %s extension", (name) => {
     const result = validateCloudEvent({ ...validEvent, [name]: "caller-supplied" });
     expect(result.valid).toBe(false);
     if (!result.valid) expect(result.issues).toContainEqual({ attribute: name, message: `${name} is a reserved extension` });

@@ -1,22 +1,22 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agentbay
+  name: dispatch
   namespace: agents
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: agentbay
+      app.kubernetes.io/name: dispatch
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: agentbay
+        app.kubernetes.io/name: dispatch
     spec:
-      serviceAccountName: agentbay
+      serviceAccountName: dispatch
       containers:
-        - name: agentbay
-          image: ghcr.io/example/agentbay:latest
+        - name: dispatch
+          image: ghcr.io/example/dispatch:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
@@ -24,21 +24,21 @@ spec:
           env:
             - name: PORT
               value: "3000"
-            - name: AGENTBAY_KUBE_NAMESPACE
+            - name: DISPATCH_KUBE_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: AGENTBAY_DATABASE_URL
+            - name: DISPATCH_DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: agentbay-secrets
+                  name: dispatch-secrets
                   key: database-url
-            - name: AGENTBAY_ADMIN_TOKEN
+            - name: DISPATCH_ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: agentbay-secrets
+                  name: dispatch-secrets
                   key: admin-token
-            - name: AGENTBAY_DISPATCHER_WORKER_ID
+            - name: DISPATCH_DISPATCHER_WORKER_ID
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
@@ -54,11 +54,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: agentbay
+  name: dispatch
   namespace: agents
 spec:
   selector:
-    app.kubernetes.io/name: agentbay
+    app.kubernetes.io/name: dispatch
   ports:
     - name: http
       port: 80

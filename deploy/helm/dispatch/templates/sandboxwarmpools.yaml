@@ -2,7 +2,7 @@
 {{- $root := . -}}
 {{- range .Values.sandboxWarmPools.pools }}
 {{- $p := . -}}
-{{- $ns := default (include "agentbay.claimsNamespace" $root) $p.namespace -}}
+{{- $ns := default (include "dispatch.claimsNamespace" $root) $p.namespace -}}
 ---
 apiVersion: extensions.agents.x-k8s.io/{{ $root.Values.claims.apiVersion }}
 kind: SandboxWarmPool
@@ -10,7 +10,7 @@ metadata:
   name: {{ required "sandboxWarmPools.pools[].name is required" $p.name }}
   namespace: {{ $ns }}
   labels:
-    {{- include "agentbay.labels" $root | nindent 4 }}
+    {{- include "dispatch.labels" $root | nindent 4 }}
     app.kubernetes.io/component: sandbox-warmpool
 spec:
   replicas: {{ if hasKey $p "replicas" }}{{ $p.replicas }}{{ else }}1{{ end }}

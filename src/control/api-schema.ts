@@ -10,7 +10,7 @@ const workspaceResolutionErrorSchema = z.object({
 const cloudEventsHttpTriggerConfigSchema = z.object({ schemaVersion: z.literal(1) }).strict();
 const githubAppWebhookTriggerConfigSchema = z.object({
   schemaVersion: z.literal(1),
-  webhookSecretEnv: z.string().regex(/^AGENTBAY_GITHUB_WEBHOOK_SECRET_[A-Z0-9_]{1,96}$/),
+  webhookSecretEnv: z.string().regex(/^DISPATCH_GITHUB_WEBHOOK_SECRET_[A-Z0-9_]{1,96}$/),
 }).strict();
 const triggerFields = {
   id: simpleIdSchema,

@@ -1,6 +1,6 @@
-# agentbay Helm chart
+# dispatch Helm chart
 
-Installs the agentbay execution API and its Kubernetes integration. The chart
+Installs the dispatch execution API and its Kubernetes integration. The chart
 includes the API Deployment and Service, PostgreSQL migration Job,
 SandboxClaim RBAC, execution maintenance, sandbox reconciler, optional
 in-cluster PostgreSQL, optional Ingress, optional `SandboxTemplate` and
@@ -26,9 +26,9 @@ has an independent lifecycle and upgrade cadence.
 ## Quick start
 
 ```bash
-helm install agentbay deploy/helm/agentbay \
+helm install dispatch deploy/helm/dispatch \
   --namespace agents --create-namespace \
-  --set image.repository=ghcr.io/your-org/agentbay \
+  --set image.repository=ghcr.io/your-org/dispatch \
   --set image.tag=latest
 ```
 
@@ -74,7 +74,7 @@ lease, and outbox state. Select a mode with `database.*`:
 |---|---|---|
 | In-cluster PostgreSQL | `database.enabled=true` | Default, intended for development and small installs. Enable `database.persistence.enabled` to retain data across Pod replacement. |
 | External URL | `database.enabled=false` and `database.external.url=postgres://...` | Renders the URL directly into workload environment configuration. |
-| External Secret | `database.enabled=false` and `database.external.existingSecret=my-postgres` | Recommended for production. The key defaults to `AGENTBAY_DATABASE_URL`. |
+| External Secret | `database.enabled=false` and `database.external.existingSecret=my-postgres` | Recommended for production. The key defaults to `DISPATCH_DATABASE_URL`. |
 
 `migrations.enabled=true` runs pending Drizzle migrations. External databases
 use a `pre-install,pre-upgrade` hook. With chart-managed PostgreSQL, migrations
@@ -84,25 +84,25 @@ readiness waits for the schema.
 For an external database:
 
 ```bash
-helm install agentbay deploy/helm/agentbay \
+helm install dispatch deploy/helm/dispatch \
   --namespace agents --create-namespace \
   --set database.enabled=false \
-  --set database.external.existingSecret=agentbay-postgres
+  --set database.external.existingSecret=dispatch-postgres
 ```
 
 ## Secrets and API token
 
-The API currently uses `AGENTBAY_ADMIN_TOKEN` as its bearer token. Despite the
+The API currently uses `DISPATCH_ADMIN_TOKEN` as its bearer token. Despite the
 environment variable's historical name, it authenticates the execution API;
 there is no runtime-admin API.
 
 Choose one secret mode:
 
 - `secrets.create=true` creates a Secret from `secrets.data`. If no
-  `admin.token` is supplied, Helm generates `AGENTBAY_ADMIN_TOKEN` and preserves
+  `admin.token` is supplied, Helm generates `DISPATCH_ADMIN_TOKEN` and preserves
   it across upgrades.
 - `secrets.existingSecret=<name>` mounts a Secret managed outside this chart.
-  It must contain `AGENTBAY_ADMIN_TOKEN` and any other process credentials under
+  It must contain `DISPATCH_ADMIN_TOKEN` and any other process credentials under
   their canonical environment variable names.
 
 Do not put plaintext production credentials in a values file. Use an existing
@@ -117,16 +117,16 @@ orchestrator, not by migrations, the reconciler, or execution sandboxes:
 ```yaml
 orchestrator:
   extraEnv:
-    - name: AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION
+    - name: DISPATCH_GITHUB_WEBHOOK_SECRET_PRODUCTION
       valueFrom:
         secretKeyRef:
-          name: agentbay-github-webhook
+          name: dispatch-github-webhook
           key: webhook-secret
 ```
 
 Set the trigger's `config.webhookSecretEnv` to
-`AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION`. Secret environment-variable names
-must match `AGENTBAY_GITHUB_WEBHOOK_SECRET_<NAME>`. This credential verifies
+`DISPATCH_GITHUB_WEBHOOK_SECRET_PRODUCTION`. Secret environment-variable names
+must match `DISPATCH_GITHUB_WEBHOOK_SECRET_<NAME>`. This credential verifies
 inbound webhook signatures only. Do not reuse it as a GitHub App private key,
 installation/API token, or Git clone credential. GitHub workspaces currently
 clone only public HTTPS repositories, using
@@ -140,7 +140,7 @@ mount an operator-managed GitHub App Secret only into the orchestrator:
 orchestrator:
   revisionResolver:
     enabled: true
-    credentialsSecret: agentbay-github-app
+    credentialsSecret: dispatch-github-app
 ```
 
 The Secret must contain `app-id` and `private-key.pem`. Each issue delivery
@@ -157,7 +157,7 @@ the issue acknowledgment worker using the same App credential Secret:
 ```yaml
 orchestrator:
   revisionResolver:
-    credentialsSecret: agentbay-github-app
+    credentialsSecret: dispatch-github-app
   githubIssueAcknowledgment:
     enabled: true
 ```
@@ -199,7 +199,7 @@ Secrets. Dispatch resolves non-secret connection metadata and writes
 authorization/runtime configuration to claims; it does not read sidecar Secret
 volumes or Secret API objects.
 
-The separate reconciler CronJob lists agentbay-managed SandboxClaims and deletes
+The separate reconciler CronJob lists dispatch-managed SandboxClaims and deletes
 claims beyond their shutdown time plus `reconciler.graceMinutes`. Its service
 account and RBAC are independently configurable under `reconciler.*`.
 
@@ -266,7 +266,7 @@ template-owned sidecars with `connections: [{id, sidecar}]`. Dispatch fails the
 attempt if a record cannot be resolved or the named sidecar is not in the exact
 template, and injects only the non-secret canonical envelope, for example
 `{"refs":["github-production"],"schemaVersion":1,"tenantId":"default"}`,
-as `AGENTBAY_CONNECTIONS` on that sidecar. Sidecar images, commands, and
+as `DISPATCH_CONNECTIONS` on that sidecar. Sidecar images, commands, and
 credential volumes are operator-owned template configuration, not profile input.
 
 Provider-specific stacks should keep their tool server, credential broker,
@@ -289,8 +289,8 @@ committed lifecycle outcomes; restart-safe gauges are projected from PostgreSQL,
 which remains authoritative. PostgreSQL collection uses one aggregate query, a
 five-second process cache, and a two-second timeout. A failed collection leaves
 the last successful business snapshot available while
-`agentbay_observability_collector_up` becomes `0` and
-`agentbay_observability_snapshot_age_seconds` continues increasing.
+`dispatch_observability_collector_up` becomes `0` and
+`dispatch_observability_snapshot_age_seconds` continues increasing.
 
 Metric labels are intentionally bounded: tenant, state, result, event type,
 profile ID, binding ID, trigger ID, topic, operation, and component. Execution
@@ -350,7 +350,7 @@ service account token or Kubernetes API permissions, and a read-only filesystem.
 
 Enable `aiGatewayAuthz` when sandbox Pods should reach model providers through
 an Envoy AI Gateway without receiving provider API keys. The chart deploys the
-central `agentbay-authz` `ext_authz` service and adds a localhost proxy sidecar
+central `dispatch-authz` `ext_authz` service and adds a localhost proxy sidecar
 and projected, audience-bound service account token to chart-managed templates.
 
 ```yaml
@@ -379,6 +379,6 @@ sandboxTemplates:
 ```
 
 Configure the published agent profile's native OpenCode provider to use
-`http://agentbay-gateway:8080/v1`. The hostname maps to the sandbox Pod's
+`http://dispatch-gateway:8080/v1`. The hostname maps to the sandbox Pod's
 loopback proxy. Keep `envVarsInjectionPolicy: Allowed` because the execution
 runtime still injects per-execution OpenCode configuration and authentication.

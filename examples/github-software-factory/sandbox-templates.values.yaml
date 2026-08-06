@@ -11,7 +11,7 @@ orchestrator:
     maxAttempts: 5
     requestTimeoutMs: 30000
     credentialsSecret: example-github-app-credentials
-    mountPath: /var/run/agentbay/github-app
+    mountPath: /var/run/dispatch/github-app
 
 claims:
   apiVersion: v1beta1
@@ -57,10 +57,10 @@ sandboxTemplates:
           name: github-token-broker
           image: ghcr.io/example/github-token-broker@sha256:1111111111111111111111111111111111111111111111111111111111111111
           env: &developerBrokerEnv
-            - { name: AGENTBAY_GITHUB_TENANT, value: default }
-            - { name: AGENTBAY_GITHUB_CONNECTION, value: github-production }
-            - { name: AGENTBAY_GITHUB_REPOSITORY_ID, value: "123456789" }
-            - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "contents:write,issues:read,pull_requests:write,actions:read" }
+            - { name: DISPATCH_GITHUB_TENANT, value: default }
+            - { name: DISPATCH_GITHUB_CONNECTION, value: github-production }
+            - { name: DISPATCH_GITHUB_REPOSITORY_ID, value: "123456789" }
+            - { name: DISPATCH_GITHUB_PERMISSIONS, value: "contents:write,issues:read,pull_requests:write,actions:read" }
           startupProbe: &brokerStartupProbe
             exec:
               command: [/nodejs/bin/node, -e, "fetch('http://127.0.0.1:8083/readyz',{signal:AbortSignal.timeout(1500)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
@@ -81,7 +81,7 @@ sandboxTemplates:
             failureThreshold: 3
           securityContext: *restricted
           volumeMounts: &credentialMount
-            - { name: github-app-credentials, mountPath: /var/run/agentbay/github-app, readOnly: true }
+            - { name: github-app-credentials, mountPath: /var/run/dispatch/github-app, readOnly: true }
       extraVolumes: &credentialVolume
         - name: github-app-credentials
           secret:
@@ -101,10 +101,10 @@ sandboxTemplates:
             - --tools=search_issues,issue_read,issue_write,pull_request_read,get_file_contents,search_code,get_commit,list_commits,actions_list,actions_get,get_job_logs
         - <<: *developerBroker
           env:
-            - { name: AGENTBAY_GITHUB_TENANT, value: default }
-            - { name: AGENTBAY_GITHUB_CONNECTION, value: github-production }
-            - { name: AGENTBAY_GITHUB_REPOSITORY_ID, value: "123456789" }
-            - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "contents:read,issues:write,pull_requests:read,actions:read" }
+            - { name: DISPATCH_GITHUB_TENANT, value: default }
+            - { name: DISPATCH_GITHUB_CONNECTION, value: github-production }
+            - { name: DISPATCH_GITHUB_REPOSITORY_ID, value: "123456789" }
+            - { name: DISPATCH_GITHUB_PERMISSIONS, value: "contents:read,issues:write,pull_requests:read,actions:read" }
           volumeMounts: *credentialMount
       extraVolumes: *credentialVolume
     - <<: *baseTemplate
@@ -121,10 +121,10 @@ sandboxTemplates:
             - --tools=search_issues,issue_read,issue_write,add_issue_comment,get_label,list_label
         - <<: *developerBroker
           env:
-            - { name: AGENTBAY_GITHUB_TENANT, value: default }
-            - { name: AGENTBAY_GITHUB_CONNECTION, value: github-production }
-            - { name: AGENTBAY_GITHUB_REPOSITORY_ID, value: "123456789" }
-            - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "issues:write" }
+            - { name: DISPATCH_GITHUB_TENANT, value: default }
+            - { name: DISPATCH_GITHUB_CONNECTION, value: github-production }
+            - { name: DISPATCH_GITHUB_REPOSITORY_ID, value: "123456789" }
+            - { name: DISPATCH_GITHUB_PERMISSIONS, value: "issues:write" }
           volumeMounts: *credentialMount
     - <<: *baseTemplate
       name: opencode-reviewer-template
@@ -140,12 +140,12 @@ sandboxTemplates:
             - --tools=pull_request_read,get_file_contents,get_commit,pull_request_review_write,add_comment_to_pending_review,add_reply_to_pull_request_comment,actions_get,actions_list,get_job_logs
         - <<: *developerBroker
           env:
-            - { name: AGENTBAY_GITHUB_TENANT, value: default }
-            - { name: AGENTBAY_GITHUB_CONNECTION, value: github-reviewer }
-            - { name: AGENTBAY_GITHUB_REPOSITORY_ID, value: "123456789" }
-            - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "contents:read,pull_requests:write,actions:read" }
+            - { name: DISPATCH_GITHUB_TENANT, value: default }
+            - { name: DISPATCH_GITHUB_CONNECTION, value: github-reviewer }
+            - { name: DISPATCH_GITHUB_REPOSITORY_ID, value: "123456789" }
+            - { name: DISPATCH_GITHUB_PERMISSIONS, value: "contents:read,pull_requests:write,actions:read" }
           volumeMounts:
-            - { name: github-reviewer-app-credentials, mountPath: /var/run/agentbay/github-app, readOnly: true }
+            - { name: github-reviewer-app-credentials, mountPath: /var/run/dispatch/github-app, readOnly: true }
       extraVolumes:
         - name: github-reviewer-app-credentials
           secret:
@@ -165,12 +165,12 @@ sandboxTemplates:
             - --tools=pull_request_read,merge_pull_request
         - <<: *developerBroker
           env:
-            - { name: AGENTBAY_GITHUB_TENANT, value: default }
-            - { name: AGENTBAY_GITHUB_CONNECTION, value: github-production }
-            - { name: AGENTBAY_GITHUB_REPOSITORY_ID, value: "123456789" }
+            - { name: DISPATCH_GITHUB_TENANT, value: default }
+            - { name: DISPATCH_GITHUB_CONNECTION, value: github-production }
+            - { name: DISPATCH_GITHUB_REPOSITORY_ID, value: "123456789" }
             # Replace with the reviewer App bot actor ID used by the approval binding.
-            - { name: AGENTBAY_GITHUB_MERGE_REVIEWER_IDS, value: "987654321,41898282" }
-            - { name: AGENTBAY_GITHUB_PERMISSIONS, value: "contents:write,pull_requests:write" }
+            - { name: DISPATCH_GITHUB_MERGE_REVIEWER_IDS, value: "987654321,41898282" }
+            - { name: DISPATCH_GITHUB_PERMISSIONS, value: "contents:write,pull_requests:write" }
           volumeMounts: *credentialMount
       extraVolumes: *credentialVolume
 

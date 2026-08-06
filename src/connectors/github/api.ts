@@ -15,7 +15,7 @@ import { sha256, verifyGitHubSignature } from "./signature.js";
 
 const TENANT_ID = "default";
 const MAX_BODY_BYTES = 128 * 1024;
-const DUMMY_WEBHOOK_SECRET = "agentbay-github-webhook-dummy-secret-v1";
+const DUMMY_WEBHOOK_SECRET = "dispatch-github-webhook-dummy-secret-v1";
 const supportedEvents = new Set<GitHubEventName>([
   "issues",
   "issue_comment",

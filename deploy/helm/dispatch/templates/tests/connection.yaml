@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: {{ include "agentbay.fullname" . }}-test-connection
+  name: {{ include "dispatch.fullname" . }}-test-connection
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
     app.kubernetes.io/component: test
   annotations:
     # Run only when the user invokes `helm test`. Hook pods are deleted on
@@ -21,6 +21,6 @@ spec:
       args:
         - |
           set -eu
-          url="http://{{ include "agentbay.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/healthz"
+          url="http://{{ include "dispatch.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/healthz"
           echo "GET $url"
           curl --silent --show-error --fail --max-time 5 --retry 10 --retry-all-errors --retry-delay 2 "$url"

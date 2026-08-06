@@ -13,12 +13,10 @@ Agent authors configure agents deeply through native OpenCode configuration: mod
 
 ### Naming and compatibility
 
-Dispatch is the presentation name. Product names must not be introduced into new
-runtime contracts by default. Existing `agentbay` names remain compatibility
-identifiers where they are already persisted, externally configured, selected by
-Kubernetes, scraped by Prometheus, or matched as API and CloudEvent values. A
-future rename of one of those interfaces requires an explicit versioned or
-dual-read migration with an announced removal window.
+Dispatch is the canonical name. Product names must not be introduced into new
+runtime contracts by default. A future rename of an externally configured,
+persisted, selected, scraped, or matched interface requires an explicit
+versioned migration with an announced removal window.
 
 Chat is one trigger and result destination among many. Kubernetes is the execution substrate, not the product model.
 
@@ -171,7 +169,7 @@ id: engineering-github
 type: github.app.webhook
 config:
   schemaVersion: 1
-  webhookSecretEnv: AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION
+  webhookSecretEnv: DISPATCH_GITHUB_WEBHOOK_SECRET_PRODUCTION
 ---
 # POST /v1/bindings/review-new-pull-requests/versions
 version: 1
@@ -783,7 +781,7 @@ non-adoptable and follow normal failed-attempt retry semantics.
 
 ### 10.6 Durable waits and continuations
 
-An immutable binding policy may declare an after-turn wait boundary. After the current prompt has completed and externally committed work has been checkpointed, Agentbay persists an `EventWait`, records correlation context, and moves the execution to `WAITING`. The agent does not select this disposition. This is distinct from crash recovery: a continuation may submit a new prompt because the preceding prompt completed at a configured lifecycle boundary; crash adoption never guesses whether a prompt should be replayed.
+An immutable binding policy may declare an after-turn wait boundary. After the current prompt has completed and externally committed work has been checkpointed, Dispatch persists an `EventWait`, records correlation context, and moves the execution to `WAITING`. The agent does not select this disposition. This is distinct from crash recovery: a continuation may submit a new prompt because the preceding prompt completed at a configured lifecycle boundary; crash adoption never guesses whether a prompt should be replayed.
 
 When a normalized event matches a wake binding and an active wait, admission atomically consumes the one-shot wait, appends immutable continuation input and resolved workspace, records the exact wake binding version, and moves the execution back to `QUEUED`. Each input sequence therefore identifies the exact prompt and commit used by that turn and all of its retries. A terminal wake may instead move directly to `COMPLETED`. Exact event replay loads persisted wake results without rematching configuration or waits. The next attempt either resumes a retained runtime or starts from durable workspace state according to profile policy. Wait deadlines produce `TIMED_OUT`; cancellation removes active waits atomically.
 
@@ -834,27 +832,27 @@ OpenCode runs headlessly inside the workload. The execution worker:
 
 The platform must tolerate SSE disconnects and worker restarts. Durable execution state, OpenCode session status, and artifact checkpoints determine whether to reconnect, retry, or fail. The dispatcher reconnects only to fully checkpointed `RUNNING` attempts, reconstructs output from persisted messages, and never resubmits their prompt. Missing workload/session checkpoints or incomplete prompt history fail closed into ordinary retry semantics.
 
-Sandbox templates may include authenticated API, proxy, or MCP sidecars that expose standard, policy-bounded tools to OpenCode over localhost. Profile `connections: [{ id, sidecar }]` entries authorize named connections for those template-owned sidecars; they do not create or mutate containers. Agentbay validates each connection reference and sends the grant only to the named container. The agent-sandbox controller rejects a claim when that container is absent. The selected sidecar remains the enforcement boundary and must parse `AGENTBAY_CONNECTIONS` at startup and fail closed; Agentbay does not introspect or certify arbitrary sidecar implementations. Connection-enabled attempts use cold sandboxes rather than a `SandboxWarmPool` so claim-specific authorization cannot arrive after a sidecar has initialized.
+Sandbox templates may include authenticated API, proxy, or MCP sidecars that expose standard, policy-bounded tools to OpenCode over localhost. Profile `connections: [{ id, sidecar }]` entries authorize named connections for those template-owned sidecars; they do not create or mutate containers. Dispatch validates each connection reference and sends the grant only to the named container. The agent-sandbox controller rejects a claim when that container is absent. The selected sidecar remains the enforcement boundary and must parse `DISPATCH_CONNECTIONS` at startup and fail closed; Dispatch does not introspect or certify arbitrary sidecar implementations. Connection-enabled attempts use cold sandboxes rather than a `SandboxWarmPool` so claim-specific authorization cannot arrive after a sidecar has initialized.
 
-Agentbay injects resolved, non-secret metadata through one canonical `AGENTBAY_CONNECTIONS` envelope per selected sidecar. Its JSON representation is `{"refs":["github-production"],"schemaVersion":1,"tenantId":"default"}`; `refs` contains only that sidecar's sorted connection IDs. The envelope is the complete authorized set for that sidecar and attempt; consumers must not merge it with ambient defaults. Credentials remain outside the envelope. A static compatibility deployment references an operator-managed Kubernetes Secret as a volume mounted only into the selected sidecar. OpenCode and the workspace materializer receive no credential mount, and Agentbay neither reads Secret values nor receives Kubernetes RBAC for Secrets.
+Dispatch injects resolved, non-secret metadata through one canonical `DISPATCH_CONNECTIONS` envelope per selected sidecar. Its JSON representation is `{"refs":["github-production"],"schemaVersion":1,"tenantId":"default"}`; `refs` contains only that sidecar's sorted connection IDs. The envelope is the complete authorized set for that sidecar and attempt; consumers must not merge it with ambient defaults. Credentials remain outside the envelope. A static compatibility deployment references an operator-managed Kubernetes Secret as a volume mounted only into the selected sidecar. OpenCode and the workspace materializer receive no credential mount, and Dispatch neither reads Secret values nor receives Kubernetes RBAC for Secrets.
 
 The GitHub integration uses GitHub's official `github-mcp-server`, pinned to an
-immutable release image digest, rather than an Agentbay-specific GitHub MCP
+immutable release image digest, rather than an Dispatch-specific GitHub MCP
 implementation. The official server runs in stateless HTTP mode on loopback and
 registers an explicit operator-owned `--tools` allow-list. OpenCode connects to
-it through an Agentbay GitHub token broker on `http://127.0.0.1:8083/` with MCP
+it through an Dispatch GitHub token broker on `http://127.0.0.1:8083/` with MCP
 OAuth disabled. The broker is an HTTP credential proxy, not an MCP server: it
 defines no tools and does not interpret MCP messages.
 
 The broker is the selected profile connection sidecar. It validates the complete
-`AGENTBAY_CONNECTIONS` grant, reads a GitHub App ID, installation ID, and private
+`DISPATCH_CONNECTIONS` grant, reads a GitHub App ID, installation ID, and private
 key from a sidecar-only Secret mount, and mints short-lived installation tokens
 restricted to one configured repository and an exact permission set. It verifies
 GitHub's returned repository and permissions before caching a token, refreshes
 before expiry, and injects the current token into each request forwarded to the
 official server. The private key and installation token never enter OpenCode,
 its configuration, workspace, prompts, or tool results. The official MCP
-container receives neither the App Secret nor the Agentbay grant.
+container receives neither the App Secret nor the Dispatch grant.
 
 Effective GitHub capability is the intersection of three controls:
 
@@ -873,10 +871,10 @@ The broker never automatically replays a request after a 401, timeout, transport
 failure, or 5xx because an MCP request may contain a mutation whose outcome is
 ambiguous. A 401 invalidates the cached token for the next request and is returned
 to OpenCode. Idempotency and reconciliation remain properties of the official
-GitHub tool and caller workflow; Agentbay does not claim exactly-once GitHub
+GitHub tool and caller workflow; Dispatch does not claim exactly-once GitHub
 mutations.
 
-These sidecars provide ordinary tool access to external systems; they are not a privileged execution-creation channel. If an agent uses a standard tool to create an issue, publish a message, enqueue work, or perform another external effect, the corresponding source connector may later normalize that effect into an event. An enabled binding can then create a delegated execution. No Agentbay-specific delegation MCP is required.
+These sidecars provide ordinary tool access to external systems; they are not a privileged execution-creation channel. If an agent uses a standard tool to create an issue, publish a message, enqueue work, or perform another external effect, the corresponding source connector may later normalize that effect into an event. An enabled binding can then create a delegated execution. No Dispatch-specific delegation MCP is required.
 
 This event-producing delegation path is distinct from a **destination**. A delegation effect becomes a new admitted source event and may cause new executions through bindings. A destination consumes an existing execution result for delivery and does not create another execution by itself.
 
@@ -897,7 +895,7 @@ Warm pools are an optimization. Correctness and security cannot depend on reuse.
 
 Agent Sandbox `v0.5.2` provides PVC-based manual suspend/resume on the core `agents.x-k8s.io/v1beta1` `Sandbox` through `spec.operatingMode: Running | Suspended`. Suspension terminates the Pod while preserving PVC-backed state; it does not preserve process memory. Automatic inactivity suspension, resume on traffic, scale-to-zero policy, and deeper archival remain upstream roadmap work.
 
-`SandboxClaim` does not currently expose `operatingMode`; it identifies the underlying Sandbox in status. Agentbay should retain the claim/template boundary and experimentally validate patching the owned core Sandbox rather than moving profile authors to raw Sandbox objects. This requires explicit RBAC, ownership checks, readiness handling, and compatibility tests against the pinned upstream release. Agentbay should migrate its integration and examples toward `v1beta1`; upstream marks `v1alpha1` deprecated.
+`SandboxClaim` does not currently expose `operatingMode`; it identifies the underlying Sandbox in status. Dispatch should retain the claim/template boundary and experimentally validate patching the owned core Sandbox rather than moving profile authors to raw Sandbox objects. This requires explicit RBAC, ownership checks, readiness handling, and compatibility tests against the pinned upstream release. Dispatch should migrate its integration and examples toward `v1beta1`; upstream marks `v1alpha1` deprecated.
 
 For a durable wait, profile policy chooses one resource strategy:
 
@@ -1017,7 +1015,7 @@ Bindings may choose a stricter class but cannot broaden profile access. Prefer r
 
 ### 14.4 Input and prompt safety
 
-Events and checked-out repositories are untrusted input. Agentbay must:
+Events and checked-out repositories are untrusted input. Dispatch must:
 
 - Delimit event content in rendered prompts
 - Enforce prompt and payload size limits
@@ -1146,7 +1144,7 @@ Later, one global control plane may route to multiple execution clusters. Each c
 
 ### 19.1 Pull-request review
 
-1. GitHub sends `pull_request.opened`; CI starts, but Agentbay creates no reviewer execution or sandbox.
+1. GitHub sends `pull_request.opened`; CI starts, but Dispatch creates no reviewer execution or sandbox.
 2. The canonical CI workflow reaches a terminal state and GitHub sends `workflow_run.completed` for one pull request and exact head SHA.
 3. The GitHub connector verifies the signature and normalizes a CloudEvent containing the workflow conclusion, PR number, and immutable head revision.
 4. A binding matches the repository, workflow name, and pull-request event source. Its active singleton is keyed by repository ID, PR number, and head SHA.
@@ -1172,7 +1170,7 @@ Verified Dependabot npm patch and minor updates may use a deterministic fast lan
 
 1. An enabled `schedule.cron` trigger stores a standard five-field expression with explicit UTC timezone and `skip` misfire policy.
 2. When `next_fire_at` is due, one scheduler replica locks the schedule row, inserts a uniquely keyed occurrence, and advances the schedule in the same PostgreSQL transaction.
-3. An occurrence worker leases the durable occurrence and admits a normalized `dev.agentbay.schedule.triggered` CloudEvent using its stable occurrence ID and scheduled time.
+3. An occurrence worker leases the durable occurrence and admits a normalized `dev.dispatch.schedule.triggered` CloudEvent using its stable occurrence ID and scheduled time.
 4. Repository schedules request the existing GitHub default-branch revision-resolution gate. No execution is created until the exact commit SHA is persisted.
 5. A binding invokes a one-shot maintenance or audit agent against that immutable revision. An active singleton may suppress overlapping executions without losing occurrence audit history.
 6. Crash recovery re-leases the same occurrence; admission idempotency prevents duplicate events or executions. Disabled triggers stop both future materialization and pending occurrence delivery.
@@ -1185,7 +1183,7 @@ Verified Dependabot npm patch and minor updates may use a deterministic fast lan
 1. A chat connector normalizes a mention or command as an event.
 2. A binding uses channel and principal policy to choose an agent.
 3. The message thread becomes a destination reference, not the execution database.
-4. Agentbay posts an acknowledgement immediately and later publishes progress or the final result to the thread.
+4. Dispatch posts an acknowledgement immediately and later publishes progress or the final result to the thread.
 
 ## 20. Delivery Roadmap
 
@@ -1241,7 +1239,7 @@ Verified Dependabot npm patch and minor updates may use a deterministic fast lan
 - Profile-specific MCP tool allow-lists rather than source-specific core tools
 - A complete `examples/github-software-factory` configuration with triage, label-selected developer profiles, review, and reciprocal continuation loops
 
-**Exit criterion:** Repository configuration can route an issue through triage, label-selected development, pull-request review, and event-driven developer/reviewer continuations without GitHub workflow concepts in Agentbay core.
+**Exit criterion:** Repository configuration can route an issue through triage, label-selected development, pull-request review, and event-driven developer/reviewer continuations without GitHub workflow concepts in Dispatch core.
 
 ### Phase 5: Scale, policy, and tenancy
 
@@ -1269,8 +1267,8 @@ These decisions should be resolved by implementation evidence rather than hidden
 7. **Multi-cluster protocol:** Push from control plane or pull from a cluster-local execution gateway.
 8. **Policy implementation:** Built-in validation, CEL, OPA, or a combination.
 9. **Artifact log format:** Plain objects, OpenTelemetry logs, or a queryable log backend plus archival storage.
-10. **Wait declaration protocol:** Whether agents return a structured lifecycle result or use a generic Agentbay lifecycle MCP to register a durable wait.
-11. **Sandbox suspension control:** Whether Agentbay may safely patch a claim-owned core Sandbox until `SandboxClaim` exposes operating mode directly.
+10. **Wait declaration protocol:** Whether agents return a structured lifecycle result or use a generic Dispatch lifecycle MCP to register a durable wait.
+11. **Sandbox suspension control:** Whether Dispatch may safely patch a claim-owned core Sandbox until `SandboxClaim` exposes operating mode directly.
 
 ## 22. Glossary
 

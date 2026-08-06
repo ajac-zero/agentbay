@@ -2,9 +2,9 @@ import { createPrivateKey } from "node:crypto";
 import { readFile as nodeReadFile } from "node:fs/promises";
 
 const DEFAULT_CREDENTIAL_PATHS = Object.freeze({
-  appId: "/var/run/agentbay/github-app/app-id",
-  installationId: "/var/run/agentbay/github-app/installation-id",
-  privateKey: "/var/run/agentbay/github-app/private-key.pem",
+  appId: "/var/run/dispatch/github-app/app-id",
+  installationId: "/var/run/dispatch/github-app/installation-id",
+  privateKey: "/var/run/dispatch/github-app/private-key.pem",
 });
 
 function required(env, name) {
@@ -33,38 +33,38 @@ function path(env, name, fallback) {
 }
 
 export function parseStartupConfig(env = process.env) {
-  const tenantId = required(env, "AGENTBAY_GITHUB_TENANT");
-  const connectionRef = required(env, "AGENTBAY_GITHUB_CONNECTION");
-  const repositoryId = positiveInteger(required(env, "AGENTBAY_GITHUB_REPOSITORY_ID"), "AGENTBAY_GITHUB_REPOSITORY_ID");
+  const tenantId = required(env, "DISPATCH_GITHUB_TENANT");
+  const connectionRef = required(env, "DISPATCH_GITHUB_CONNECTION");
+  const repositoryId = positiveInteger(required(env, "DISPATCH_GITHUB_REPOSITORY_ID"), "DISPATCH_GITHUB_REPOSITORY_ID");
   let grants;
   try {
-    grants = JSON.parse(required(env, "AGENTBAY_CONNECTIONS"));
+    grants = JSON.parse(required(env, "DISPATCH_CONNECTIONS"));
   } catch {
-    throw new Error("Invalid AGENTBAY_CONNECTIONS");
+    throw new Error("Invalid DISPATCH_CONNECTIONS");
   }
   if (
     grants === null || typeof grants !== "object" || Array.isArray(grants)
     || Object.keys(grants).sort().join(",") !== "refs,schemaVersion,tenantId"
     || grants.schemaVersion !== 1 || grants.tenantId !== tenantId
     || !Array.isArray(grants.refs) || grants.refs.length !== 1 || grants.refs[0] !== connectionRef
-  ) throw new Error("AGENTBAY_CONNECTIONS does not match this broker");
+  ) throw new Error("DISPATCH_CONNECTIONS does not match this broker");
 
-  const upstream = new URL(env.AGENTBAY_GITHUB_MCP_UPSTREAM ?? "http://127.0.0.1:8082/");
+  const upstream = new URL(env.DISPATCH_GITHUB_MCP_UPSTREAM ?? "http://127.0.0.1:8082/");
   if (upstream.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(upstream.hostname)) {
-    throw new Error("AGENTBAY_GITHUB_MCP_UPSTREAM must be loopback HTTP");
+    throw new Error("DISPATCH_GITHUB_MCP_UPSTREAM must be loopback HTTP");
   }
-  const permissionEntries = required(env, "AGENTBAY_GITHUB_PERMISSIONS").split(",").map((entry) => {
+  const permissionEntries = required(env, "DISPATCH_GITHUB_PERMISSIONS").split(",").map((entry) => {
     const [name, access, extra] = entry.split(":");
     if (extra !== undefined || !/^[a-z_]+$/.test(name ?? "") || !["read", "write"].includes(access ?? "")) {
-      throw new Error("Invalid AGENTBAY_GITHUB_PERMISSIONS");
+      throw new Error("Invalid DISPATCH_GITHUB_PERMISSIONS");
     }
     return [name, access];
   });
   const permissions = Object.fromEntries(permissionEntries);
-  if (Object.keys(permissions).length !== permissionEntries.length) throw new Error("Invalid AGENTBAY_GITHUB_PERMISSIONS");
-  if (Object.keys(permissions).length === 0) throw new Error("Invalid AGENTBAY_GITHUB_PERMISSIONS");
-  const host = env.AGENTBAY_GITHUB_BROKER_HOST ?? "127.0.0.1";
-  if (!["127.0.0.1", "localhost", "::1"].includes(host)) throw new Error("AGENTBAY_GITHUB_BROKER_HOST must be loopback");
+  if (Object.keys(permissions).length !== permissionEntries.length) throw new Error("Invalid DISPATCH_GITHUB_PERMISSIONS");
+  if (Object.keys(permissions).length === 0) throw new Error("Invalid DISPATCH_GITHUB_PERMISSIONS");
+  const host = env.DISPATCH_GITHUB_BROKER_HOST ?? "127.0.0.1";
+  if (!["127.0.0.1", "localhost", "::1"].includes(host)) throw new Error("DISPATCH_GITHUB_BROKER_HOST must be loopback");
 
   return Object.freeze({
     tenantId,
@@ -73,37 +73,37 @@ export function parseStartupConfig(env = process.env) {
     permissions: Object.freeze(permissions),
     upstream: upstream.toString(),
     host,
-    port: port(env.AGENTBAY_GITHUB_BROKER_PORT ?? "8083", "AGENTBAY_GITHUB_BROKER_PORT"),
-    maxIssuesCreated: env.AGENTBAY_GITHUB_MAX_ISSUES_CREATED === undefined
+    port: port(env.DISPATCH_GITHUB_BROKER_PORT ?? "8083", "DISPATCH_GITHUB_BROKER_PORT"),
+    maxIssuesCreated: env.DISPATCH_GITHUB_MAX_ISSUES_CREATED === undefined
       ? undefined
-      : positiveInteger(required(env, "AGENTBAY_GITHUB_MAX_ISSUES_CREATED"), "AGENTBAY_GITHUB_MAX_ISSUES_CREATED"),
-    mergeCapability: env.AGENTBAY_GITHUB_MERGE_CAPABILITY ? mergeCapability(
-      env.AGENTBAY_GITHUB_MERGE_CAPABILITY,
+      : positiveInteger(required(env, "DISPATCH_GITHUB_MAX_ISSUES_CREATED"), "DISPATCH_GITHUB_MAX_ISSUES_CREATED"),
+    mergeCapability: env.DISPATCH_GITHUB_MERGE_CAPABILITY ? mergeCapability(
+      env.DISPATCH_GITHUB_MERGE_CAPABILITY,
       repositoryId,
-      reviewerIds(required(env, "AGENTBAY_GITHUB_MERGE_REVIEWER_IDS")),
+      reviewerIds(required(env, "DISPATCH_GITHUB_MERGE_REVIEWER_IDS")),
     ) : undefined,
-    effect: env.AGENTBAY_EFFECT_ENDPOINT ? Object.freeze({
-      endpoint: effectEndpoint(required(env, "AGENTBAY_EFFECT_ENDPOINT")),
-      executionId: required(env, "AGENTBAY_EXECUTION_ID"),
-      token: required(env, "AGENTBAY_EFFECT_TOKEN"),
+    effect: env.DISPATCH_EFFECT_ENDPOINT ? Object.freeze({
+      endpoint: effectEndpoint(required(env, "DISPATCH_EFFECT_ENDPOINT")),
+      executionId: required(env, "DISPATCH_EXECUTION_ID"),
+      token: required(env, "DISPATCH_EFFECT_TOKEN"),
     }) : undefined,
     credentialPaths: Object.freeze({
-      appId: path(env, "AGENTBAY_GITHUB_APP_ID_FILE", DEFAULT_CREDENTIAL_PATHS.appId),
-      installationId: path(env, "AGENTBAY_GITHUB_INSTALLATION_ID_FILE", DEFAULT_CREDENTIAL_PATHS.installationId),
-      privateKey: path(env, "AGENTBAY_GITHUB_PRIVATE_KEY_FILE", DEFAULT_CREDENTIAL_PATHS.privateKey),
+      appId: path(env, "DISPATCH_GITHUB_APP_ID_FILE", DEFAULT_CREDENTIAL_PATHS.appId),
+      installationId: path(env, "DISPATCH_GITHUB_INSTALLATION_ID_FILE", DEFAULT_CREDENTIAL_PATHS.installationId),
+      privateKey: path(env, "DISPATCH_GITHUB_PRIVATE_KEY_FILE", DEFAULT_CREDENTIAL_PATHS.privateKey),
     }),
   });
 }
 
 function reviewerIds(value) {
-  const ids = value.split(",").map((entry) => positiveInteger(entry, "AGENTBAY_GITHUB_MERGE_REVIEWER_IDS"));
-  if (ids.length === 0 || new Set(ids).size !== ids.length) throw new Error("Invalid AGENTBAY_GITHUB_MERGE_REVIEWER_IDS");
+  const ids = value.split(",").map((entry) => positiveInteger(entry, "DISPATCH_GITHUB_MERGE_REVIEWER_IDS"));
+  if (ids.length === 0 || new Set(ids).size !== ids.length) throw new Error("Invalid DISPATCH_GITHUB_MERGE_REVIEWER_IDS");
   return ids;
 }
 
 function mergeCapability(value, repositoryId, reviewerIds) {
   let capability;
-  try { capability = JSON.parse(value); } catch { throw new Error("Invalid AGENTBAY_GITHUB_MERGE_CAPABILITY"); }
+  try { capability = JSON.parse(value); } catch { throw new Error("Invalid DISPATCH_GITHUB_MERGE_CAPABILITY"); }
   if (capability === null || typeof capability !== "object" || Array.isArray(capability)
     || Object.keys(capability).sort().join(",") !== "commitSha,pullRequestNumber,repositoryFullName,repositoryId,reviewerId,schemaVersion"
     || capability.schemaVersion !== 1 || capability.repositoryId !== repositoryId || !reviewerIds.includes(capability.reviewerId)
@@ -111,14 +111,14 @@ function mergeCapability(value, repositoryId, reviewerIds) {
     || !Number.isSafeInteger(capability.reviewerId) || capability.reviewerId < 1
     || typeof capability.repositoryFullName !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(capability.repositoryFullName)
     || typeof capability.commitSha !== "string" || !/^[0-9a-f]{40}$/.test(capability.commitSha)) {
-    throw new Error("Invalid AGENTBAY_GITHUB_MERGE_CAPABILITY");
+    throw new Error("Invalid DISPATCH_GITHUB_MERGE_CAPABILITY");
   }
   return Object.freeze(capability);
 }
 
 function effectEndpoint(value) {
   const url = new URL(value);
-  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("Invalid AGENTBAY_EFFECT_ENDPOINT");
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("Invalid DISPATCH_EFFECT_ENDPOINT");
   return url.toString();
 }
 

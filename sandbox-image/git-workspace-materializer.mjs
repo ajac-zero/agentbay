@@ -131,14 +131,14 @@ export async function materializeWorkspace({
   resolver = lookup,
   urlValidator = validatePublicHttpsGitUrl,
 } = {}) {
-  const type = environment.AGENTBAY_WORKSPACE_TYPE;
+  const type = environment.DISPATCH_WORKSPACE_TYPE;
   if (type === undefined || type === "" || type === "empty") return;
   if (type !== "git") throw new Error(`Unsupported workspace type: ${String(type).slice(0, 64)}`);
 
-  const directory = environment.AGENTBAY_WORKSPACE_DIRECTORY || DEFAULT_WORKSPACE;
+  const directory = environment.DISPATCH_WORKSPACE_DIRECTORY || DEFAULT_WORKSPACE;
   if (!directory.startsWith("/")) throw new Error("Workspace directory must be an absolute path");
-  const url = urlValidator(environment.AGENTBAY_WORKSPACE_GIT_URL);
-  const commit = validateCommit(environment.AGENTBAY_WORKSPACE_GIT_COMMIT);
+  const url = urlValidator(environment.DISPATCH_WORKSPACE_GIT_URL);
+  const commit = validateCommit(environment.DISPATCH_WORKSPACE_GIT_COMMIT);
   await requireEmptyTarget(directory);
 
   const parsedUrl = new URL(url);

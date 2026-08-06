@@ -50,7 +50,7 @@ export class GitHubIssueAcknowledgmentTransport implements OutboxTransport {
     const permission = "issues";
     const headers = {
       Accept: "application/vnd.github+json",
-      "User-Agent": "agentbay-issue-acknowledgment/1.0",
+      "User-Agent": "dispatch-issue-acknowledgment/1.0",
       "X-GitHub-Api-Version": "2022-11-28",
     };
     const tokenResponse = await fetch(`${apiBaseUrl}/app/installations/${payload.installationId}/access_tokens`, {

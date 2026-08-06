@@ -1,13 +1,13 @@
-{{- $secretName := include "agentbay.secretName" . -}}
+{{- $secretName := include "dispatch.secretName" . -}}
 {{- $useChartSecret := or .Values.secrets.create .Values.secrets.existingSecret -}}
 {{- $githubWorkerEnabled := or .Values.orchestrator.revisionResolver.enabled .Values.orchestrator.githubIssueAcknowledgment.enabled -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "agentbay.fullname" . }}
+  name: {{ include "dispatch.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "agentbay.labels" . | nindent 4 }}
+    {{- include "dispatch.labels" . | nindent 4 }}
   {{- with .Values.extraAnnotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -16,11 +16,11 @@ spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "agentbay.selectorLabels" . | nindent 6 }}
+      {{- include "dispatch.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "agentbay.selectorLabels" . | nindent 8 }}
+        {{- include "dispatch.selectorLabels" . | nindent 8 }}
       {{- if or .Values.observability.podAnnotations.enabled .Values.podAnnotations }}
       annotations:
         {{- if .Values.observability.podAnnotations.enabled }}
@@ -34,7 +34,7 @@ spec:
         {{- end }}
       {{- end }}
     spec:
-      serviceAccountName: {{ include "agentbay.serviceAccountName" . }}
+      serviceAccountName: {{ include "dispatch.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -44,7 +44,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
-        - name: agentbay
+        - name: dispatch
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with .Values.securityContext }}
@@ -61,89 +61,89 @@ spec:
           env:
             - name: PORT
               value: {{ .Values.orchestrator.port | quote }}
-            - name: AGENTBAY_METRICS_PORT
+            - name: DISPATCH_METRICS_PORT
               value: {{ .Values.service.metricsPort | quote }}
-            - name: AGENTBAY_KUBE_NAMESPACE
-              value: {{ include "agentbay.claimsNamespace" . | quote }}
-            - name: AGENTBAY_SANDBOX_CLAIM_API_VERSION
+            - name: DISPATCH_KUBE_NAMESPACE
+              value: {{ include "dispatch.claimsNamespace" . | quote }}
+            - name: DISPATCH_SANDBOX_CLAIM_API_VERSION
               value: {{ .Values.claims.apiVersion | quote }}
-            - name: AGENTBAY_OPENCODE_PORT
+            - name: DISPATCH_OPENCODE_PORT
               value: {{ .Values.opencode.port | quote }}
-            - name: AGENTBAY_OPENCODE_DIRECTORY
+            - name: DISPATCH_OPENCODE_DIRECTORY
               value: {{ .Values.opencode.directory | quote }}
-            - name: AGENTBAY_EXECUTION_MAINTENANCE_ENABLED
+            - name: DISPATCH_EXECUTION_MAINTENANCE_ENABLED
               value: {{ .Values.orchestrator.executionMaintenance.enabled | quote }}
-            - name: AGENTBAY_EXECUTION_MAINTENANCE_INTERVAL_MS
+            - name: DISPATCH_EXECUTION_MAINTENANCE_INTERVAL_MS
               value: {{ .Values.orchestrator.executionMaintenance.intervalMs | quote }}
-            - name: AGENTBAY_EXECUTION_MAINTENANCE_BATCH_SIZE
+            - name: DISPATCH_EXECUTION_MAINTENANCE_BATCH_SIZE
               value: {{ .Values.orchestrator.executionMaintenance.batchSize | quote }}
-            - name: AGENTBAY_EXECUTION_MAX_ATTEMPTS
+            - name: DISPATCH_EXECUTION_MAX_ATTEMPTS
               value: {{ .Values.orchestrator.executionMaintenance.maxAttempts | quote }}
-            - name: AGENTBAY_EXECUTION_RETRY_DELAY_MS
+            - name: DISPATCH_EXECUTION_RETRY_DELAY_MS
               value: {{ .Values.orchestrator.executionMaintenance.retryDelayMs | quote }}
-            - name: AGENTBAY_DISPATCHER_ENABLED
+            - name: DISPATCH_DISPATCHER_ENABLED
               value: {{ .Values.orchestrator.dispatcher.enabled | quote }}
-            - name: AGENTBAY_DISPATCHER_IDLE_POLL_MS
+            - name: DISPATCH_DISPATCHER_IDLE_POLL_MS
               value: {{ .Values.orchestrator.dispatcher.idlePollMs | quote }}
-            - name: AGENTBAY_DISPATCHER_LEASE_DURATION_MS
+            - name: DISPATCH_DISPATCHER_LEASE_DURATION_MS
               value: {{ .Values.orchestrator.dispatcher.leaseDurationMs | quote }}
-            - name: AGENTBAY_DISPATCHER_RENEW_INTERVAL_MS
+            - name: DISPATCH_DISPATCHER_RENEW_INTERVAL_MS
               value: {{ .Values.orchestrator.dispatcher.renewIntervalMs | quote }}
-            - name: AGENTBAY_DISPATCHER_WORKER_ID
+            - name: DISPATCH_DISPATCHER_WORKER_ID
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            - name: AGENTBAY_CONTROL_PLANE_URL
-              value: {{ default (printf "http://%s.%s.svc:%v" (include "agentbay.fullname" .) .Release.Namespace .Values.service.port) .Values.orchestrator.controlPlaneUrl | quote }}
-            - name: AGENTBAY_REVISION_RESOLVER_ENABLED
+            - name: DISPATCH_CONTROL_PLANE_URL
+              value: {{ default (printf "http://%s.%s.svc:%v" (include "dispatch.fullname" .) .Release.Namespace .Values.service.port) .Values.orchestrator.controlPlaneUrl | quote }}
+            - name: DISPATCH_REVISION_RESOLVER_ENABLED
               value: {{ .Values.orchestrator.revisionResolver.enabled | quote }}
-            - name: AGENTBAY_REVISION_RESOLVER_IDLE_POLL_MS
+            - name: DISPATCH_REVISION_RESOLVER_IDLE_POLL_MS
               value: {{ .Values.orchestrator.revisionResolver.idlePollMs | quote }}
-            - name: AGENTBAY_REVISION_RESOLVER_LEASE_DURATION_MS
+            - name: DISPATCH_REVISION_RESOLVER_LEASE_DURATION_MS
               value: {{ .Values.orchestrator.revisionResolver.leaseDurationMs | quote }}
-            - name: AGENTBAY_REVISION_RESOLVER_RETRY_DELAY_MS
+            - name: DISPATCH_REVISION_RESOLVER_RETRY_DELAY_MS
               value: {{ .Values.orchestrator.revisionResolver.retryDelayMs | quote }}
-            - name: AGENTBAY_REVISION_RESOLVER_MAX_ATTEMPTS
+            - name: DISPATCH_REVISION_RESOLVER_MAX_ATTEMPTS
               value: {{ .Values.orchestrator.revisionResolver.maxAttempts | quote }}
-            - name: AGENTBAY_REVISION_RESOLVER_REQUEST_TIMEOUT_MS
+            - name: DISPATCH_REVISION_RESOLVER_REQUEST_TIMEOUT_MS
               value: {{ .Values.orchestrator.revisionResolver.requestTimeoutMs | quote }}
-            - name: AGENTBAY_REVISION_RESOLVER_WORKER_ID
+            - name: DISPATCH_REVISION_RESOLVER_WORKER_ID
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            - name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED
+            - name: DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_ENABLED
               value: {{ .Values.orchestrator.githubIssueAcknowledgment.enabled | quote }}
-            - name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_IDLE_POLL_MS
+            - name: DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_IDLE_POLL_MS
               value: {{ .Values.orchestrator.githubIssueAcknowledgment.idlePollMs | quote }}
-            - name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS
+            - name: DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_LEASE_DURATION_MS
               value: {{ .Values.orchestrator.githubIssueAcknowledgment.leaseDurationMs | quote }}
-            - name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_RETRY_DELAY_MS
+            - name: DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_RETRY_DELAY_MS
               value: {{ .Values.orchestrator.githubIssueAcknowledgment.retryDelayMs | quote }}
-            - name: AGENTBAY_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS
+            - name: DISPATCH_GITHUB_ISSUE_ACKNOWLEDGMENT_REQUEST_TIMEOUT_MS
               value: {{ .Values.orchestrator.githubIssueAcknowledgment.requestTimeoutMs | quote }}
-            - name: AGENTBAY_SCHEDULE_WORKER_ENABLED
+            - name: DISPATCH_SCHEDULE_WORKER_ENABLED
               value: {{ .Values.orchestrator.scheduleWorker.enabled | quote }}
-            - name: AGENTBAY_SCHEDULE_WORKER_IDLE_POLL_MS
+            - name: DISPATCH_SCHEDULE_WORKER_IDLE_POLL_MS
               value: {{ .Values.orchestrator.scheduleWorker.idlePollMs | quote }}
-            - name: AGENTBAY_SCHEDULE_WORKER_LEASE_DURATION_MS
+            - name: DISPATCH_SCHEDULE_WORKER_LEASE_DURATION_MS
               value: {{ .Values.orchestrator.scheduleWorker.leaseDurationMs | quote }}
-            - name: AGENTBAY_SCHEDULE_WORKER_RETRY_DELAY_MS
+            - name: DISPATCH_SCHEDULE_WORKER_RETRY_DELAY_MS
               value: {{ .Values.orchestrator.scheduleWorker.retryDelayMs | quote }}
-            - name: AGENTBAY_SCHEDULE_WORKER_MAX_ATTEMPTS
+            - name: DISPATCH_SCHEDULE_WORKER_MAX_ATTEMPTS
               value: {{ .Values.orchestrator.scheduleWorker.maxAttempts | quote }}
-            - name: AGENTBAY_SCHEDULE_WORKER_MATERIALIZE_BATCH_SIZE
+            - name: DISPATCH_SCHEDULE_WORKER_MATERIALIZE_BATCH_SIZE
               value: {{ .Values.orchestrator.scheduleWorker.materializeBatchSize | quote }}
-            - name: AGENTBAY_SCHEDULE_WORKER_ID
+            - name: DISPATCH_SCHEDULE_WORKER_ID
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
             {{- if $githubWorkerEnabled }}
-            - name: AGENTBAY_GITHUB_APP_ID_FILE
+            - name: DISPATCH_GITHUB_APP_ID_FILE
               value: {{ printf "%s/app-id" .Values.orchestrator.revisionResolver.mountPath | quote }}
-            - name: AGENTBAY_GITHUB_PRIVATE_KEY_FILE
+            - name: DISPATCH_GITHUB_PRIVATE_KEY_FILE
               value: {{ printf "%s/private-key.pem" .Values.orchestrator.revisionResolver.mountPath | quote }}
             {{- end }}
-            {{- include "agentbay.databaseEnv" . | trim | nindent 12 }}
+            {{- include "dispatch.databaseEnv" . | trim | nindent 12 }}
             {{- with .Values.orchestrator.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

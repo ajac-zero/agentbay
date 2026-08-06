@@ -6,8 +6,8 @@ work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT
 
 helm lint "$chart_dir"
-helm template demo "$chart_dir" --namespace agentbay-helm-test > "$work_dir/base.yaml"
-if grep -q 'name: demo-agentbay-bug-finder' "$work_dir/base.yaml"; then
+helm template demo "$chart_dir" --namespace dispatch-helm-test > "$work_dir/base.yaml"
+if grep -q 'name: demo-dispatch-bug-finder' "$work_dir/base.yaml"; then
   echo "Bug finder CronJob unexpectedly rendered by default" >&2
   exit 1
 fi
@@ -16,21 +16,21 @@ if grep -Eq 'kind: ServiceMonitor|kind: PrometheusRule|grafana_dashboard:' "$wor
   exit 1
 fi
 
-helm template demo "$chart_dir" --namespace agentbay-helm-test \
+helm template demo "$chart_dir" --namespace dispatch-helm-test \
   --set bugFinderCron.enabled=true \
   --set bugFinderCron.githubCredentialsSecret=github-app \
   --set-string bugFinderCron.repository.id=42 \
   --set bugFinderCron.repository.fullName=acme/repo > "$work_dir/bug-finder.yaml"
-grep -q 'name: demo-agentbay-bug-finder' "$work_dir/bug-finder.yaml"
+grep -q 'name: demo-dispatch-bug-finder' "$work_dir/bug-finder.yaml"
 grep -q 'concurrencyPolicy: Forbid' "$work_dir/bug-finder.yaml"
 grep -q 'backoffLimit: 0' "$work_dir/bug-finder.yaml"
 grep -q 'activeDeadlineSeconds: 300' "$work_dir/bug-finder.yaml"
 grep -q 'command: \["node", "dist/bug-finder/submit.js"\]' "$work_dir/bug-finder.yaml"
-grep -q 'key: AGENTBAY_ADMIN_TOKEN' "$work_dir/bug-finder.yaml"
+grep -q 'key: DISPATCH_ADMIN_TOKEN' "$work_dir/bug-finder.yaml"
 grep -q 'key: private-key.pem' "$work_dir/bug-finder.yaml"
 
 helm template demo "$chart_dir" \
-  --namespace agentbay-helm-test \
+  --namespace dispatch-helm-test \
   --set observability.podAnnotations.enabled=true \
   --set observability.serviceMonitor.enabled=true \
   --set observability.prometheusRule.enabled=true \
@@ -41,22 +41,22 @@ grep -q 'kind: ServiceMonitor' "$work_dir/observability.yaml"
 grep -q 'kind: PrometheusRule' "$work_dir/observability.yaml"
 grep -q 'grafana_dashboard: "1"' "$work_dir/observability.yaml"
 grep -q 'prometheus.io/path: /metrics' "$work_dir/observability.yaml"
-grep -q 'alert: AgentbayOutboxStuck' "$work_dir/observability.yaml"
-grep -q 'alert: AgentbayExecutionOverdue' "$work_dir/observability.yaml"
-grep -q 'alert: AgentbayScheduleStopped' "$work_dir/observability.yaml"
-grep -q 'absent(agentbay_observability_collector_up)' "$work_dir/observability.yaml"
+grep -q 'alert: DispatchOutboxStuck' "$work_dir/observability.yaml"
+grep -q 'alert: DispatchExecutionOverdue' "$work_dir/observability.yaml"
+grep -q 'alert: DispatchScheduleStopped' "$work_dir/observability.yaml"
+grep -q 'absent(dispatch_observability_collector_up)' "$work_dir/observability.yaml"
 grep -q 'app.kubernetes.io/component: metrics-collector' "$work_dir/observability.yaml"
 grep -q 'automountServiceAccountToken: false' "$work_dir/observability.yaml"
 
 helm template demo "$chart_dir" \
-  --namespace agentbay-helm-test \
+  --namespace dispatch-helm-test \
   --set sandboxTemplates.enabled=true \
   --show-only templates/sandboxtemplates.yaml > "$work_dir/default.yaml"
 
 grep -q 'envVarsInjectionPolicy: Allowed' "$work_dir/default.yaml"
 grep -q 'name: workspace-materializer' "$work_dir/default.yaml"
-grep -q 'command: \["node", "/opt/agentbay/git-workspace-materializer.mjs"\]' "$work_dir/default.yaml"
-grep -q 'name: AGENTBAY_WORKSPACE_DIRECTORY' "$work_dir/default.yaml"
+grep -q 'command: \["node", "/opt/dispatch/git-workspace-materializer.mjs"\]' "$work_dir/default.yaml"
+grep -q 'name: DISPATCH_WORKSPACE_DIRECTORY' "$work_dir/default.yaml"
 grep -q 'fsGroup: 1000' "$work_dir/default.yaml"
 grep -q 'fsGroupChangePolicy: OnRootMismatch' "$work_dir/default.yaml"
 test "$(grep -c 'allowPrivilegeEscalation: false' "$work_dir/default.yaml")" -eq 2
@@ -113,7 +113,7 @@ sandboxTemplates:
 EOF
 
 helm template demo "$chart_dir" \
-  --namespace agentbay-helm-test \
+  --namespace dispatch-helm-test \
   --show-only templates/sandboxtemplates.yaml \
   -f "$work_dir/overrides-values.yaml" > "$work_dir/overrides.yaml"
 
@@ -162,7 +162,7 @@ sandboxTemplates:
 EOF
 
 helm template demo "$chart_dir" \
-  --namespace agentbay-helm-test \
+  --namespace dispatch-helm-test \
   --show-only templates/sandboxtemplates.yaml \
   -f "$work_dir/gateway-overrides-values.yaml" > "$work_dir/gateway-overrides.yaml"
 
@@ -188,7 +188,7 @@ sandboxTemplates:
 EOF
 
 helm template demo "$chart_dir" \
-  --namespace agentbay-helm-test \
+  --namespace dispatch-helm-test \
   --show-only templates/sandboxtemplates.yaml \
   -f "$work_dir/spec-override-values.yaml" > "$work_dir/spec-override.yaml"
 
@@ -201,30 +201,30 @@ fi
 cat > "$work_dir/webhook-secret-values.yaml" <<'EOF'
 orchestrator:
   extraEnv:
-    - name: AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION
+    - name: DISPATCH_GITHUB_WEBHOOK_SECRET_PRODUCTION
       valueFrom:
         secretKeyRef:
-          name: agentbay-github-webhook
+          name: dispatch-github-webhook
           key: webhook-secret
 sandboxTemplates:
   enabled: true
 EOF
 
 helm template demo "$chart_dir" \
-  --namespace agentbay-helm-test \
+  --namespace dispatch-helm-test \
   --show-only templates/deployment.yaml \
   -f "$work_dir/webhook-secret-values.yaml" > "$work_dir/webhook-secret-deployment.yaml"
 
-test "$(grep -c 'name: AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION' "$work_dir/webhook-secret-deployment.yaml")" -eq 1
-grep -q 'name: agentbay-github-webhook' "$work_dir/webhook-secret-deployment.yaml"
+test "$(grep -c 'name: DISPATCH_GITHUB_WEBHOOK_SECRET_PRODUCTION' "$work_dir/webhook-secret-deployment.yaml")" -eq 1
+grep -q 'name: dispatch-github-webhook' "$work_dir/webhook-secret-deployment.yaml"
 grep -q 'key: webhook-secret' "$work_dir/webhook-secret-deployment.yaml"
 
 for template in migrations-job.yaml reconciler-cronjob.yaml sandboxtemplates.yaml; do
   helm template demo "$chart_dir" \
-    --namespace agentbay-helm-test \
+    --namespace dispatch-helm-test \
     --show-only "templates/$template" \
     -f "$work_dir/webhook-secret-values.yaml" > "$work_dir/$template"
-  if grep -q 'AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION\|agentbay-github-webhook\|webhook-secret' "$work_dir/$template"; then
+  if grep -q 'DISPATCH_GITHUB_WEBHOOK_SECRET_PRODUCTION\|dispatch-github-webhook\|webhook-secret' "$work_dir/$template"; then
     echo "GitHub webhook secret unexpectedly rendered in $template" >&2
     exit 1
   fi
@@ -279,7 +279,7 @@ sandboxTemplates:
 EOF
 
 helm template demo "$chart_dir" \
-  --namespace agentbay-helm-test \
+  --namespace dispatch-helm-test \
   --show-only templates/sandboxtemplates.yaml \
   -f "$work_dir/connection-sidecar-values.yaml" > "$work_dir/connection-sidecar.yaml"
 
@@ -303,7 +303,7 @@ fi
 
 for template in rbac.yaml reconciler-rbac.yaml; do
   helm template demo "$chart_dir" \
-    --namespace agentbay-helm-test \
+    --namespace dispatch-helm-test \
     --show-only "templates/$template" > "$work_dir/rbac-$template"
   grep -q 'resources: \["sandboxclaims"\]' "$work_dir/rbac-$template"
   if grep -q 'secrets' "$work_dir/rbac-$template"; then

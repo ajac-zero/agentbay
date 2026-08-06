@@ -53,7 +53,7 @@ describe("dispatcher persistence", () => {
     await store.publishBindingVersion({
       bindingId: "dispatcher", createdAt,
       definition: {
-        eventTypes: ["dev.agentbay.execution.submitted"], filter: { all: [] },
+        eventTypes: ["dev.dispatch.execution.submitted"], filter: { all: [] },
         prompt: { includeEvent: "none", literal: "Run" }, schemaVersion: 1, workspace: { type: "empty" },
       },
       disabledAt: null, enabled: true, id: "dispatcher-v1", profile: { id: profileId, version: 1 },
@@ -62,7 +62,7 @@ describe("dispatcher persistence", () => {
     await store.publishBindingVersion({
       bindingId: "dispatcher-git", createdAt,
       definition: {
-        eventTypes: ["dev.agentbay.git-execution.submitted"], filter: { all: [] },
+        eventTypes: ["dev.dispatch.git-execution.submitted"], filter: { all: [] },
         prompt: { includeEvent: "none", literal: "Run" }, schemaVersion: 1,
         workspace: {
           type: "git",
@@ -121,7 +121,7 @@ describe("dispatcher persistence", () => {
       source: "/test/dispatcher",
       specversion: "1.0" as const,
       time: createdAt,
-      type: "dev.agentbay.git-execution.submitted",
+      type: "dev.dispatch.git-execution.submitted",
     };
     const command = {
       admittedAt: createdAt,
@@ -143,7 +143,7 @@ describe("dispatcher persistence", () => {
     const execution = admitted.executions[0]!;
     expect(execution.workspace).toEqual(expectedWorkspace);
     expect(replayed).toEqual({ ...admitted, replayed: true });
-    expect((await pool.query("select workspace from agentbay_executions where id = $1", [execution.id])).rows[0]).toEqual({
+    expect((await pool.query("select workspace from dispatch_executions where id = $1", [execution.id])).rows[0]).toEqual({
       workspace: expectedWorkspace,
     });
     expect((await store.getExecution("default", execution.id))?.workspace).toEqual(expectedWorkspace);
@@ -154,17 +154,17 @@ describe("dispatcher persistence", () => {
 
   it("rejects malformed persisted workspaces when claiming without committing the claim", async () => {
     const executionId = await queueExecution();
-    await pool.query("update agentbay_execution_inputs set workspace = '{}'::jsonb where execution_id = $1 and sequence = 1", [executionId]);
+    await pool.query("update dispatch_execution_inputs set workspace = '{}'::jsonb where execution_id = $1 and sequence = 1", [executionId]);
 
     await expect(store.claimNextQueuedExecution({ leaseOwner: "dispatcher-corrupt", leaseDurationMs: 60_000 }))
       .rejects.toBeInstanceOf(PersistedExecutionCorruptionError);
-    expect((await pool.query("select state from agentbay_executions where id = $1", [executionId])).rows[0]).toEqual({ state: "QUEUED" });
+    expect((await pool.query("select state from dispatch_executions where id = $1", [executionId])).rows[0]).toEqual({ state: "QUEUED" });
     expect((await pool.query(
-      "select count(*)::int as count from agentbay_execution_attempts where execution_id = $1",
+      "select count(*)::int as count from dispatch_execution_attempts where execution_id = $1",
       [executionId],
     )).rows[0]).toEqual({ count: 0 });
 
-    await pool.query("update agentbay_execution_inputs set workspace = $1 where execution_id = $2 and sequence = 1", [{ type: "empty" }, executionId]);
+    await pool.query("update dispatch_execution_inputs set workspace = $1 where execution_id = $2 and sequence = 1", [{ type: "empty" }, executionId]);
     expect(await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-cleanup", leaseDurationMs: 60_000 }))
       .toMatchObject({ executionId });
   });
@@ -179,11 +179,11 @@ describe("dispatcher persistence", () => {
 
     expect(claims).toHaveLength(1);
     expect((await pool.query(
-      "select count(*)::int as count from agentbay_execution_attempts where execution_id = $1",
+      "select count(*)::int as count from dispatch_execution_attempts where execution_id = $1",
       [executionId],
     )).rows[0]).toEqual({ count: 1 });
     expect((await pool.query(
-      "select count(*)::int as count from agentbay_execution_transitions where execution_id = $1 and to_state = 'PROVISIONING'",
+      "select count(*)::int as count from dispatch_execution_transitions where execution_id = $1 and to_state = 'PROVISIONING'",
       [executionId],
     )).rows[0]).toEqual({ count: 1 });
   });
@@ -211,7 +211,7 @@ describe("dispatcher persistence", () => {
     })).toBe("LOST");
 
     await pool.query(
-      "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      "update dispatch_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
       [executionId],
     );
     expect(await store.renewExecutionLease({
@@ -223,7 +223,7 @@ describe("dispatcher persistence", () => {
       leaseDurationMs: 120_000,
     })).toBe("LOST");
     await pool.query(
-      "update agentbay_execution_attempts set lease_expires_at = now() + interval '1 hour' where execution_id = $1",
+      "update dispatch_execution_attempts set lease_expires_at = now() + interval '1 hour' where execution_id = $1",
       [executionId],
     );
   });
@@ -273,7 +273,7 @@ describe("dispatcher persistence", () => {
   it("skips unchanged checkpoints and prevents stale successful executions from moving them backward", async () => {
     const token = randomUUID();
     const bindingId = `checkpoint-${token}`;
-    const eventType = `dev.agentbay.checkpoint.${token}`;
+    const eventType = `dev.dispatch.checkpoint.${token}`;
     const createdAt = new Date().toISOString();
     const definition = {
       schemaVersion: 1 as const, eventTypes: [eventType], filter: { all: [] },
@@ -309,7 +309,7 @@ describe("dispatcher persistence", () => {
       context: { incremental: { checkpoint: "repository-audit", previous: null, current: "a".repeat(40), initial: true } },
     });
     await expect(complete(first.executions[0]!.id, "checkpoint-a")).resolves.toMatchObject({ executionState: "SUCCEEDED" });
-    expect((await pool.query("select value from agentbay_execution_checkpoints where binding_id=$1", [bindingId])).rows).toEqual([{ value: "a".repeat(40) }]);
+    expect((await pool.query("select value from dispatch_execution_checkpoints where binding_id=$1", [bindingId])).rows).toEqual([{ value: "a".repeat(40) }]);
     await store.publishBindingVersion({ bindingId, createdAt: new Date().toISOString(), disabledAt: null, enabled: true,
       id: randomUUID(), profile: { id: profileId, version: 1 }, tenantId: "default", triggerId: "dispatcher-test",
       version: 2, definition });
@@ -322,8 +322,8 @@ describe("dispatcher persistence", () => {
       leaseOwner: failedClaim.lease.leaseOwner, expectedExecutionState: "RUNNING", expectedAttemptState: "RUNNING",
       targetExecutionState: "FAILED", targetAttemptState: "FAILED", actor: "checkpoint-failed", reason: "audit failed" }))
       .resolves.toMatchObject({ applied: true, executionState: "FAILED", attemptState: "FAILED" });
-    expect((await pool.query("select value from agentbay_execution_checkpoints where binding_id=$1", [bindingId])).rows).toEqual([{ value: "a".repeat(40) }]);
-    expect((await pool.query("select state from agentbay_execution_checkpoint_advances where execution_id=$1", [failed.executions[0]!.id])).rows)
+    expect((await pool.query("select value from dispatch_execution_checkpoints where binding_id=$1", [bindingId])).rows).toEqual([{ value: "a".repeat(40) }]);
+    expect((await pool.query("select state from dispatch_execution_checkpoint_advances where execution_id=$1", [failed.executions[0]!.id])).rows)
       .toEqual([{ state: "PENDING" }]);
 
     const older = await admit("b".repeat(40));
@@ -338,9 +338,9 @@ describe("dispatcher persistence", () => {
       leaseOwner: olderClaim.lease.leaseOwner, reason: "older audit completed", result: { ok: true }, tenantId: "default" }))
       .resolves.toMatchObject({ executionState: "SUCCEEDED" });
 
-    expect((await pool.query("select value,advanced_by_execution_id from agentbay_execution_checkpoints where binding_id=$1", [bindingId])).rows)
+    expect((await pool.query("select value,advanced_by_execution_id from dispatch_execution_checkpoints where binding_id=$1", [bindingId])).rows)
       .toEqual([{ value: "c".repeat(40), advanced_by_execution_id: newer.executions[0]!.id }]);
-    expect((await pool.query("select execution_id,state from agentbay_execution_checkpoint_advances where binding_id=$1 order by execution_id", [bindingId])).rows)
+    expect((await pool.query("select execution_id,state from dispatch_execution_checkpoint_advances where binding_id=$1 order by execution_id", [bindingId])).rows)
       .toEqual(expect.arrayContaining([
         { execution_id: first.executions[0]!.id, state: "APPLIED" },
         { execution_id: older.executions[0]!.id, state: "SUPERSEDED" },
@@ -356,7 +356,7 @@ describe("dispatcher persistence", () => {
       opencodeSessionId: "session-adoptable",
     });
     await pool.query(
-      "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      "update dispatch_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
       [executionId],
     );
     const before = await executionSnapshot(executionId);
@@ -402,7 +402,7 @@ describe("dispatcher persistence", () => {
     const incompleteExecutionId = await queueExecution();
     await startRunningExecution(incompleteExecutionId, "dispatcher-incomplete");
     await pool.query(
-      "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      "update dispatch_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
       [incompleteExecutionId],
     );
     const liveBefore = await executionSnapshot(liveExecutionId);
@@ -423,7 +423,7 @@ describe("dispatcher persistence", () => {
       opencodeSessionId: "session-contended",
     });
     await pool.query(
-      "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      "update dispatch_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
       [executionId],
     );
 
@@ -496,7 +496,7 @@ describe("dispatcher persistence", () => {
     const first = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-stale", leaseDurationMs: 60_000 });
     if (!first) throw new Error("Expected first execution attempt");
     await pool.query(
-      "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      "update dispatch_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
       [executionId],
     );
 
@@ -515,7 +515,7 @@ describe("dispatcher persistence", () => {
 
     expect(await store.promoteDueExecutionRetries({ limit: 10 })).toEqual([]);
     await pool.query(
-      "update agentbay_executions set available_at = now() - interval '1 second' where id = $1",
+      "update dispatch_executions set available_at = now() - interval '1 second' where id = $1",
       [executionId],
     );
     expect(await store.promoteDueExecutionRetries({ limit: 10 })).toEqual([
@@ -563,7 +563,7 @@ describe("dispatcher persistence", () => {
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-a", leaseDurationMs: 60_000 });
     if (!claimed) throw new Error("Expected execution attempt");
     await pool.query(
-      "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      "update dispatch_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
       [executionId],
     );
 
@@ -605,12 +605,12 @@ describe("dispatcher persistence", () => {
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-a", leaseDurationMs: 60_000 });
     if (!claimed) throw new Error("Expected execution attempt");
     await pool.query(
-      "update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
+      "update dispatch_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1",
       [executionId],
     );
     await store.recoverExpiredExecutionLeases({ limit: 10, maxAttempts: 3, retryDelayMs: 60_000 });
     await pool.query(
-      "update agentbay_executions set timeout_at = now() - interval '1 second' where id = $1",
+      "update dispatch_executions set timeout_at = now() - interval '1 second' where id = $1",
       [executionId],
     );
 
@@ -655,13 +655,13 @@ describe("dispatcher persistence", () => {
       { sequence: 4, fromState: "QUEUED", toState: "CANCEL_REQUESTED" },
       { sequence: 5, fromState: "CANCEL_REQUESTED", toState: "CANCELLED" },
     ]);
-    expect((await pool.query("select completed_at from agentbay_executions where id = $1", [executionId])).rows[0]?.completed_at)
+    expect((await pool.query("select completed_at from dispatch_executions where id = $1", [executionId])).rows[0]?.completed_at)
       .toBeInstanceOf(Date);
   });
 
   it("immediately cancels an execution awaiting approval without creating an attempt", async () => {
     const executionId = await queueExecution();
-    await pool.query("update agentbay_executions set state = 'AWAITING_APPROVAL' where id = $1", [executionId]);
+    await pool.query("update dispatch_executions set state = 'AWAITING_APPROVAL' where id = $1", [executionId]);
 
     await expect(store.requestExecutionCancellation({
       actor: "test-user", executionId, reason: "approval withdrawn", requestedAt: new Date().toISOString(),
@@ -679,13 +679,13 @@ describe("dispatcher persistence", () => {
 
   it("rejects cancellation from a non-cancellable state", async () => {
     const executionId = await queueExecution();
-    await pool.query("update agentbay_executions set state = 'SUCCEEDED' where id = $1", [executionId]);
+    await pool.query("update dispatch_executions set state = 'SUCCEEDED' where id = $1", [executionId]);
 
     await expect(store.requestExecutionCancellation({
       actor: "test-user", executionId, reason: "too late", requestedAt: new Date().toISOString(),
       tenantId: "default", transitionId: randomUUID(),
     })).rejects.toBeInstanceOf(ExecutionCancellationConflictError);
-    expect((await pool.query("select state from agentbay_executions where id = $1", [executionId])).rows[0])
+    expect((await pool.query("select state from dispatch_executions where id = $1", [executionId])).rows[0])
       .toEqual({ state: "SUCCEEDED" });
   });
 
@@ -702,7 +702,7 @@ describe("dispatcher persistence", () => {
       { id: executionId, outcome: "CANCELLED", state: "CANCELLED" },
     ]);
     expect((await pool.query(
-      "select count(*)::int as count from agentbay_execution_transitions where execution_id = $1 and to_state in ('CANCEL_REQUESTED', 'CANCELLED')",
+      "select count(*)::int as count from dispatch_execution_transitions where execution_id = $1 and to_state in ('CANCEL_REQUESTED', 'CANCELLED')",
       [executionId],
     )).rows[0]).toEqual({ count: 2 });
   });
@@ -748,7 +748,7 @@ describe("dispatcher persistence", () => {
     });
 
     expect(await store.listRequestedCancellationCleanups({ limit: 10 })).toEqual([]);
-    await pool.query("update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1", [executionId]);
+    await pool.query("update dispatch_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1", [executionId]);
     const candidates = await store.listRequestedCancellationCleanups({ limit: 10 });
     const candidate = candidates.find((item) => item.executionId === executionId);
     expect(candidate).toEqual({ attempt: 1, executionId, tenantId: "default", workloadName: null });
@@ -778,13 +778,13 @@ describe("dispatcher persistence", () => {
     });
 
     await pool.query(
-      `UPDATE agentbay_execution_attempts
+      `UPDATE dispatch_execution_attempts
        SET lease_expires_at = now() - interval '1 second'
        WHERE execution_id = ANY($1::text[])`,
       [[oldestExecutionId, otherExecutionId]],
     );
     await pool.query(
-      `UPDATE agentbay_executions
+      `UPDATE dispatch_executions
        SET updated_at = CASE id WHEN $1 THEN '2000-01-01T00:00:00Z'::timestamptz
                                     ELSE '2000-01-02T00:00:00Z'::timestamptz END
        WHERE id = ANY($2::text[])`,
@@ -825,12 +825,12 @@ describe("dispatcher persistence", () => {
     const executionId = await queueExecution();
     const claimed = await store.claimNextQueuedExecution({ leaseOwner: "dispatcher-cleanup", leaseDurationMs: 60_000 });
     if (!claimed) throw new Error("Expected execution attempt");
-    await pool.query("update agentbay_execution_attempts set workload_name = $2 where execution_id = $1", [executionId, "sandbox-cleanup"]);
+    await pool.query("update dispatch_execution_attempts set workload_name = $2 where execution_id = $1", [executionId, "sandbox-cleanup"]);
     await store.requestExecutionCancellation({
       actor: "test-user", executionId, reason: "stop", requestedAt: new Date().toISOString(),
       tenantId: "default", transitionId: randomUUID(),
     });
-    await pool.query("update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1", [executionId]);
+    await pool.query("update dispatch_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1", [executionId]);
 
     const candidate = (await store.listRequestedCancellationCleanups({ limit: 10 }))
       .find((item) => item.executionId === executionId);
@@ -854,11 +854,11 @@ describe("dispatcher persistence", () => {
       actor: "test-user", executionId, reason: "stop", requestedAt: new Date().toISOString(),
       tenantId: "default", transitionId: randomUUID(),
     });
-    await pool.query("update agentbay_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1", [executionId]);
+    await pool.query("update dispatch_execution_attempts set lease_expires_at = now() - interval '1 second' where execution_id = $1", [executionId]);
     const candidate = (await store.listRequestedCancellationCleanups({ limit: 10 }))
       .find((item) => item.executionId === executionId);
     if (!candidate) throw new Error("Expected cancellation cleanup candidate");
-    await pool.query("update agentbay_execution_attempts set fencing_token = $2 where execution_id = $1", [executionId, randomUUID()]);
+    await pool.query("update dispatch_execution_attempts set fencing_token = $2 where execution_id = $1", [executionId, randomUUID()]);
 
     await expect(store.finalizeRequestedExecutionCancellation(candidate)).resolves.toBeUndefined();
     expect(await executionSnapshot(executionId)).toMatchObject({
@@ -892,7 +892,7 @@ describe("dispatcher persistence", () => {
 
   it("finalizes requested cancellation with no active attempt", async () => {
     const executionId = await queueExecution();
-    await pool.query("update agentbay_executions set state = 'CANCEL_REQUESTED' where id = $1", [executionId]);
+    await pool.query("update dispatch_executions set state = 'CANCEL_REQUESTED' where id = $1", [executionId]);
 
     const candidate = (await store.listRequestedCancellationCleanups({ limit: 10 }))
       .find((item) => item.executionId === executionId);
@@ -910,7 +910,7 @@ describe("dispatcher persistence", () => {
 
   it("activates, exposes, and immediately cancels a policy-driven wait", async () => {
     const bindingId = `waiting-${randomUUID()}`;
-    const eventType = `dev.agentbay.wait.${randomUUID()}`;
+    const eventType = `dev.dispatch.wait.${randomUUID()}`;
     const createdAt = new Date().toISOString();
     await store.publishBindingVersion({
       bindingId, createdAt, disabledAt: null, enabled: true, id: randomUUID(), profile: { id: profileId, version: 1 },
@@ -986,7 +986,7 @@ describe("dispatcher persistence", () => {
     expect((await store.getExecutionDetail("default", executionId))?.waits).toEqual([]);
 
     const waiting = await createWaitingExecution(store, profileId);
-    await pool.query("UPDATE agentbay_event_waits SET activated_at = clock_timestamp() - interval '2 seconds', deadline_at = clock_timestamp() - interval '1 second' WHERE execution_id = $1", [waiting]);
+    await pool.query("UPDATE dispatch_event_waits SET activated_at = clock_timestamp() - interval '2 seconds', deadline_at = clock_timestamp() - interval '1 second' WHERE execution_id = $1", [waiting]);
     const expired = await store.expireDueEventWaits({ limit: 10 });
     expect(expired).toEqual([expect.objectContaining({ executionId: waiting, eventWaitId: expect.any(String) })]);
     const expiredDetail = await store.getExecutionDetail("default", waiting);
@@ -996,7 +996,7 @@ describe("dispatcher persistence", () => {
 
   it("rolls back turn completion when configured correlation is not a bounded primitive", async () => {
     const token = randomUUID();
-    const eventType = `dev.agentbay.invalid-wait.${token}`;
+    const eventType = `dev.dispatch.invalid-wait.${token}`;
     const createdAt = new Date().toISOString();
     await store.publishBindingVersion({
       bindingId: `invalid-wait-${token}`, createdAt, disabledAt: null, enabled: true, id: randomUUID(),
@@ -1033,7 +1033,7 @@ describe("dispatcher persistence", () => {
       source: "/test/dispatcher",
       specversion: "1.0" as const,
       time: createdAt,
-      type: "dev.agentbay.execution.submitted",
+      type: "dev.dispatch.execution.submitted",
     };
     const result = await store.admitEvent({
       admittedAt: createdAt,
@@ -1051,7 +1051,7 @@ describe("dispatcher persistence", () => {
 
   async function createWaitingExecution(store: PostgresRuntimeStore, profileId: string): Promise<string> {
     const token = randomUUID();
-    const eventType = `dev.agentbay.expiring-wait.${token}`;
+    const eventType = `dev.dispatch.expiring-wait.${token}`;
     const createdAt = new Date().toISOString();
     await store.publishBindingVersion({
       bindingId: `expiring-${token}`, createdAt, disabledAt: null, enabled: true, id: randomUUID(),
@@ -1103,15 +1103,15 @@ describe("dispatcher persistence", () => {
 
   async function executionSnapshot(executionId: string) {
     const execution = (await pool.query(
-      "select state, result, completed_at, available_at from agentbay_executions where id = $1",
+      "select state, result, completed_at, available_at from dispatch_executions where id = $1",
       [executionId],
     )).rows[0];
     const attempts = (await pool.query(
-      "select attempt, state, fencing_token, lease_owner, lease_expires_at, started_at, finished_at, workload_name, opencode_session_id from agentbay_execution_attempts where execution_id = $1 order by attempt",
+      "select attempt, state, fencing_token, lease_owner, lease_expires_at, started_at, finished_at, workload_name, opencode_session_id from dispatch_execution_attempts where execution_id = $1 order by attempt",
       [executionId],
     )).rows;
     const transitions = (await pool.query(
-      "select sequence, attempt, from_state, to_state from agentbay_execution_transitions where execution_id = $1 order by sequence",
+      "select sequence, attempt, from_state, to_state from dispatch_execution_transitions where execution_id = $1 order by sequence",
       [executionId],
     )).rows;
     return { attempts, execution, transitions };
@@ -1119,7 +1119,7 @@ describe("dispatcher persistence", () => {
 
   async function cancellationCleanupUpdatedAt(...executionIds: string[]): Promise<Record<string, Date>> {
     const rows = (await pool.query<{ id: string; updated_at: Date }>(
-      "select id, updated_at from agentbay_executions where id = any($1::text[])",
+      "select id, updated_at from dispatch_executions where id = any($1::text[])",
       [executionIds],
     )).rows;
     return Object.fromEntries(rows.map((row) => [row.id, row.updated_at]));
@@ -1129,15 +1129,15 @@ describe("dispatcher persistence", () => {
 async function startPostgres(): Promise<StartedTestContainer> {
   return new GenericContainer("postgres:16-alpine")
     .withEnvironment({
-      POSTGRES_DB: "agentbay",
-      POSTGRES_PASSWORD: "agentbay-password",
-      POSTGRES_USER: "agentbay",
+      POSTGRES_DB: "dispatch",
+      POSTGRES_PASSWORD: "dispatch-password",
+      POSTGRES_USER: "dispatch",
     })
     .withExposedPorts(5432)
     .withHealthCheck({
       interval: 1_000,
       retries: 30,
-      test: ["CMD-SHELL", "pg_isready -U agentbay -d agentbay"],
+      test: ["CMD-SHELL", "pg_isready -U dispatch -d dispatch"],
       timeout: 5_000,
     })
     .withWaitStrategy(Wait.forHealthCheck())
@@ -1145,5 +1145,5 @@ async function startPostgres(): Promise<StartedTestContainer> {
 }
 
 function postgresConnectionString(container: StartedTestContainer): string {
-  return `postgresql://agentbay:agentbay-password@${container.getHost()}:${container.getMappedPort(5432)}/agentbay`;
+  return `postgresql://dispatch:dispatch-password@${container.getHost()}:${container.getMappedPort(5432)}/dispatch`;
 }

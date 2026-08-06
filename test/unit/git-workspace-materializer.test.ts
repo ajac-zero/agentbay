@@ -11,7 +11,7 @@ const directories: string[] = [];
 const publicResolver = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
 
 async function temporaryDirectory(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "agentbay-workspace-test-"));
+  const directory = await mkdtemp(join(tmpdir(), "dispatch-workspace-test-"));
   directories.push(directory);
   return directory;
 }
@@ -53,7 +53,7 @@ describe("materializeWorkspace", () => {
   it("does nothing for an empty workspace", async () => {
     const runner = vi.fn();
     const resolver = vi.fn();
-    await materializeWorkspace({ environment: { AGENTBAY_WORKSPACE_TYPE: "empty" }, runner, resolver });
+    await materializeWorkspace({ environment: { DISPATCH_WORKSPACE_TYPE: "empty" }, runner, resolver });
     expect(runner).not.toHaveBeenCalled();
     expect(resolver).not.toHaveBeenCalled();
   });
@@ -68,10 +68,10 @@ describe("materializeWorkspace", () => {
 
     await materializeWorkspace({
       environment: {
-        AGENTBAY_WORKSPACE_TYPE: "git",
-        AGENTBAY_WORKSPACE_DIRECTORY: directory,
-        AGENTBAY_WORKSPACE_GIT_URL: "https://github.com/repo;touch-pwned",
-        AGENTBAY_WORKSPACE_GIT_COMMIT: commit,
+        DISPATCH_WORKSPACE_TYPE: "git",
+        DISPATCH_WORKSPACE_DIRECTORY: directory,
+        DISPATCH_WORKSPACE_GIT_URL: "https://github.com/repo;touch-pwned",
+        DISPATCH_WORKSPACE_GIT_COMMIT: commit,
       },
       runner,
       resolver: publicResolver,
@@ -106,10 +106,10 @@ describe("materializeWorkspace", () => {
     const runner = vi.fn();
     await expect(materializeWorkspace({
       environment: {
-        AGENTBAY_WORKSPACE_TYPE: "git",
-        AGENTBAY_WORKSPACE_DIRECTORY: directory,
-        AGENTBAY_WORKSPACE_GIT_URL: "https://github.com/example/repo.git",
-        AGENTBAY_WORKSPACE_GIT_COMMIT: commit,
+        DISPATCH_WORKSPACE_TYPE: "git",
+        DISPATCH_WORKSPACE_DIRECTORY: directory,
+        DISPATCH_WORKSPACE_GIT_URL: "https://github.com/example/repo.git",
+        DISPATCH_WORKSPACE_GIT_COMMIT: commit,
       },
       runner,
       resolver: publicResolver,
@@ -125,10 +125,10 @@ describe("materializeWorkspace", () => {
     const runner = vi.fn();
     await expect(materializeWorkspace({
       environment: {
-        AGENTBAY_WORKSPACE_TYPE: "git",
-        AGENTBAY_WORKSPACE_DIRECTORY: directory,
-        AGENTBAY_WORKSPACE_GIT_URL: "https://github.com/example/repo.git",
-        AGENTBAY_WORKSPACE_GIT_COMMIT: commit,
+        DISPATCH_WORKSPACE_TYPE: "git",
+        DISPATCH_WORKSPACE_DIRECTORY: directory,
+        DISPATCH_WORKSPACE_GIT_URL: "https://github.com/example/repo.git",
+        DISPATCH_WORKSPACE_GIT_COMMIT: commit,
       },
       runner,
       resolver: publicResolver,
@@ -141,10 +141,10 @@ describe("materializeWorkspace", () => {
     const runner = vi.fn().mockResolvedValue({ stdout: `${"b".repeat(40)}\n`, stderr: "" });
     await expect(materializeWorkspace({
       environment: {
-        AGENTBAY_WORKSPACE_TYPE: "git",
-        AGENTBAY_WORKSPACE_DIRECTORY: directory,
-        AGENTBAY_WORKSPACE_GIT_URL: "https://github.com/example/repo.git",
-        AGENTBAY_WORKSPACE_GIT_COMMIT: commit,
+        DISPATCH_WORKSPACE_TYPE: "git",
+        DISPATCH_WORKSPACE_DIRECTORY: directory,
+        DISPATCH_WORKSPACE_GIT_URL: "https://github.com/example/repo.git",
+        DISPATCH_WORKSPACE_GIT_COMMIT: commit,
       },
       runner,
       resolver: publicResolver,
@@ -156,10 +156,10 @@ describe("materializeWorkspace", () => {
     const runner = vi.fn().mockRejectedValue({ stderr: `bad\n\u001b[31m${"x".repeat(2000)}` });
     const result = materializeWorkspace({
       environment: {
-        AGENTBAY_WORKSPACE_TYPE: "git",
-        AGENTBAY_WORKSPACE_DIRECTORY: directory,
-        AGENTBAY_WORKSPACE_GIT_URL: "https://github.com/example/repo.git",
-        AGENTBAY_WORKSPACE_GIT_COMMIT: commit,
+        DISPATCH_WORKSPACE_TYPE: "git",
+        DISPATCH_WORKSPACE_DIRECTORY: directory,
+        DISPATCH_WORKSPACE_GIT_URL: "https://github.com/example/repo.git",
+        DISPATCH_WORKSPACE_GIT_COMMIT: commit,
       },
       runner,
       resolver: publicResolver,
@@ -176,10 +176,10 @@ describe("materializeWorkspace", () => {
     const runner = vi.fn();
     await expect(materializeWorkspace({
       environment: {
-        AGENTBAY_WORKSPACE_TYPE: "git",
-        AGENTBAY_WORKSPACE_DIRECTORY: directory,
-        AGENTBAY_WORKSPACE_GIT_URL: "https://github.com/example/repo.git",
-        AGENTBAY_WORKSPACE_GIT_COMMIT: commit,
+        DISPATCH_WORKSPACE_TYPE: "git",
+        DISPATCH_WORKSPACE_DIRECTORY: directory,
+        DISPATCH_WORKSPACE_GIT_URL: "https://github.com/example/repo.git",
+        DISPATCH_WORKSPACE_GIT_COMMIT: commit,
       },
       runner,
       resolver: vi.fn().mockResolvedValue(answers),
@@ -196,10 +196,10 @@ describe("materializeWorkspace", () => {
       .mockResolvedValueOnce({ stdout: `${commit.toLowerCase()}\n`, stderr: "" });
     await expect(materializeWorkspace({
       environment: {
-        AGENTBAY_WORKSPACE_TYPE: "git",
-        AGENTBAY_WORKSPACE_DIRECTORY: directory,
-        AGENTBAY_WORKSPACE_GIT_URL: "https://github.com/example/repo.git",
-        AGENTBAY_WORKSPACE_GIT_COMMIT: commit,
+        DISPATCH_WORKSPACE_TYPE: "git",
+        DISPATCH_WORKSPACE_DIRECTORY: directory,
+        DISPATCH_WORKSPACE_GIT_URL: "https://github.com/example/repo.git",
+        DISPATCH_WORKSPACE_GIT_COMMIT: commit,
       },
       runner,
       resolver: vi.fn().mockResolvedValue([{ address: "2606:4700:4700::1111", family: 6 }]),
@@ -211,9 +211,9 @@ describe("materializeWorkspace", () => {
     const resolver = vi.fn();
     await expect(materializeWorkspace({
       environment: {
-        AGENTBAY_WORKSPACE_TYPE: "git",
-        AGENTBAY_WORKSPACE_GIT_URL: "https://localhost/repo.git",
-        AGENTBAY_WORKSPACE_GIT_COMMIT: commit,
+        DISPATCH_WORKSPACE_TYPE: "git",
+        DISPATCH_WORKSPACE_GIT_URL: "https://localhost/repo.git",
+        DISPATCH_WORKSPACE_GIT_COMMIT: commit,
       },
       resolver,
     })).rejects.toThrow(/host must be public/);

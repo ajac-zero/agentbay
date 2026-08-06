@@ -44,7 +44,7 @@ describe("triggerSchema", () => {
       id: "github-app",
       tenantId: "acme",
       type: "github.app.webhook",
-      config: { schemaVersion: 1, webhookSecretEnv: "AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION_1" },
+      config: { schemaVersion: 1, webhookSecretEnv: "DISPATCH_GITHUB_WEBHOOK_SECRET_PRODUCTION_1" },
       enabled: true,
       createdAt: "2026-07-18T10:00:00Z",
       disabledAt: null,

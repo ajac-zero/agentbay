@@ -37,7 +37,7 @@ describe("official GitHub MCP through token broker", () => {
     const initialized = await rpc(url, 1, "initialize", {
       protocolVersion: "2025-06-18",
       capabilities: {},
-      clientInfo: { name: "agentbay-test", version: "1" },
+      clientInfo: { name: "dispatch-test", version: "1" },
     });
     expect(initialized.result.serverInfo).toMatchObject({ name: "github-mcp-server", version: "v1.6.0" });
 

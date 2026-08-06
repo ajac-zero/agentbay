@@ -10,7 +10,7 @@ import { IdempotencyConflictError } from "../../src/execution/types.js";
 import { createOpenApiApp } from "../../src/openapi.js";
 import { WorkspaceResolutionError } from "../../src/workspace/resolver.js";
 
-const SECRET_ENV = "AGENTBAY_GITHUB_WEBHOOK_SECRET_TEST";
+const SECRET_ENV = "DISPATCH_GITHUB_WEBHOOK_SECRET_TEST";
 const SECRET = "a sufficiently long test webhook secret";
 
 describe("GitHub webhook API", () => {

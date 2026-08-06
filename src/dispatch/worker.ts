@@ -56,7 +56,7 @@ export class OpenCodeExecutionAttemptRunner implements ExecutionAttemptRunner {
       onSession: input.onSession,
       prompt: input.execution.input.text,
       signal: input.signal,
-      title: `agentbay execution ${input.execution.executionId} attempt ${input.execution.lease.attempt}`,
+      title: `dispatch execution ${input.execution.executionId} attempt ${input.execution.lease.attempt}`,
       });
     return { result: { output: result.output }, sessionId: result.sessionId };
   }

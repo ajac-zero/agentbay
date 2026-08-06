@@ -3,7 +3,7 @@ import { canonicalJson, jsonValueSchema, type JsonValue } from "../json.js";
 
 export type CloudEventAttributeValue = boolean | number | string;
 export const TENANT_ID_EXTENSION = "tenantid";
-export const AGENTBAY_EXTENSION = "agentbay";
+export const DISPATCH_EXTENSION = "dispatch";
 
 const MAX_DATA_BYTES = 128 * 1024;
 const MAX_CANONICAL_EVENT_BYTES = 40 * 1024;
@@ -13,7 +13,7 @@ const boundedString = (limit: number) => z.string().min(1).refine(byteLengthAtMo
 const uriReferenceSchema = boundedString(2_048).refine((value) => {
   if (/\s|[\u0000-\u001f\u007f]/.test(value)) return false;
   try {
-    new URL(value, "https://agentbay.invalid");
+    new URL(value, "https://dispatch.invalid");
     return true;
   } catch {
     return false;
@@ -22,7 +22,7 @@ const uriReferenceSchema = boundedString(2_048).refine((value) => {
 const absoluteUriSchema = boundedString(2_048).url();
 const extensionValueSchema = z.union([boundedString(1_024), z.boolean(), z.number().int().safe()]);
 const coreAttributes = new Set(["specversion", "id", "source", "type", "subject", "time", "datacontenttype", "dataschema", "data"]);
-const reservedExtensions = new Set([TENANT_ID_EXTENSION, AGENTBAY_EXTENSION]);
+const reservedExtensions = new Set([TENANT_ID_EXTENSION, DISPATCH_EXTENSION]);
 const extensionNamePattern = /^[a-z0-9]{1,20}$/;
 
 export const normalizedCloudEventSchema = z

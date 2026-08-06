@@ -52,7 +52,7 @@ definition:
       permission: { "github_*": deny }
       agent:
         triage:
-          prompt: Classify the issue, apply one agentbay/difficulty label, then apply agentbay/state:ready.
+          prompt: Classify the issue, apply one dispatch/difficulty label, then apply dispatch/state:ready.
           permission:
             github_search_issues: allow
             github_issue_read: allow

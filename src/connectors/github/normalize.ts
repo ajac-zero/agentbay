@@ -162,8 +162,8 @@ const workflowRunPayloadSchema = z.object({
 });
 const envelopeSchema = z.object({ action: bounded(64) });
 
-function agentbayReviewVerdict(body: string | null): "approved" | "changes_requested" | undefined {
-  const match = body?.match(/^Agentbay-Verdict:[ \t]*(approved|changes_requested)[ \t]*(?:\r?\n|$)/i);
+function dispatchReviewVerdict(body: string | null): "approved" | "changes_requested" | undefined {
+  const match = body?.match(/^Dispatch-Verdict:[ \t]*(approved|changes_requested)[ \t]*(?:\r?\n|$)/i);
   return match?.[1]?.toLowerCase() as "approved" | "changes_requested" | undefined;
 }
 
@@ -335,7 +335,7 @@ export function normalizeGitHubEvent(input: NormalizeGitHubEventInput): Normaliz
         : event === "pull_request_review"
           ? (() => {
               const value = payload as z.infer<typeof pullRequestReviewPayloadSchema>;
-              const agentbayVerdict = agentbayReviewVerdict(value.review.body);
+              const dispatchVerdict = dispatchReviewVerdict(value.review.body);
               subject = `pulls/${value.pull_request.number}`;
               return {
                 ...common,
@@ -343,7 +343,7 @@ export function normalizeGitHubEvent(input: NormalizeGitHubEventInput): Normaliz
                 review: {
                   id: value.review.id,
                   ...truncateBody(value.review.body),
-                  ...(agentbayVerdict ? { agentbayVerdict } : {}),
+                  ...(dispatchVerdict ? { dispatchVerdict } : {}),
                   user: actor(value.review.user),
                   state: value.review.state.toLowerCase(),
                   commitSha: value.review.commit_id,

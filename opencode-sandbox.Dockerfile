@@ -13,8 +13,8 @@ RUN apt-get update \
   && npm install -g opencode-ai@${OPENCODE_VERSION} \
   && npm cache clean --force \
   && chown -R node:node /workspace
-COPY --chmod=0555 sandbox-image/git-workspace-materializer.mjs /opt/agentbay/git-workspace-materializer.mjs
+COPY --chmod=0555 sandbox-image/git-workspace-materializer.mjs /opt/dispatch/git-workspace-materializer.mjs
 USER node
 EXPOSE 4096
-ENTRYPOINT ["node", "/opt/agentbay/git-workspace-materializer.mjs"]
+ENTRYPOINT ["node", "/opt/dispatch/git-workspace-materializer.mjs"]
 CMD ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]

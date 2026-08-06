@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { createPrivateKey, createSign } from "node:crypto";
 
 type Config = {
-  agentbayUrl: string;
+  dispatchUrl: string;
   appIdFile: string;
   defaultBranch: string;
   installationIdFile: string;
@@ -58,8 +58,8 @@ if (!runId || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(runId)) throw new Error
 const event = {
   specversion: "1.0",
   id: runId,
-  source: "urn:agentbay:bug-finder-cron",
-  type: "dev.agentbay.repository.full_review.requested",
+  source: "urn:dispatch:bug-finder-cron",
+  type: "dev.dispatch.repository.full_review.requested",
   datacontenttype: "application/json",
   subject: `repositories/${config.repositoryId}`,
   time: new Date().toISOString(),
@@ -74,7 +74,7 @@ const event = {
     },
   },
 };
-const admitted = await fetch(new URL(`/v1/triggers/${encodeURIComponent(config.triggerId)}/events`, config.agentbayUrl), {
+const admitted = await fetch(new URL(`/v1/triggers/${encodeURIComponent(config.triggerId)}/events`, config.dispatchUrl), {
   method: "POST",
   headers: {
     authorization: `Bearer ${adminToken.trim()}`,
@@ -90,7 +90,7 @@ const result = await admitted.json() as { executions?: unknown };
 console.log(JSON.stringify({ revision: revision.sha, executions: result.executions.length }));
 
 function githubHeaders(token: string): Record<string, string> {
-  return { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "agentbay-bug-finder-cron/1.0", "x-github-api-version": "2022-11-28" };
+  return { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "dispatch-bug-finder-cron/1.0", "x-github-api-version": "2022-11-28" };
 }
 
 function appJwt(appId: number, privateKey: string): string {
@@ -118,19 +118,19 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
 function readConfig(env: NodeJS.ProcessEnv): Config {
   const repositoryFullName = required(env, "BUG_FINDER_REPOSITORY_FULL_NAME");
   if (!/^[^/\s]+\/[^/\s]+$/.test(repositoryFullName)) throw new Error("BUG_FINDER_REPOSITORY_FULL_NAME is invalid");
-  const agentbayUrl = new URL(required(env, "BUG_FINDER_AGENTBAY_URL"));
-  if (!["http:", "https:"].includes(agentbayUrl.protocol) || agentbayUrl.username || agentbayUrl.password || agentbayUrl.search || agentbayUrl.hash) {
-    throw new Error("BUG_FINDER_AGENTBAY_URL is invalid");
+  const dispatchUrl = new URL(required(env, "BUG_FINDER_DISPATCH_URL"));
+  if (!["http:", "https:"].includes(dispatchUrl.protocol) || dispatchUrl.username || dispatchUrl.password || dispatchUrl.search || dispatchUrl.hash) {
+    throw new Error("BUG_FINDER_DISPATCH_URL is invalid");
   }
   return {
-    agentbayUrl: agentbayUrl.toString(),
+    dispatchUrl: dispatchUrl.toString(),
     appIdFile: required(env, "BUG_FINDER_GITHUB_APP_ID_FILE"),
     defaultBranch: required(env, "BUG_FINDER_DEFAULT_BRANCH"),
     installationIdFile: required(env, "BUG_FINDER_GITHUB_INSTALLATION_ID_FILE"),
     privateKeyFile: required(env, "BUG_FINDER_GITHUB_PRIVATE_KEY_FILE"),
     repositoryFullName,
     repositoryId: positiveInteger(required(env, "BUG_FINDER_REPOSITORY_ID"), "BUG_FINDER_REPOSITORY_ID"),
-    tokenFile: required(env, "BUG_FINDER_AGENTBAY_TOKEN_FILE"),
+    tokenFile: required(env, "BUG_FINDER_DISPATCH_TOKEN_FILE"),
     triggerId: required(env, "BUG_FINDER_TRIGGER_ID"),
   };
 }

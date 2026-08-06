@@ -1,4 +1,4 @@
-# -- Default values for Dispatch. The chart name remains `agentbay` for upgrade compatibility.
+# -- Default values for Dispatch. The chart name remains `dispatch` for upgrade compatibility.
 # -- Override any of these in your own values file passed to `helm install -f`.
 
 # -- Optional override for the release short name used in resource names.
@@ -148,7 +148,7 @@ opencode:
   directory: /workspace
 
 # -- Optional Envoy AI Gateway integration. When enabled, the chart deploys
-# -- the central agentbay-authz ext_authz service and adds a localhost proxy
+# -- the central dispatch-authz ext_authz service and adds a localhost proxy
 # -- sidecar plus a projected service account token to chart-managed
 # -- SandboxTemplates. Leave disabled only when immutable profiles use another
 # -- operator-managed credential path.
@@ -164,9 +164,9 @@ aiGatewayAuthz:
   # -- Projected token lifetime in seconds.
   tokenExpirationSeconds: 600
   # -- Optional loopback hostnames added to sandbox Pods via hostAliases.
-  # -- This permits URLs such as `http://agentbay-gateway:8080/v1`.
+  # -- This permits URLs such as `http://dispatch-gateway:8080/v1`.
   localhostHostnames:
-    - agentbay-gateway
+    - dispatch-gateway
   networkPolicy:
     egress:
       # -- Add an egress rule from chart-managed sandbox templates to Envoy AI Gateway.
@@ -187,18 +187,18 @@ aiGatewayAuthz:
     annotations: {}
   proxy:
     image:
-      repository: ghcr.io/example/agentbay-gateway-proxy
+      repository: ghcr.io/example/dispatch-gateway-proxy
       tag: latest
       pullPolicy: IfNotPresent
     # -- Loopback listener inside each sandbox Pod.
     listenAddr: 127.0.0.1:8080
     port: 8080
-    tokenMountPath: /var/run/agentbay-ai-gateway
+    tokenMountPath: /var/run/dispatch-ai-gateway
     stripHeaders: []
     resources: {}
   authz:
     image:
-      repository: ghcr.io/example/agentbay-authz
+      repository: ghcr.io/example/dispatch-authz
       tag: latest
       pullPolicy: IfNotPresent
     replicaCount: 2
@@ -216,7 +216,7 @@ aiGatewayAuthz:
     requireClaimUID: true
     trustClaimMetadata: false
     trustPodMetadata: false
-    requiredPodLabels: agentbay.dev/managed-by=agentbay
+    requiredPodLabels: dispatch.dev/managed-by=dispatch
     # -- SandboxClaim API version passed to the authz sidecar. Empty uses `claims.apiVersion`.
     sandboxClaimAPIVersion: ""
     # -- Core Sandbox API version passed to the authz sidecar.
@@ -225,7 +225,7 @@ aiGatewayAuthz:
     policy: |
       defaultAction: deny
       rules:
-        - name: allow-agentbay-managed-sandboxes
+        - name: allow-dispatch-managed-sandboxes
           namespaces:
             - "*"
           serviceAccounts:
@@ -268,7 +268,7 @@ orchestrator:
     requestTimeoutMs: 30000
     # -- Existing Secret containing `app-id` and `private-key.pem` keys.
     credentialsSecret: ""
-    mountPath: /var/run/agentbay/github-app
+    mountPath: /var/run/dispatch/github-app
   githubIssueAcknowledgment:
     # -- Add an eyes reaction after durable issues.opened admission and before execution provisioning.
     enabled: false
@@ -291,10 +291,10 @@ orchestrator:
   extraEnv: []
   #  - name: LOG_LEVEL
   #    value: debug
-  #  - name: AGENTBAY_GITHUB_WEBHOOK_SECRET_PRODUCTION
+  #  - name: DISPATCH_GITHUB_WEBHOOK_SECRET_PRODUCTION
   #    valueFrom:
   #      secretKeyRef:
-  #        name: agentbay-github-webhook
+  #        name: dispatch-github-webhook
   #        key: webhook-secret
   # -- Extra `envFrom` entries appended after the chart-managed Secret. Use
   # -- this to layer in additional ConfigMaps or Secrets you manage outside
@@ -306,7 +306,7 @@ orchestrator:
 admin:
   # -- Bearer token for authenticated `/v1/*` execution API routes. When empty and this chart
   # -- creates its own Secret, Helm generates a token and preserves it across
-  # -- upgrades. Existing Secrets should provide AGENTBAY_ADMIN_TOKEN directly.
+  # -- upgrades. Existing Secrets should provide DISPATCH_ADMIN_TOKEN directly.
   token: ""
 
 bugFinderCron:
@@ -369,19 +369,19 @@ secrets:
   # -- Name of an existing Secret to mount as `envFrom`. When set, the chart
   # -- will not create a Secret of its own. The Secret must live in the
   # -- release namespace and contain env vars under their canonical names
-  # -- (e.g. AGENTBAY_ADMIN_TOKEN or provider credentials).
+  # -- (e.g. DISPATCH_ADMIN_TOKEN or provider credentials).
   existingSecret: ""
   # -- Inline secret data. Each key becomes an env var of the same name on
   # -- the orchestrator container via `envFrom`. Leave empty and reference
   # -- an existing Secret instead if you do not want plaintext values in
   # -- your values file.
   data: {}
-  #  AGENTBAY_ADMIN_TOKEN: replace-me
+  #  DISPATCH_ADMIN_TOKEN: replace-me
   #  ANTHROPIC_API_KEY: sk-ant-...
 
 database:
   # -- Enable an in-cluster Postgres Deployment for durable execution state.
-  # -- When false, use database.external or provide AGENTBAY_DATABASE_URL via secrets.
+  # -- When false, use database.external or provide DISPATCH_DATABASE_URL via secrets.
   enabled: true
   image:
     repository: postgres
@@ -389,11 +389,11 @@ database:
     pullPolicy: IfNotPresent
   auth:
     # -- Database user for the in-cluster Postgres instance.
-    username: agentbay
+    username: dispatch
     # -- Database name for the in-cluster Postgres instance.
-    database: agentbay
+    database: dispatch
     # -- Password for the in-cluster Postgres instance. Change for production.
-    password: agentbay
+    password: dispatch
   # -- Persistence for in-cluster Postgres. When disabled, Postgres uses an
   # -- emptyDir and execution data is lost on Pod restart.
   persistence:
@@ -410,19 +410,19 @@ database:
     limits:
       cpu: 500m
       memory: 512Mi
-  # -- Set AGENTBAY_DATABASE_SSL=true for Postgres providers that require SSL.
+  # -- Set DISPATCH_DATABASE_SSL=true for Postgres providers that require SSL.
   ssl: false
   # -- Use an external Postgres instead of the in-cluster one. Ignored when
   # -- `database.enabled` is true. Set exactly one of `url` or `existingSecret`.
   external:
-    # -- Full postgres:// URL passed to the orchestrator as AGENTBAY_DATABASE_URL.
+    # -- Full postgres:// URL passed to the orchestrator as DISPATCH_DATABASE_URL.
     url: ""
     # -- Reference an existing Secret containing the Postgres URL.
-    # -- Use this instead of secrets.data.AGENTBAY_DATABASE_URL when migrations
+    # -- Use this instead of secrets.data.DISPATCH_DATABASE_URL when migrations
     # -- are enabled so the migration Job can read the URL before install.
     existingSecret: ""
     # -- Key inside `existingSecret` whose value is the Postgres URL.
-    existingSecretKey: AGENTBAY_DATABASE_URL
+    existingSecretKey: DISPATCH_DATABASE_URL
 
 # -- Manage SandboxTemplate resources from this chart. Disabled by default
 # -- because the agent-sandbox CRDs must be installed in the cluster first
@@ -545,7 +545,7 @@ sandboxWarmPools:
 
 reconciler:
   # -- Whether to deploy the reconciler CronJob. The reconciler lists
-  # -- agentbay-managed SandboxClaims and deletes any that have exceeded their
+  # -- dispatch-managed SandboxClaims and deletes any that have exceeded their
   # -- shutdownTime plus the configured grace period.
   enabled: true
   # -- CronJob schedule expression. Runs every 30 minutes by default.
@@ -553,7 +553,7 @@ reconciler:
   # -- concurrencyPolicy for the CronJob. Forbid prevents overlapping runs.
   concurrencyPolicy: Forbid
   # -- Minutes of grace time added to spec.lifecycle.shutdownTime before a
-  # -- claim is eligible for deletion. Corresponds to AGENTBAY_RECONCILER_GRACE_MINUTES.
+  # -- claim is eligible for deletion. Corresponds to DISPATCH_RECONCILER_GRACE_MINUTES.
   graceMinutes: 30
   # -- Number of successful CronJob runs to retain in history.
   successfulJobsHistoryLimit: 3
