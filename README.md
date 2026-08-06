@@ -9,6 +9,12 @@ substrate.
 
 The product architecture and roadmap are defined in [`DESIGN.md`](DESIGN.md).
 
+## License
+
+Copyright 2026 Artemis. Dispatch is licensed under the
+[Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution. By
+submitting a contribution, you agree that it is licensed under the same terms.
+
 ## Naming
 
 Dispatch identifiers are the canonical deployment, API, and observability
