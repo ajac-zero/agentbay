@@ -84,9 +84,9 @@ const admitted = await fetch(new URL(`/v1/triggers/${encodeURIComponent(config.t
   body: JSON.stringify(event),
   signal: AbortSignal.timeout(30_000),
 });
-if (!admitted.ok) throw new Error(`Agentbay event admission failed: ${admitted.status}`);
+  if (!admitted.ok) throw new Error(`Dispatch event admission failed: ${admitted.status}`);
 const result = await admitted.json() as { executions?: unknown };
-if (!Array.isArray(result.executions)) throw new Error("Agentbay event admission response was invalid");
+  if (!Array.isArray(result.executions)) throw new Error("Dispatch event admission response was invalid");
 console.log(JSON.stringify({ revision: revision.sha, executions: result.executions.length }));
 
 function githubHeaders(token: string): Record<string, string> {

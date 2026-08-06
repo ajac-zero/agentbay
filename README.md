@@ -1,6 +1,6 @@
-# agentbay
+# Dispatch
 
-agentbay is a platform for durable, asynchronous agent execution. Clients
+Dispatch is a platform for durable, asynchronous agent execution. Clients
 publish immutable OpenCode agent profile and binding versions, then admit
 idempotent normalized events. Enabled immutable binding versions are the sole
 execution-creation mechanism. PostgreSQL records event and execution state and
@@ -8,6 +8,15 @@ transactional outbox work; isolated Kubernetes sandboxes provide the execution
 substrate.
 
 The product architecture and roadmap are defined in [`DESIGN.md`](DESIGN.md).
+
+## Naming and compatibility
+
+Dispatch is the product name. Existing `agentbay` identifiers are retained where
+they are deployment, API, or observability contracts: `AGENTBAY_*` environment
+variables, Kubernetes labels and annotations, Helm chart and release names,
+Prometheus metric names, CloudEvent types, and database objects. New product
+features must use neutral domain terms or explicitly versioned public namespaces
+rather than embedding the product name in a new runtime contract.
 
 ## Current product surface
 
@@ -116,7 +125,8 @@ GET /docs
 GET /openapi.json
 ```
 
-`GET /healthz` returns `200 OK` when Agentbay is healthy.
+`GET /healthz` returns `200 OK` when Dispatch is healthy. Its `service` value
+remains `agentbay` for API compatibility.
 
 Management routes and normalized event ingress require `Authorization: Bearer
 <AGENTBAY_ADMIN_TOKEN>`:
@@ -161,7 +171,7 @@ sidecar that must already be owned by its immutable sandbox template:
 "connections": [{ "id": "source-control", "sidecar": "credential-broker" }]
 ```
 
-At dispatch, Agentbay resolves the records and injects one canonical, non-secret
+At dispatch, Dispatch resolves the records and injects one canonical, non-secret
 `AGENTBAY_CONNECTIONS` JSON envelope into each selected sidecar. The envelope
 contains only that sidecar's sorted connection IDs:
 
@@ -281,7 +291,7 @@ cannot initiate a new PR effect. Ambiguous mutations are not retried.
 
 GitHub issue events do not contain a default-branch commit. A developer binding
 can select `/repository/defaultBranchRevision/commit`. When such a binding
-matches, Agentbay commits the original normalized event and a durable resolution
+matches, Dispatch commits the original normalized event and a durable resolution
 request, returns `202`, and creates no execution yet. The revision worker mints
 a short-lived installation token restricted to the event repository with
 `contents:read`, verifies repository ID, full name, clone URL, and default
@@ -324,7 +334,7 @@ For GitHub App delivery, create a trigger such as:
 ```
 
 Configure GitHub to send webhooks to
-`https://agentbay.example.com/hooks/github/github`. Agentbay verifies the
+`https://dispatch.example.com/hooks/github/github`. Dispatch verifies the
 SHA-256 signature against the raw request bytes before parsing JSON, uses
 `X-GitHub-Delivery` to deduplicate retries, and normalizes each supported
 delivery to zero or one event. Signed pings and unsupported event/action pairs
@@ -361,7 +371,7 @@ separate future work.
 
 An agent delegates by using ordinary tools or MCP servers to cause an external
 effect that a connector later normalizes into another event. Bindings consume
-that event exactly like any other; no special Agentbay delegation MCP is
+that event exactly like any other; no special Dispatch delegation MCP is
 required. Template-owned sidecars provide standard policy-bounded tool access.
 Provider-specific integrations compose those generic sidecars with external tool
 servers. The complete GitHub MCP and token-broker stack lives in
@@ -412,12 +422,12 @@ the database fence, transfers the SandboxClaim fence with Kubernetes optimistic
 concurrency, and observes the existing session without submitting another
 prompt. The session must contain a persisted user/assistant exchange before an
 idle session can succeed. Earlier crash windows remain non-adoptable and use
-the ordinary failed-attempt/retry path; Agentbay never guesses by replaying a
+the ordinary failed-attempt/retry path; Dispatch never guesses by replaying a
 prompt into a checkpointed session.
 
 Cancellation is best effort at the external-effect boundary. Aborting the
 OpenCode request and deleting its sandbox can prevent later work, but cannot
-roll back an effect already committed outside Agentbay. For example, a GitHub
+roll back an effect already committed outside Dispatch. For example, a GitHub
 mutation accepted before cancellation remains committed and must be reconciled
 or compensated separately.
 
@@ -442,7 +452,7 @@ short-lived Kubernetes identity instead of receiving model-provider keys.
 
 For connection credentials, operators may put a Secret volume on the
 template-owned credential broker only. Do not mount that volume into OpenCode,
-the workspace materializer, or Agentbay. Agentbay reads connection metadata, not
+the workspace materializer, or Dispatch. Dispatch reads connection metadata, not
 Secret values, and its chart RBAC intentionally grants no `secrets` access.
 Rotate by updating the operator-managed Secret and starting new cold sandboxes;
 revoke by disabling/deleting the external credential before terminating affected
@@ -491,11 +501,11 @@ kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/downl
 Then install the chart:
 
 ```bash
-helm install agentbay deploy/helm/agentbay \
+helm install dispatch deploy/helm/agentbay \
   --namespace agents --create-namespace \
-  --set image.repository=ghcr.io/your-org/agentbay \
+  --set image.repository=ghcr.io/your-org/dispatch \
   --set image.tag=latest \
-  --set secrets.existingSecret=agentbay-secrets
+  --set secrets.existingSecret=dispatch-secrets
 ```
 
 See the chart [`README`](deploy/helm/agentbay/README.md) for PostgreSQL,

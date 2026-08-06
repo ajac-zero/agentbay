@@ -1,15 +1,24 @@
-# agentbay - Architecture and Product Definition
+# Dispatch - Architecture and Product Definition
 
-> **Status:** Source of truth for agentbay architecture.
+> **Status:** Source of truth for Dispatch architecture.
 > **Audience:** Engineers, operators, agent authors, and AI coding agents contributing to this repository.
 
 ## 1. Definition
 
-**agentbay is a platform for event-driven asynchronous agents.**
+**Dispatch is a platform for event-driven asynchronous agents.**
 
 An immutable agent definition is invoked by an event through an enabled immutable binding version, runs asynchronously in an isolated workspace, and publishes durable results.
 
-Agent authors configure agents deeply through native OpenCode configuration: models, providers, prompts, tools, MCP servers, permissions, and runtime behavior. Operators bind those agents to external events such as pull requests, issues, Grafana alerts, schedules, chat messages, queues, and generic webhooks. Agentbay admits and persists those events, plans durable executions, and runs them in isolated Kubernetes workloads at large scale.
+Agent authors configure agents deeply through native OpenCode configuration: models, providers, prompts, tools, MCP servers, permissions, and runtime behavior. Operators bind those agents to external events such as pull requests, issues, Grafana alerts, schedules, chat messages, queues, and generic webhooks. Dispatch admits and persists those events, plans durable executions, and runs them in isolated Kubernetes workloads at large scale.
+
+### Naming and compatibility
+
+Dispatch is the presentation name. Product names must not be introduced into new
+runtime contracts by default. Existing `agentbay` names remain compatibility
+identifiers where they are already persisted, externally configured, selected by
+Kubernetes, scraped by Prometheus, or matched as API and CloudEvent values. A
+future rename of one of those interfaces requires an explicit versioned or
+dual-read migration with an announced removal window.
 
 Chat is one trigger and result destination among many. Kubernetes is the execution substrate, not the product model.
 
@@ -25,10 +34,10 @@ Chat is one trigger and result destination among many. Kubernetes is the executi
 
 ### 1.2 Non-goals
 
-Agentbay is not:
+Dispatch is not:
 
 - A new agent runtime. OpenCode owns the agent loop and native agent configuration.
-- A general-purpose workflow engine. Agentbay may integrate with one when durable multi-stage workflows justify it.
+- A general-purpose workflow engine. Dispatch may integrate with one when durable multi-stage workflows justify it.
 - A chat bot framework. Chat is an integration, not the architecture.
 - A Kubernetes operator as its primary product API. Users reason about events, agents, and executions, not Pods.
 - A source of truth for secrets. It references credentials managed by a secret manager or workload identity system.
@@ -49,7 +58,7 @@ Agentbay is not:
 11. **Observability is part of the product.** Queue time, provisioning, model use, tool calls, outputs, and delivery are visible per execution.
 12. **Scale is controlled, not accidental.** Queue depth does not translate directly into unbounded Pod creation.
 13. **Execution creation is binding-only.** Connectors and callers admit normalized events; enabled immutable binding versions are the sole mechanism that creates executions. There is no direct execution-submission path.
-14. **Delegation is event-driven.** An agent delegates by using ordinary tools or MCP servers to cause an externally observable effect that a connector normalizes as a new event. Another binding may consume that event; Agentbay does not require a source-specific delegation MCP server or tool.
+14. **Delegation is event-driven.** An agent delegates by using ordinary tools or MCP servers to cause an externally observable effect that a connector normalizes as a new event. Another binding may consume that event; Dispatch does not require a source-specific delegation MCP server or tool.
 15. **Ingress data is policy-neutral.** Connectors authenticate deliveries and project bounded source data into events. Core matching, correlation, creation, and wake behavior operate on arbitrary event data and do not encode issues, pull requests, labels, comments, reviews, or other vendor concepts.
 16. **Waiting is durable; hibernation is optional.** Postgres owns event waits and continuation state. Suspending a Kubernetes sandbox may reduce resource use while waiting, but must never be the only record of what can wake an execution.
 17. **Workflow policy is configuration.** Repository-specific routing, labels, roles, model selection, and review loops belong in immutable profiles and bindings. Reference factories live under `examples/`; they are not hard-coded control-plane behavior.
@@ -92,7 +101,7 @@ Bindings are configuration, not execution history. A published binding version i
 
 ### 3.5 Event
 
-An immutable, normalized input represented with a CloudEvents envelope. Agentbay retains source identity, normalized data, deduplication information, and a reference to the raw source payload when required.
+An immutable, normalized input represented with a CloudEvents envelope. Dispatch retains source identity, normalized data, deduplication information, and a reference to the raw source payload when required.
 
 One source delivery may normalize into zero, one, or multiple events according to its connector contract. `github.app.webhook` deliberately normalizes each delivery into zero or one event: unsupported event/action pairs produce none. One event may match multiple bindings and therefore produce multiple executions.
 
@@ -193,7 +202,7 @@ definition:
         path: /pullRequest/head/sha
 ```
 
-The profile and binding references are exact versions; V1 has no `latest` selector. Binding prompts are literal, not templates. When `includeEvent` is `data` or `envelope`, Agentbay appends canonical JSON between untrusted-event delimiters. V1 supports empty workspaces and public HTTPS Git workspaces selected from event `data` by RFC 6901 pointers. Git revisions must be full immutable 40-character SHA-1 commit object IDs, and repository DNS must resolve exclusively to public IPv4 addresses. Admission persists the canonical repository URL and commit on the execution; retries never resolve selectors or mutable refs again.
+The profile and binding references are exact versions; V1 has no `latest` selector. Binding prompts are literal, not templates. When `includeEvent` is `data` or `envelope`, Dispatch appends canonical JSON between untrusted-event delimiters. V1 supports empty workspaces and public HTTPS Git workspaces selected from event `data` by RFC 6901 pointers. Git revisions must be full immutable 40-character SHA-1 commit object IDs, and repository DNS must resolve exclusively to public IPv4 addresses. Admission persists the canonical repository URL and commit on the execution; retries never resolve selectors or mutable refs again.
 
 GitHub issue deliveries require trusted pre-admission enrichment because they
 contain the default branch name but not its commit. If an enabled,
@@ -214,7 +223,7 @@ claimable, and bounded attempts prevent permanent provider failures from
 looping forever. Exact delivery replay returns the persisted event and its
 current execution set without creating another request. Bindings are selected
 at successful resolution time, and the recorded commit means the branch head at
-resolution time. Agentbay does not attempt event-time ref reconstruction.
+resolution time. Dispatch does not attempt event-time ref reconstruction.
 Execution timeouts begin at successful resolution, not webhook ingestion.
 
 An immutable binding may define an `afterTurn` wait policy. Successful agent
@@ -246,7 +255,7 @@ flowchart TB
         Scheduler[Scheduler]
     end
 
-    subgraph Control[Agentbay Control Plane]
+    subgraph Control[Dispatch Control Plane]
         Ingress[Event Admission]
         Normalize[Normalize and Validate]
         Match[Binding Matcher]
@@ -260,7 +269,7 @@ flowchart TB
     Objects[(Object Storage)]
     Secrets[Secret Manager and Workload Identity]
 
-    subgraph Execution[Agentbay Execution Plane]
+    subgraph Execution[Dispatch Execution Plane]
         Dispatcher[Dispatcher]
         Admission[Quota and Policy Admission]
         Workspace[Workspace Provisioner]
@@ -366,7 +375,7 @@ belong in structured logs and durable audit records, never metric labels. The
 portable deployment surface supports Prometheus annotations, optional
 ServiceMonitor and PrometheusRule resources, and a Grafana sidecar dashboard.
 Infrastructure collectors remain responsible for Pod and Kubernetes controller
-health; Agentbay metrics describe durable factory behavior.
+health; Dispatch metrics describe durable factory behavior.
 
 ### 6.5 Management API
 
@@ -428,7 +437,7 @@ workload deletion.
 
 ## 7. Canonical Event Model
 
-Agentbay uses the CloudEvents 1.0 envelope. A normalized GitHub event is:
+Dispatch uses the CloudEvents 1.0 envelope. A normalized GitHub event is:
 
 ```json
 {
@@ -621,9 +630,9 @@ The generic webhook is the escape hatch for integrations that do not yet justify
 
 ### 9.1 Native OpenCode configuration
 
-Agentbay does not re-model OpenCode's evolving configuration schema. A profile contains an OpenCode-native document and selects a named agent. Prompts, models, providers, tools, MCP servers, and agent-specific permissions remain authored in OpenCode terms.
+Dispatch does not re-model OpenCode's evolving configuration schema. A profile contains an OpenCode-native document and selects a named agent. Prompts, models, providers, tools, MCP servers, and agent-specific permissions remain authored in OpenCode terms.
 
-Agentbay wraps that document with platform policy:
+Dispatch wraps that document with platform policy:
 
 - Runtime image and OpenCode version
 - CPU, memory, ephemeral storage, and optional accelerator limits
@@ -702,7 +711,7 @@ the current execution state after a retry has created a newer attempt.
 
 ### 10.3 Idempotency and effective-once behavior
 
-Exactly-once behavior is not assumed across webhooks, databases, queues, Kubernetes, and external APIs. Agentbay uses:
+Exactly-once behavior is not assumed across webhooks, databases, queues, Kubernetes, and external APIs. Dispatch uses:
 
 - Unique source-delivery keys
 - Unique event IDs per source
@@ -717,7 +726,7 @@ Exactly-once behavior is not assumed across webhooks, databases, queues, Kuberne
 ### 10.4 Active execution singletons
 
 Create bindings may specify an `activeSingleton` name and ordered JSON-pointer
-key over normalized event data. Agentbay projects bounded primitives, hashes the
+key over normalized event data. Dispatch projects bounded primitives, hashes the
 canonical ordered values, and permits only one nonterminal execution for each
 tenant, name, and key. Distinct conflicting events remain durable but create no
 execution; exact replay returns the original empty execution set. Terminal
@@ -760,7 +769,7 @@ Cancellation cannot retract an external side effect that has already committed.
 For example, aborting an execution after GitHub accepted a branch, content,
 comment, or pull-request mutation leaves that mutation in GitHub. Such effects
 must be reconciled or compensated through their connector-specific contract;
-the cancellation state means Agentbay stopped further work on a best-effort
+the cancellation state means Dispatch stopped further work on a best-effort
 basis, not that all effects were rolled back.
 
 Timeout follows the same cleanup model but terminates as `TIMED_OUT`. Current

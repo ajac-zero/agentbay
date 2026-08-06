@@ -18,7 +18,7 @@ jobs:
   evaluate:
     name: Dependabot Fast Lane
     if: >-
-      github.repository == 'ajac-zero/agentbay' &&
+      github.repository == 'artemis-sh/dispatch' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.event.pull_request.user.id == 49699333 &&
       startsWith(github.event.pull_request.head.ref, 'dependabot/') &&
@@ -105,7 +105,7 @@ jobs:
             -X POST -f event=APPROVE -f commit_id="$EXPECTED_HEAD" \
             -f body='Deterministic approval: verified Dependabot npm patch/minor update, dependency-only files, exact head SHA, and all required checks passed.'
 
-      - name: Route ineligible update to Agentbay review
+      - name: Route ineligible update to Dispatch review
         if: always() && !(steps.classify.outcome == 'success' && steps.classify.outputs.eligible == 'true' && steps.checks.outcome == 'success')
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}

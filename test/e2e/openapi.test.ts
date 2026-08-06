@@ -14,7 +14,7 @@ describe("OpenAPI docs", () => {
     const body = (await response.json()) as Record<string, unknown>;
 
     expect(response.status).toBe(200);
-    expect(body).toMatchObject({ openapi: "3.1.0", info: { title: "agentbay API" } });
+    expect(body).toMatchObject({ openapi: "3.1.0", info: { title: "Dispatch API" } });
     expect(Object.keys(body.paths as object)).toEqual([
       "/healthz",
       "/v1/agent-profiles/{profileID}/versions",

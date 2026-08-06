@@ -1,6 +1,6 @@
 # GitHub Software Factory
 
-This example expresses repository automation as Agentbay configuration rather
+This example expresses repository automation as Dispatch configuration rather
 than source-specific orchestration code. GitHub is the visible workflow ledger:
 the triager applies labels, and immutable bindings select an exact developer
 profile from the issue's complete current label set.
@@ -40,7 +40,7 @@ configured frequency. Lower the frequency when model cost matters.
 The GitHub connector also normalizes issue comments, pull-request reviews, and
 pull-request review comments for later continuation matching.
 
-Replace `acme/agentbay`, profile models, connection IDs, and template names
+Replace `acme/dispatch`, profile models, connection IDs, and template names
 before publishing these request bodies through the management API.
 
 The profiles name concrete `v1beta1` pools. The supplied Helm values create one
@@ -70,7 +70,7 @@ signed opened webhook's repository ID, PR database ID, and number, can fill that
 slot. PR body text and repository-only correlation are never authoritative.
 
 The three developer difficulty bindings use the same `activeSingleton.name`
-and key paths. Agentbay admits every distinct signed delivery for audit and
+and key paths. Dispatch admits every distinct signed delivery for audit and
 idempotent replay, but suppresses execution creation while a nonterminal
 execution owns that singleton. Terminal completion releases the key for a
 future delivery.
@@ -113,7 +113,7 @@ change-request wake filters on its stable numeric bot user ID so unrelated human
 or bot reviews cannot resume the developer lifecycle. The merger accepts approvals
 only from that reviewer App or the fixed `github-actions[bot]` actor used by the
 trusted Dependabot fast lane. Repository protection may still allow an eligible
-human approval to satisfy the merge requirement without starting Agentbay's merger.
+human approval to satisfy the merge requirement without starting Dispatch's merger.
 
 The wait resource policy should default to `release`; deployments with a
 PVC-backed Agent Sandbox may choose `suspend` after claim-owned Sandbox
@@ -127,7 +127,7 @@ suspend/resume is validated against the pinned `v1beta1` controller.
 - `agentbay/difficulty:hard`
 
 The triager must apply the difficulty label before the final ready label. Each
-developer binding requires both, preventing dispatch from an intermediate
+developer binding requires both, preventing Dispatch from an intermediate
 label event.
 
 Replaying the `agentbay/state:ready` label while a developer lifecycle is already active does not create another execution or pull request.
@@ -156,7 +156,7 @@ server on loopback port 8082. It does not replay failed requests because a
 mutation outcome may be ambiguous.
 
 The official GitHub MCP sidecar and broker sidecar are both part of this example,
-not the generic Agentbay deployment. `sandbox-templates.values.yaml` owns their
+not the generic Dispatch deployment. `sandbox-templates.values.yaml` owns their
 pinned images, exact role-specific `--tools`, probes, security contexts, App
 permissions, and credential mounts. Mount App credentials only into the broker;
 OpenCode and the official MCP server receive neither key nor token.

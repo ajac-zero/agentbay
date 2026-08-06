@@ -1,4 +1,4 @@
-# -- Default values for agentbay.
+# -- Default values for Dispatch. The chart name remains `agentbay` for upgrade compatibility.
 # -- Override any of these in your own values file passed to `helm install -f`.
 
 # -- Optional override for the release short name used in resource names.
@@ -12,7 +12,7 @@ fullnameOverride: ""
 
 image:
   # -- Orchestrator container image repository.
-  repository: ghcr.io/example/agentbay
+  repository: ghcr.io/example/dispatch
   # -- Image tag. Defaults to the chart's appVersion when empty.
   tag: ""
   # -- Image pull policy.
@@ -88,7 +88,7 @@ observability:
     labels:
       grafana_dashboard: "1"
   collector:
-    # -- Deploy a dedicated OpenTelemetry Collector that scrapes only Agentbay.
+    # -- Deploy a dedicated OpenTelemetry Collector that scrapes only Dispatch.
     # -- Use when the cluster does not discover ServiceMonitor or Pod annotations.
     enabled: false
     image: otel/opentelemetry-collector-contrib@sha256:45392d534c1edcc809c2d112394029246bc679d2ae5ea7081414a1fc74f2c621
@@ -108,15 +108,15 @@ ingress:
   annotations: {}
   # -- Hosts to route. Each entry can override its paths.
   hosts:
-    - host: agentbay.example.com
+    - host: dispatch.example.com
       paths:
         - path: /
           pathType: Prefix
   # -- TLS configuration for the Ingress.
   tls: []
-  #  - secretName: agentbay-tls
+  #  - secretName: dispatch-tls
   #    hosts:
-  #      - agentbay.example.com
+  #      - dispatch.example.com
 
 serviceAccount:
   # -- Whether to create the orchestrator ServiceAccount. Disable to use a

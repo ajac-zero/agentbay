@@ -34,12 +34,12 @@ FROM node:${NODE_VERSION}-slim AS runtime
 ENV NODE_ENV=production
 ENV PORT=3000
 WORKDIR /app
-RUN groupadd --system --gid 10001 agentbay \
-  && useradd --system --uid 10001 --gid agentbay --home-dir /app agentbay
-COPY --from=production-dependencies --chown=agentbay:agentbay /app/node_modules ./node_modules
-COPY --from=build --chown=agentbay:agentbay /app/dist ./dist
-COPY --from=build --chown=agentbay:agentbay /app/package.json ./package.json
-COPY --chown=agentbay:agentbay drizzle ./drizzle
+RUN groupadd --system --gid 10001 dispatch \
+  && useradd --system --uid 10001 --gid dispatch --home-dir /app dispatch
+COPY --from=production-dependencies --chown=dispatch:dispatch /app/node_modules ./node_modules
+COPY --from=build --chown=dispatch:dispatch /app/dist ./dist
+COPY --from=build --chown=dispatch:dispatch /app/package.json ./package.json
+COPY --chown=dispatch:dispatch drizzle ./drizzle
 USER 10001
 EXPOSE 3000
 CMD ["node", "dist/index.js"]

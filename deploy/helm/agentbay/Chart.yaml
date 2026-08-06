@@ -1,7 +1,7 @@
 apiVersion: v2
 name: agentbay
 description: |
-  agentbay provides an API for durable asynchronous agent executions backed by
+  Dispatch provides an API for durable asynchronous agent executions backed by
   Postgres and isolated Kubernetes sandboxes. This chart installs the API,
   migration and execution-maintenance configuration, SandboxClaim RBAC,
   optional in-cluster Postgres, optional SandboxTemplate and SandboxWarmPool
@@ -9,9 +9,9 @@ description: |
 type: application
 version: 0.1.0
 appVersion: "1.0.0"
-home: https://github.com/ajac-zero/agentbay
+home: https://github.com/artemis-sh/dispatch
 sources:
-  - https://github.com/ajac-zero/agentbay
+  - https://github.com/artemis-sh/dispatch
 keywords:
   - agents
   - opencode

@@ -1,4 +1,4 @@
-agentbay {{ .Chart.AppVersion }} is installing as release {{ .Release.Name }}
+Dispatch {{ .Chart.AppVersion }} is installing as release {{ .Release.Name }}
 in namespace {{ .Release.Namespace }}.
 
 Execution API service:

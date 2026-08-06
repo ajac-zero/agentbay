@@ -1,5 +1,5 @@
 {
-  "name": "agentbay",
+  "name": "dispatch",
   "version": "1.0.0",
   "description": "Durable execution platform for OpenCode agents in Kubernetes sandboxes",
   "main": "dist/index.js",

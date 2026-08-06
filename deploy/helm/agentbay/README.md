@@ -195,7 +195,7 @@ Sandbox `v0.5.2`. `v1alpha1` is retained only for explicitly configured older
 controllers.
 
 Neither the orchestrator nor reconciler Role grants access to Kubernetes
-Secrets. Agentbay resolves non-secret connection metadata and writes
+Secrets. Dispatch resolves non-secret connection metadata and writes
 authorization/runtime configuration to claims; it does not read sidecar Secret
 volumes or Secret API objects.
 
@@ -262,7 +262,7 @@ executions. A warm Pod has already run its init containers before claim-specific
 environment variables are injected.
 
 Generic connections use the same cold-sandbox rule. Profiles map records to
-template-owned sidecars with `connections: [{id, sidecar}]`. Agentbay fails the
+template-owned sidecars with `connections: [{id, sidecar}]`. Dispatch fails the
 attempt if a record cannot be resolved or the named sidecar is not in the exact
 template, and injects only the non-secret canonical envelope, for example
 `{"refs":["github-production"],"schemaVersion":1,"tenantId":"default"}`,
@@ -283,7 +283,7 @@ fields under `workspaceMaterializer.image`.
 
 ## Observability
 
-Agentbay serves Prometheus metrics at `/metrics` on the separate internal metrics
+Dispatch serves Prometheus metrics at `/metrics` on the separate internal metrics
 Service port (9090 by default). The Ingress exposes only the API port. Counters and histograms record
 committed lifecycle outcomes; restart-safe gauges are projected from PostgreSQL,
 which remains authoritative. PostgreSQL collection uses one aggregate query, a
@@ -319,7 +319,7 @@ observability:
 The initial rules alert when the oldest pending publisher-managed outbox message
 exceeds ten minutes, an active execution exceeds its persisted timeout, or an enabled
 schedule has missed two expected cron intervals past `next_fire_at`. They also warn when the
-PostgreSQL collector has failed or the Agentbay scrape series has disappeared
+PostgreSQL collector has failed or the Dispatch scrape series has disappeared
 for five minutes. Tune these values under
 `observability.prometheusRule` after observing normal production behavior.
 By default, outbox paging is limited to `github.*` topics because the current
@@ -329,7 +329,7 @@ the durable audit outbox. All topics remain visible on the dashboard; configure
 
 `ServiceMonitor` and `PrometheusRule` require the Prometheus Operator CRDs and
 are disabled by default. Annotation-based collectors can use
-`observability.podAnnotations`. Static collectors must add the Agentbay Service
+`observability.podAnnotations`. Static collectors must add the Dispatch Service
 as an explicit `/metrics` scrape target. The dashboard ConfigMap is labeled
 `grafana_dashboard=1` by default for common Grafana sidecar discovery.
 
@@ -343,7 +343,7 @@ observability:
     remoteWriteEndpoint: http://mimir.observability.svc:9009/api/v1/push
 ```
 
-The dedicated collector uses a pinned image, one static Agentbay target, no
+The dedicated collector uses a pinned image, one static Dispatch target, no
 service account token or Kubernetes API permissions, and a read-only filesystem.
 
 ## Envoy AI Gateway authorization

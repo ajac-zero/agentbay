@@ -19,11 +19,11 @@
   ],
   "refresh": "30s",
   "schemaVersion": 41,
-  "tags": ["agentbay", "software-factory"],
+  "tags": ["dispatch", "software-factory"],
   "templating": {"list": [{"name":"DS_PROMETHEUS","type":"datasource","query":"prometheus","current":{}}]},
   "time": {"from":"now-24h","to":"now"},
   "timezone": "browser",
-  "title": "Agentbay Software Factory",
+  "title": "Dispatch Software Factory",
   "uid": "agentbay-software-factory",
   "version": 1
 }

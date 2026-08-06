@@ -26,7 +26,7 @@ afterEach(async () => {
 });
 
 describe("GitHub token broker", () => {
-  it("validates the exact Agentbay grant and loopback upstream", () => {
+  it("validates the exact Dispatch grant and loopback upstream", () => {
     const env = {
       AGENTBAY_GITHUB_TENANT: "default",
       AGENTBAY_GITHUB_CONNECTION: "github-production",

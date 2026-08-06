@@ -42,29 +42,29 @@ spec:
           for: {{ .Values.observability.prometheusRule.for | quote }}
           labels: { severity: critical }
           annotations:
-            summary: Agentbay outbox publication is stuck
+            summary: Dispatch outbox publication is stuck
             description: "The oldest pending message for topic {{ "{{ $labels.topic }}" }} is older than the configured threshold."
         - alert: AgentbayExecutionOverdue
           expr: sum by (tenant) (agentbay_executions_overdue) > 0
           for: {{ .Values.observability.prometheusRule.for | quote }}
           labels: { severity: critical }
           annotations:
-            summary: Agentbay execution exceeded its persisted timeout
+            summary: Dispatch execution exceeded its persisted timeout
             description: "At least one active execution is overdue for tenant {{ "{{ $labels.tenant }}" }}."
         - alert: AgentbayScheduleStopped
           expr: max by (tenant, trigger_id) (agentbay_schedule_missed_intervals) >= {{ .Values.observability.prometheusRule.scheduleMissedIntervals }}
           for: {{ .Values.observability.prometheusRule.for | quote }}
           labels: { severity: critical }
           annotations:
-            summary: Agentbay schedule stopped firing
+            summary: Dispatch schedule stopped firing
             description: "Schedule {{ "{{ $labels.trigger_id }}" }} is past its expected next fire time."
         - alert: AgentbayObservabilityCollectorDown
           expr: (max(agentbay_observability_collector_up) == 0) or absent(agentbay_observability_collector_up)
           for: 5m
           labels: { severity: warning }
           annotations:
-            summary: Agentbay PostgreSQL metric collection is failing
-            description: Agentbay is serving the last successful durable-state snapshot.
+            summary: Dispatch PostgreSQL metric collection is failing
+            description: Dispatch is serving the last successful durable-state snapshot.
 ---
 {{- end }}
 {{- if .Values.observability.dashboard.enabled }}
