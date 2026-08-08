@@ -1,5 +1,5 @@
 import type { ExecutionState } from "../execution/states.js";
-import type { ExecutionInput, JsonObject, JsonValue } from "../execution/types.js";
+import type { ExecutionAttemptDiagnostic, ExecutionInput, JsonObject, JsonValue } from "../execution/types.js";
 import type { ResolvedWorkspace } from "../workspace/types.js";
 import type { AttemptState } from "./states.js";
 
@@ -80,6 +80,15 @@ export type TransitionLeasedExecutionResult =
       applied: false;
       reason: "NOT_FOUND" | "STATE_MISMATCH" | "LEASE_MISMATCH" | "LEASE_EXPIRED";
     };
+
+export type CheckpointLeasedExecutionAttemptDiagnosticCommand = {
+  executionId: string;
+  tenantId: string;
+  attempt: number;
+  fencingToken: string;
+  leaseOwner: string;
+  diagnostic: Omit<ExecutionAttemptDiagnostic, "updatedAt">;
+};
 
 export type CompleteLeasedExecutionTurnCommand = {
   executionId: string;

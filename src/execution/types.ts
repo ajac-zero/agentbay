@@ -75,6 +75,17 @@ export type ExecutionAttempt = {
   leaseExpiresAt: string | null;
   opencodeSessionId: string | null;
   workloadName: string | null;
+  diagnostic: ExecutionAttemptDiagnostic | null;
+};
+
+export type ExecutionAttemptDiagnostic = {
+  schemaVersion: 1;
+  phase: "session_created" | "subscribed" | "prompt_submitted" | "idle" | "permission_requested" | "session_error" | "aborted";
+  updatedAt: string;
+  lastEventAt?: string;
+  lastEventType?: string;
+  eventCount: number;
+  termination?: "deadline" | "cancellation" | "lease_lost" | "error";
 };
 
 export type ExecutionStateTransition = {

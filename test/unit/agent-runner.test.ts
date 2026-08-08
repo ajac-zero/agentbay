@@ -29,6 +29,29 @@ describe("runExecutionAttempt", () => {
     expect(calls).toEqual(["create", "subscribe", "prompt"]);
   });
 
+  it("reports bounded progress milestones without retaining output", async () => {
+    const diagnostics: unknown[] = [];
+    const client = fakeClient([
+      textEvent("session-1", "untrusted assistant text"),
+      sessionEvent("session.idle", "session-1"),
+    ]);
+
+    await runExecutionAttempt({
+      agent: "coder",
+      endpoint,
+      onDiagnostic: async (diagnostic) => { diagnostics.push(diagnostic); },
+      prompt: "do work",
+      title: "attempt",
+    }, client);
+
+    expect(diagnostics).toEqual([
+      { phase: "session_created", eventCount: 0 },
+      { phase: "subscribed", eventCount: 0 },
+      { phase: "prompt_submitted", eventCount: 0 },
+      { phase: "idle", eventCount: 2, lastEventType: "session.idle", lastEventAt: expect.any(String) },
+    ]);
+  });
+
   it("does not split a multi-byte character at the output limit", async () => {
     const client = fakeClient([
       textEvent("session-1", "a😀b"),

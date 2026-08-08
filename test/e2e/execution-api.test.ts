@@ -215,6 +215,7 @@ describe("public API", () => {
       leaseExpiresAt: execution.updatedAt,
       opencodeSessionId: "session-1",
       workloadName: "sandbox-1",
+      diagnostic: null,
     });
     execution.transitions.push({
       id: "transition-1",

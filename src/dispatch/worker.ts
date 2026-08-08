@@ -8,7 +8,7 @@ import {
   ExecutionLeaseLostError,
   startExecutionLeaseHeartbeat,
 } from "./heartbeat.js";
-import type { JsonValue } from "../execution/types.js";
+import type { ExecutionAttemptDiagnostic, JsonValue } from "../execution/types.js";
 import { observeExecutionAttempt, runExecutionAttempt } from "../agent/runner.js";
 import type { OpenCodeConnectionOptions } from "../agent/client.js";
 import { SandboxClaimCleanupError, SandboxClaimRejectedError } from "../sandbox/provisioner.js";
@@ -29,6 +29,7 @@ export interface ExecutionAttemptRunner {
     provisioned: ProvisionedAttempt;
     signal: AbortSignal;
     onSession(sessionId: string): Promise<void>;
+    onDiagnostic?(diagnostic: Omit<ExecutionAttemptDiagnostic, "schemaVersion" | "updatedAt" | "termination">): Promise<void>;
     sessionId?: string;
   }): Promise<ExecutionAttemptRunnerResult>;
 }
@@ -53,7 +54,8 @@ export class OpenCodeExecutionAttemptRunner implements ExecutionAttemptRunner {
       agent: input.profile.resolvedPolicy.runtime.agent,
       abortSessionOnSignal: (reason) => reason instanceof ExecutionCancellationRequestedError,
       endpoint,
-      onSession: input.onSession,
+          onSession: input.onSession,
+          onDiagnostic: input.onDiagnostic,
       prompt: input.execution.input.text,
       signal: input.signal,
       title: `dispatch execution ${input.execution.executionId} attempt ${input.execution.lease.attempt}`,
@@ -192,6 +194,20 @@ export class DispatcherWorker {
         return false;
       }
     };
+    const checkpointDiagnostic = async (diagnostic: Omit<ExecutionAttemptDiagnostic, "schemaVersion" | "updatedAt">) => {
+      try {
+        await this.#options.store.checkpointLeasedExecutionAttemptDiagnostic?.({
+          attempt: execution.lease.attempt,
+          diagnostic: { schemaVersion: 1, ...diagnostic },
+          executionId: execution.executionId,
+          fencingToken: execution.lease.fencingToken,
+          leaseOwner: execution.lease.leaseOwner,
+          tenantId: execution.tenantId,
+        });
+      } catch {
+        // Diagnostics must not affect execution progress or timeout handling.
+      }
+    };
 
     try {
       const profile = parseExecutionAttemptProfile(execution);
@@ -245,6 +261,7 @@ export class DispatcherWorker {
       const runnerResult = await this.#options.runner.run({
         execution,
         onSession: markRunning,
+        onDiagnostic: checkpointDiagnostic,
         profile,
         provisioned,
         sessionId: execution.adoption?.opencodeSessionId,
@@ -284,6 +301,8 @@ export class DispatcherWorker {
       }
 
       const message = sanitizeError(error, this.#options.maxErrorLength);
+      const termination = heartbeat.cancellationRequested ? "cancellation" : heartbeat.fenceLost ? "lease_lost" : Date.now() >= execution.timeoutAt.getTime() ? "deadline" : "error";
+      await checkpointDiagnostic({ eventCount: 0, phase: "aborted", termination });
       if (provisioningStarted && !provisioned) observeProvisioning("failed");
       log.error("execution attempt failed", { error: message });
       try {

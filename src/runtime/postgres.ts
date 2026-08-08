@@ -14,6 +14,7 @@ import type {
   AcknowledgeLeasedExecutionCancellationCommand,
   AcknowledgeLeasedExecutionCancellationResult,
   ClaimedExecution,
+  CheckpointLeasedExecutionAttemptDiagnosticCommand,
   ExecutionLeaseRenewalResult,
   FinalizeRequestedExecutionCancellationCommand,
   FinalizedRequestedExecutionCancellation,
@@ -1311,7 +1312,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         return undefined;
       }
       const attemptsResult = await client.query<ExecutionAttemptRow>(`
-        SELECT attempt, state, started_at, finished_at, lease_expires_at, opencode_session_id, workload_name
+        SELECT attempt, state, started_at, finished_at, lease_expires_at, opencode_session_id, workload_name, diagnostic
         FROM dispatch_execution_attempts
         WHERE tenant_id = $1 AND execution_id = $2
         ORDER BY attempt`, [tenantId, executionId]);
@@ -2224,6 +2225,24 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
     }
   }
 
+  async checkpointLeasedExecutionAttemptDiagnostic(command: CheckpointLeasedExecutionAttemptDiagnosticCommand): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      const now = (await client.query<{ now: Date }>("SELECT clock_timestamp() AS now")).rows[0]!.now;
+      const diagnostic = { ...command.diagnostic, updatedAt: now.toISOString() };
+      if (Buffer.byteLength(JSON.stringify(diagnostic), "utf8") > 8192) throw new Error("Execution attempt diagnostic exceeds 8192 bytes");
+      const updated = await client.query(`UPDATE dispatch_execution_attempts
+        SET diagnostic = $6::jsonb
+        WHERE execution_id = $1 AND tenant_id = $2 AND attempt = $3
+          AND fencing_token = $4 AND lease_owner = $5
+          AND lease_expires_at > clock_timestamp() AND state IN ('LEASED', 'RUNNING')`,
+      [command.executionId, command.tenantId, command.attempt, command.fencingToken, command.leaseOwner, JSON.stringify(diagnostic)]);
+      return updated.rowCount === 1;
+    } finally {
+      client.release();
+    }
+  }
+
   async completeLeasedExecutionTurn(command: CompleteLeasedExecutionTurnCommand): Promise<CompleteLeasedExecutionTurnResult> {
     const client = await this.pool.connect();
     try {
@@ -2549,6 +2568,7 @@ type ExecutionAttemptRow = {
   started_at: Date | null;
   state: string;
   workload_name: string | null;
+  diagnostic: import("../execution/types.js").ExecutionAttemptDiagnostic | null;
 };
 
 type ExecutionTransitionRow = {
@@ -2962,6 +2982,7 @@ function executionAttemptFromRow(executionId: string, row: ExecutionAttemptRow):
     startedAt: row.started_at?.toISOString() ?? null,
     state: row.state,
     workloadName: row.workload_name,
+    diagnostic: row.diagnostic,
   };
 }
 

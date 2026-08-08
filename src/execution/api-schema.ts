@@ -174,6 +174,15 @@ export const executionAttemptSchema = z
     leaseExpiresAt: z.string().datetime().nullable(),
     opencodeSessionId: z.string().nullable(),
     workloadName: z.string().nullable(),
+    diagnostic: z.object({
+      schemaVersion: z.literal(1),
+      phase: z.enum(["session_created", "subscribed", "prompt_submitted", "idle", "permission_requested", "session_error", "aborted"]),
+      updatedAt: z.string().datetime(),
+      lastEventAt: z.string().datetime().optional(),
+      lastEventType: z.string().max(128).optional(),
+      eventCount: z.number().int().nonnegative(),
+      termination: z.enum(["deadline", "cancellation", "lease_lost", "error"]).optional(),
+    }).strict().nullable(),
   })
   .strict()
   .openapi("ExecutionAttempt");
