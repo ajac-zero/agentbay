@@ -188,9 +188,9 @@ immutable profiles and a common capability ceiling:
 
 | Difficulty | Model |
 |---|---|
-| Easy | `gateway/claude-sonnet-5` |
-| Medium | `gateway/claude-opus-4-7` |
-| Hard | `gateway/claude-fable-5` |
+| Easy | `gateway/gpt-5.6-luna` |
+| Medium | `gateway/gpt-5.6-terra` |
+| Hard | `gateway/gpt-5.6-sol` |
 
 `sandbox-templates.values.yaml` supplies one template per role with only that role's exact official-server
 `--tools` allow-list. This is required, not optional: containers in one Pod
