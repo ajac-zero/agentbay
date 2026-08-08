@@ -4,6 +4,7 @@ import { bindingWorkspaceSchema } from "../workspace/schema.js";
 
 const MAX_PROMPT_BYTES = 16 * 1024;
 const simpleIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/);
+const cancellationReasonSchema = z.string().min(1).max(128).regex(/^[A-Z][A-Z0-9_]*$/);
 export const versionedRefSchema = z.object({ id: simpleIdSchema, version: z.number().int().positive() }).strict();
 const primitiveSchema: z.ZodType<JsonPrimitive> = z.union([z.null(), z.boolean(), z.number().finite(), z.string()]);
 
@@ -93,10 +94,16 @@ export const wakeBindingDefinitionSchema = z
       action: z.discriminatedUnion("type", [
         z.object({ type: z.literal("continue"), prompt: promptSchema, workspace: bindingWorkspaceSchema.optional() }).strict(),
         z.object({ type: z.literal("complete") }).strict(),
+        z.object({ type: z.literal("cancel"), reason: cancellationReasonSchema }).strict(),
       ]),
     }).strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.wake.action.type === "cancel" && value.wake.delivery === "active-or-coalesced") {
+      context.addIssue({ code: "custom", message: "cancel wake actions support active-only delivery", path: ["wake", "delivery"] });
+    }
+  });
 
 export const bindingDefinitionSchema = z.union([
   createBindingDefinitionSchema,

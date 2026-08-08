@@ -564,8 +564,8 @@ export const eventWakes = pgTable("dispatch_event_wakes", {
   tenantID: text("tenant_id").notNull(),
   toState: text("to_state").notNull(),
 }, (table) => [
-  check("dispatch_event_wakes_action_valid", sql`${table.action} IN ('CONTINUED', 'COMPLETED')`),
-  check("dispatch_event_wakes_lifecycle_consistent", sql`(${table.action} = 'CONTINUED' AND ${table.toState} = 'QUEUED' AND ${table.inputSequence} IS NOT NULL) OR (${table.action} = 'COMPLETED' AND ${table.toState} = 'COMPLETED' AND ${table.inputSequence} IS NULL)`),
+  check("dispatch_event_wakes_action_valid", sql`${table.action} IN ('CONTINUED', 'COMPLETED', 'CANCELLED')`),
+  check("dispatch_event_wakes_lifecycle_consistent", sql`(${table.action} = 'CONTINUED' AND ${table.toState} = 'QUEUED' AND ${table.inputSequence} IS NOT NULL) OR (${table.action} = 'COMPLETED' AND ${table.toState} = 'COMPLETED' AND ${table.inputSequence} IS NULL) OR (${table.action} = 'CANCELLED' AND ${table.toState} = 'CANCELLED' AND ${table.inputSequence} IS NULL)`),
   check("dispatch_event_wakes_exactly_one_source", sql`(${table.eventWaitID} IS NOT NULL) <> (${table.wakeIntentID} IS NOT NULL)`),
   foreignKey({ columns: [table.bindingVersionID, table.tenantID], foreignColumns: [bindingVersions.id, bindingVersions.tenantID], name: "dispatch_event_wakes_binding_tenant_fk" }),
   foreignKey({ columns: [table.eventID, table.tenantID], foreignColumns: [events.id, events.tenantID], name: "dispatch_event_wakes_event_tenant_fk" }),

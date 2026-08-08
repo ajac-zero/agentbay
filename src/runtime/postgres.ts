@@ -887,9 +887,10 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       const wakeId = randomUUID();
       const wakeAction = item.binding.definition.wake.action;
       const continuation = wakeAction.type === "continue";
+      const cancellation = wakeAction.type === "cancel";
       const inputSequence = continuation ? executionResult.rows[0]!.current_input_sequence + 1 : null;
-      const action = continuation ? "CONTINUED" : "COMPLETED";
-      const targetState = continuation ? "QUEUED" : "COMPLETED";
+      const action = continuation ? "CONTINUED" : cancellation ? "CANCELLED" : "COMPLETED";
+      const targetState = continuation ? "QUEUED" : cancellation ? "CANCELLED" : "COMPLETED";
       await client.query("UPDATE dispatch_event_waits SET state = 'CONSUMED', ended_at = $3 WHERE tenant_id = $1 AND id = $2 AND state = 'ACTIVE'", [command.tenantId, item.waitId, now]);
       if (continuation) {
         if (wakeAction.type !== "continue") throw new Error("Wake action changed during admission");
@@ -903,7 +904,7 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
         [command.tenantId, item.executionId, inputSequence, command.internalEventId, JSON.stringify(input), JSON.stringify(workspace), now]);
       }
       await client.query(`UPDATE dispatch_executions SET state = $3::text, updated_at = $4::timestamptz, available_at = $4::timestamptz,
-          current_input_sequence = COALESCE($5::integer, current_input_sequence), completed_at = CASE WHEN $3::text = 'COMPLETED' THEN $4::timestamptz ELSE NULL END,
+          current_input_sequence = COALESCE($5::integer, current_input_sequence), completed_at = CASE WHEN $3::text IN ('COMPLETED', 'CANCELLED') THEN $4::timestamptz ELSE NULL END,
           timeout_at = CASE WHEN $3::text = 'QUEUED'
             THEN $4::timestamptz + (((resolved_policy->>'timeoutSeconds')::integer) * interval '1 second')
             ELSE timeout_at END
@@ -916,8 +917,8 @@ export class PostgresRuntimeStore implements ExecutionStore, TriggerStore, Bindi
       await client.query(`INSERT INTO dispatch_execution_transitions
         (id, tenant_id, execution_id, attempt, sequence, from_state, to_state, actor, reason, created_at)
         VALUES ($1,$2,$3,NULL,(SELECT COALESCE(MAX(sequence),0)+1 FROM dispatch_execution_transitions WHERE tenant_id=$2 AND execution_id=$3),
-          'WAITING',$4,'event-admission','matching event consumed active wait',$5)`,
-      [randomUUID(), command.tenantId, item.executionId, targetState, now]);
+          'WAITING',$4,'event-admission',$5,$6)`,
+      [randomUUID(), command.tenantId, item.executionId, targetState, cancellation ? wakeAction.reason : "matching event consumed active wait", now]);
       if (continuation) {
         await client.query(`INSERT INTO dispatch_outbox
           (id, tenant_id, topic, aggregate_type, aggregate_id, payload, available_at, created_at)
@@ -2572,7 +2573,7 @@ type EventWaitRow = {
   state: string;
 };
 type EventWakeRow = {
-  action: "CONTINUED" | "COMPLETED";
+  action: "CONTINUED" | "COMPLETED" | "CANCELLED";
   binding_id: string;
   binding_version: number;
   consumed_at: Date;
@@ -2580,7 +2581,7 @@ type EventWakeRow = {
   execution_id: string;
   id: string;
   input_sequence: number | null;
-  to_state: "QUEUED" | "COMPLETED";
+  to_state: "QUEUED" | "COMPLETED" | "CANCELLED";
 };
 type EventWakeIntentRow = {
   action: "CONTINUED" | "COMPLETED";

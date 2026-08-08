@@ -11,9 +11,9 @@ The resources in `bindings.yaml` use currently supported create bindings and
 the generic `contains` array predicate. They demonstrate:
 
 1. `issues.opened` starts triage.
-2. Triage applies one difficulty label and then `dispatch/state:ready`.
+2. Triage completes and applies exactly one difficulty label as its final action.
 3. `issues.labeled` selects exactly one developer profile.
-4. All difficulty bindings share an active singleton keyed by repository ID and issue number, so later ready-label deliveries cannot create a second developer lifecycle while the first is nonterminal.
+4. All difficulty bindings share an active singleton keyed by repository ID and issue number, so later difficulty-label deliveries cannot create a second developer lifecycle while the first is nonterminal.
 5. The broker attributes the developer's primary PR through a fenced mutation receipt and matching signed webhook.
 6. `pull_request.opened` starts CI but does not provision a reviewer sandbox.
 7. The canonical `CI` workflow's terminal event starts one one-shot reviewer execution for its exact head SHA.
@@ -97,11 +97,16 @@ verified Dependabot npm patch/minor update
   -> github-actions[bot] submits an exact-SHA deterministic approval
 
 ineligible Dependabot update after required checks
-  -> trusted workflow applies dispatch-review
+   -> trusted workflow applies review
   -> create the normal one-shot reviewer execution for the exact head SHA
 
 pull_request.closed
+  where pullRequest.merged=true
   -> complete the developer wait for that correlation key
+
+pull_request.closed
+  where pullRequest.merged=false
+  -> cancel the developer wait with PULL_REQUEST_CLOSED_UNMERGED
 ```
 
 The developer and reviewer use separate GitHub Apps. The developer App authors
@@ -121,16 +126,16 @@ suspend/resume is validated against the pinned `v1beta1` controller.
 
 ## GitHub Labels
 
-- `dispatch/state:ready`
-- `dispatch/difficulty:easy`
-- `dispatch/difficulty:medium`
-- `dispatch/difficulty:hard`
+- `easy`
+- `medium`
+- `hard`
+- `review`
 
-The triager must apply the difficulty label before the final ready label. Each
-developer binding requires both, preventing Dispatch from an intermediate
-label event.
+The triager must complete all triage work before applying exactly one difficulty
+label. Applying that label starts development.
 
-Replaying the `dispatch/state:ready` label while a developer lifecycle is already active does not create another execution or pull request.
+Reapplying a difficulty label while a developer lifecycle is already active does
+not create another execution or pull request.
 
 ## Capabilities
 
@@ -188,9 +193,9 @@ immutable profiles and a common capability ceiling:
 
 | Difficulty | Model |
 |---|---|
-| Easy | `gateway/claude-sonnet-5` |
-| Medium | `gateway/claude-opus-4-7` |
-| Hard | `gateway/claude-fable-5` |
+| Easy | `gateway/gpt-5.6-luna` |
+| Medium | `gateway/gpt-5.6-terra` |
+| Hard | `gateway/gpt-5.6-sol` |
 
 `sandbox-templates.values.yaml` supplies one template per role with only that role's exact official-server
 `--tools` allow-list. This is required, not optional: containers in one Pod

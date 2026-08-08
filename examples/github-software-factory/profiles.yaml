@@ -52,7 +52,7 @@ definition:
       permission: { "github_*": deny }
       agent:
         triage:
-          prompt: Classify the issue, apply one dispatch/difficulty label, then apply dispatch/state:ready.
+          prompt: Complete triage, then apply exactly one of the easy, medium, or hard labels. Applying that label starts development.
           permission:
             github_search_issues: allow
             github_issue_read: allow
@@ -66,7 +66,7 @@ definition:
   timeoutSeconds: 900
 ---
 # developer-easy. Publish equivalent developer-medium and developer-hard
-# versions using gateway/claude-opus-4-7 and gateway/claude-fable-5.
+# versions using gateway/gpt-5.6-terra and gateway/gpt-5.6-sol.
 version: 1
 definition:
   schemaVersion: 1
@@ -74,7 +74,7 @@ definition:
     type: opencode
     agent: develop
     opencodeConfig:
-      model: gateway/claude-sonnet-5
+      model: gateway/gpt-5.6-luna
       mcp:
         github: { type: remote, url: "http://127.0.0.1:8083/", enabled: true, oauth: false }
       permission: { "github_*": deny }
