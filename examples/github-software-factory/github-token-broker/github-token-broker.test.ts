@@ -334,13 +334,13 @@ describe("GitHub token broker", () => {
     { getToken: async () => "ghs", invalidate: () => {} });
     running.push(broker);
     const response = await originalFetch(`http://127.0.0.1:${(broker.server.address() as AddressInfo).port}/`, { method: "POST", body: JSON.stringify({
-      jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "merge_pull_request", arguments: { owner: "acme", repo: "repo", pullNumber: 42, merge_method: "merge" } },
+      jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "merge_pull_request", arguments: { owner: "acme", repo: "repo", pullNumber: 42, merge_method: "squash" } },
     }) });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ result: { content: [{ type: "text" }] } });
     expect(requests).toEqual([
       expect.objectContaining({ url: "https://api.github.com/repos/acme/repo/pulls/42" }),
-      expect.objectContaining({ url: "https://api.github.com/repos/acme/repo/pulls/42/merge", method: "PUT", body: JSON.stringify({ merge_method: "merge", sha: "a".repeat(40) }) }),
+      expect.objectContaining({ url: "https://api.github.com/repos/acme/repo/pulls/42/merge", method: "PUT", body: JSON.stringify({ merge_method: "squash", sha: "a".repeat(40) }) }),
     ]);
   });
 });
