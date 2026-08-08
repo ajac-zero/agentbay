@@ -479,6 +479,7 @@ export const executionPendingWakes = pgTable("dispatch_execution_pending_wakes",
 
 export const executionAttempts = pgTable("dispatch_execution_attempts", {
   attempt: integer("attempt").notNull(),
+  diagnostic: jsonb("diagnostic").$type<import("../execution/types.js").ExecutionAttemptDiagnostic>(),
   executionID: text("execution_id").notNull(),
   fencingToken: text("fencing_token").notNull(),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
@@ -492,6 +493,7 @@ export const executionAttempts = pgTable("dispatch_execution_attempts", {
 }, (table) => [
   primaryKey({ columns: [table.executionID, table.attempt] }),
   check("dispatch_execution_attempts_attempt_positive", sql`${table.attempt} > 0`),
+  check("dispatch_execution_attempts_diagnostic_bounded", sql`${table.diagnostic} IS NULL OR octet_length(${table.diagnostic}::text) <= 8192`),
   check("dispatch_execution_attempts_state_valid", sql`${table.state} IN ('PENDING', 'LEASED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT')`),
   check(
     "dispatch_execution_attempts_active_lease_consistent",

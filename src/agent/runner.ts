@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import type { Event, OpencodeClient } from "@opencode-ai/sdk/client";
 import { createAgentClient, type OpenCodeEndpoint, waitForOpencodeReady } from "./client.js";
+import type { ExecutionAttemptDiagnostic } from "../execution/types.js";
 import { logger } from "../logger.js";
 
 export const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
@@ -14,6 +15,7 @@ export type ExecutionAttemptInput = {
   signal?: AbortSignal;
   title: string;
   onSession?: (sessionId: string) => Promise<void>;
+  onDiagnostic?: (diagnostic: Omit<ExecutionAttemptDiagnostic, "schemaVersion" | "updatedAt" | "termination">) => Promise<void>;
 };
 
 export type ExecutionAttemptResult = {
@@ -145,6 +147,10 @@ export async function runExecutionAttempt(
   const log = logger.child({ sessionId, agentName: input.agent });
   logger.info("opencode session created", { sessionId, title: input.title });
   await input.onSession?.(sessionId);
+  let eventCount = 0;
+  const checkpoint = (phase: "session_created" | "subscribed" | "prompt_submitted" | "idle" | "permission_requested" | "session_error", lastEventType?: string) =>
+    input.onDiagnostic?.({ phase, eventCount, ...(lastEventType ? { lastEventType, lastEventAt: new Date().toISOString() } : {}) });
+  await checkpoint("session_created");
 
   let abortPromise: Promise<never> | undefined;
   let removeAbortListener: (() => void) | undefined;
@@ -172,6 +178,7 @@ export async function runExecutionAttempt(
   try {
     const subscription = client.event.subscribe({ signal: input.signal });
     events = abortPromise ? await Promise.race([subscription, abortPromise]) : await subscription;
+    await checkpoint("subscribed");
     await client.session.promptAsync({
       path: { id: sessionId },
       body: {
@@ -182,6 +189,7 @@ export async function runExecutionAttempt(
       throwOnError: true,
     });
     log.info("prompt submitted");
+    await checkpoint("prompt_submitted");
 
     const iterator = events.stream[Symbol.asyncIterator]();
     while (true) {
@@ -192,6 +200,7 @@ export async function runExecutionAttempt(
 
       const event = next.value;
       if (!isSessionEvent(event, sessionId)) continue;
+      eventCount += 1;
 
       const delta = textDelta(event, sessionId);
       if (delta && outputBytes < maxOutputBytes) {
@@ -201,6 +210,7 @@ export async function runExecutionAttempt(
       }
 
       if (event.type === "permission.updated") {
+        await checkpoint("permission_requested", event.type);
         await client.postSessionIdPermissionsPermissionId({
           path: { id: sessionId, permissionID: event.properties.id },
           body: { response: "reject" },
@@ -210,11 +220,13 @@ export async function runExecutionAttempt(
       }
 
       if (event.type === "session.error") {
+        await checkpoint("session_error", event.type);
         const message = formatOpencodeError(event.properties.error);
         throw new Error(`opencode session ${sessionId} error: ${message}`);
       }
 
       if (isIdleEvent(event)) {
+        await checkpoint("idle", event.type);
         log.info("opencode session completed");
         return { output, sessionId };
       }

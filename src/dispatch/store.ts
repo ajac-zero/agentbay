@@ -12,6 +12,7 @@ import type {
   TransitionLeasedExecutionResult,
   CompleteLeasedExecutionTurnCommand,
   CompleteLeasedExecutionTurnResult,
+  CheckpointLeasedExecutionAttemptDiagnosticCommand,
   ExpiredEventWait,
 } from "./types.js";
 import { isValidDispatcherExecutionTransition } from "./states.js";
@@ -65,6 +66,10 @@ export interface DispatcherExecutionStore {
   transitionLeasedExecution(
     command: TransitionLeasedExecutionCommand,
   ): Promise<TransitionLeasedExecutionResult>;
+
+  checkpointLeasedExecutionAttemptDiagnostic?(
+    command: CheckpointLeasedExecutionAttemptDiagnosticCommand,
+  ): Promise<boolean>;
 }
 
 export function isValidTransitionLeasedExecutionCommand(command: TransitionLeasedExecutionCommand): boolean {
