@@ -130,7 +130,7 @@ describe("normalizeGitHubEvent", () => {
     const event = normalizeGitHubEvent(input({
       ...common,
       action: "created",
-      issue: { ...issue, labels: [{ name: "dispatch/state:ready" }, { name: "dispatch/difficulty:hard" }] },
+      issue: { ...issue, labels: [{ name: "hard" }] },
       comment: {
         id: 91,
         body: "Please continue",
@@ -144,7 +144,7 @@ describe("normalizeGitHubEvent", () => {
       type: "com.github.issue_comment.created",
       subject: "issues/7",
       data: {
-        issue: { labels: ["dispatch/difficulty:hard", "dispatch/state:ready"] },
+        issue: { labels: ["hard"] },
         comment: { id: 91, body: "Please continue", bodyTruncated: false, user: { login: "maintainer" } },
       },
     });

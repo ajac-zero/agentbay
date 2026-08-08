@@ -32,8 +32,8 @@ definition:
   workspace: { type: empty }
 ---
 # Publish this document once per difficulty, changing both the required label
-# and exact profile ID. The ready label prevents dispatch on intermediate label
-# deliveries.
+# and exact profile ID. Applying a difficulty label starts development, so
+# triage must complete before it is applied.
 version: 1
 triggerId: engineering-github
 profile: { id: developer-easy, version: 1 }
@@ -43,12 +43,11 @@ definition:
   filter:
     all:
       - { path: /repository/fullName, op: eq, value: acme/dispatch }
-      - { path: /issue/labels, op: contains, value: "dispatch/state:ready" }
-      - { path: /issue/labels, op: contains, value: "dispatch/difficulty:easy" }
+      - { path: /issue/labels, op: contains, value: easy }
   activeSingleton:
     name: developer-issue
     key: [/repository/id, /issue/number]
-  prompt: { literal: Implement the ready issue and open a pull request., includeEvent: data }
+  prompt: { literal: Implement the issue and open a pull request., includeEvent: data }
   workspace:
     type: git
     repository: { url: { path: /repository/cloneUrl } }
@@ -141,7 +140,7 @@ definition:
   filter:
     all:
       - { path: /repository/fullName, op: eq, value: acme/dispatch }
-      - { path: /pullRequest/labels, op: contains, value: dispatch-review }
+      - { path: /pullRequest/labels, op: contains, value: review }
   activeSingleton:
     name: reviewer-revision
     key: [/repository/id, /pullRequest/number, /pullRequest/head/sha]

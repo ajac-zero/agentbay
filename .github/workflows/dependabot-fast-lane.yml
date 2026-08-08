@@ -105,7 +105,7 @@ jobs:
             -X POST -f event=APPROVE -f commit_id="$EXPECTED_HEAD" \
             -f body='Deterministic approval: verified Dependabot npm patch/minor update, dependency-only files, exact head SHA, and all required checks passed.'
 
-      - name: Route ineligible update to Dispatch review
+      - name: Route ineligible update to review
         if: always() && !(steps.classify.outcome == 'success' && steps.classify.outputs.eligible == 'true' && steps.checks.outcome == 'success')
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
@@ -119,5 +119,5 @@ jobs:
           [[ "$(jq -r .head.sha <<<"$pr")" == "$EXPECTED_HEAD" ]]
           gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
             -X POST --input - <<'JSON'
-          {"labels":["dispatch-review"]}
+          {"labels":["review"]}
           JSON

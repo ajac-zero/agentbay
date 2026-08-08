@@ -52,7 +52,7 @@ definition:
       permission: { "github_*": deny }
       agent:
         triage:
-          prompt: Classify the issue, apply one dispatch/difficulty label, then apply dispatch/state:ready.
+          prompt: Complete triage, then apply exactly one of the easy, medium, or hard labels. Applying that label starts development.
           permission:
             github_search_issues: allow
             github_issue_read: allow
