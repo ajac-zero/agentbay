@@ -150,7 +150,7 @@ definition:
             Merge only the pull request identified by the trusted event. Read the pull request and its reviews first.
             Require it to be open and non-draft, require its current head SHA to equal review.commitSha, and require the
             review from review.user.id to be APPROVED for that exact SHA. Then call github_merge_pull_request with
-            merge_method=merge. Do not modify the pull request or repository. If any invariant fails or GitHub rejects
+            merge_method=squash. Do not modify the pull request or repository. If any invariant fails or GitHub rejects
             the merge because repository protection is not satisfied, stop without merging.
           permission:
             github_pull_request_read: allow
