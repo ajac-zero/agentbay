@@ -77,7 +77,7 @@ describe("isNotFound", () => {
 
   it("returns false for a non-404 code", () => {
     expect(isNotFound({ code: 500 })).toBe(false);
-    expect(isNotFound({ response: { statusCode: 403 } })).toBe(false);
+    expect(isNotFound({ response: { statusCode: 403 } }).toBe(false));
   });
 });
 
@@ -122,6 +122,30 @@ function fakeApi(items: SandboxClaim[], deleteError?: unknown) {
 // ---------------------------------------------------------------------------
 
 describe("reconcileOnce", () => {
+  it("rejects an invalid grace period before listing claims", async () => {
+    const api = fakeApi([claim("still-running", msFromNow(30 * 60_000))]);
+
+    await expect(reconcileOnce(api, { ...BASE_OPTS, graceMinutes: -30 })).rejects.toThrow(
+      /Expected graceMinutes to be a nonnegative safe integer/,
+    );
+
+    expect(api.listNamespacedCustomObject).not.toHaveBeenCalled();
+    expect(api.deleteNamespacedCustomObject).not.toHaveBeenCalled();
+  });
+
+  it.each([1.5, Number.POSITIVE_INFINITY, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid graceMinutes %p before listing claims",
+    async (graceMinutes) => {
+      const api = fakeApi([]);
+
+      await expect(reconcileOnce(api, { ...BASE_OPTS, graceMinutes })).rejects.toThrow(
+        /Expected graceMinutes to be a nonnegative safe integer/,
+      );
+
+      expect(api.listNamespacedCustomObject).not.toHaveBeenCalled();
+    },
+  );
+
   it("returns zeros when there are no claims", async () => {
     const api = fakeApi([]);
     await expect(reconcileOnce(api, BASE_OPTS)).resolves.toEqual({ deleted: 0, errors: 0, total: 0 });
