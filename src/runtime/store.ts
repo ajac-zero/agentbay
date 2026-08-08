@@ -1,4 +1,4 @@
-import { readBoolean, readNumber } from "../util.js";
+import { readBoolean } from "../util.js";
 import type { PostgresRuntimeStoreOptions } from "./postgres.js";
 import type { ExecutionStore } from "../execution/store.js";
 import type { EventAdmissionStore } from "../execution/store.js";
@@ -28,7 +28,7 @@ export async function runRuntimeMigrations(env: NodeJS.ProcessEnv = process.env)
   await migratePostgresRuntimeStore(readPostgresRuntimeStoreOptions(env));
 }
 
-function readPostgresRuntimeStoreOptions(env: NodeJS.ProcessEnv): PostgresRuntimeStoreOptions {
+export function readPostgresRuntimeStoreOptions(env: NodeJS.ProcessEnv): PostgresRuntimeStoreOptions {
   const connectionString = env.DISPATCH_DATABASE_URL ?? env.DATABASE_URL;
   const host = env.DISPATCH_DATABASE_HOST;
   if (!connectionString && !host) {
@@ -40,10 +40,19 @@ function readPostgresRuntimeStoreOptions(env: NodeJS.ProcessEnv): PostgresRuntim
     host,
     migrationsFolder: env.DISPATCH_DATABASE_MIGRATIONS_FOLDER,
     password: env.DISPATCH_DATABASE_PASSWORD,
-    port: readNumber(env.DISPATCH_DATABASE_PORT, 5432),
+    port: readDatabasePort(env.DISPATCH_DATABASE_PORT),
     user: env.DISPATCH_DATABASE_USER,
     ...(connectionString ? { connectionString } : {}),
     ssl: readBoolean(env.DISPATCH_DATABASE_SSL, false),
     sslRejectUnauthorized: readBoolean(env.DISPATCH_DATABASE_SSL_REJECT_UNAUTHORIZED, false),
   };
+}
+
+function readDatabasePort(value: string | undefined): number {
+  if (value === undefined || value === "") return 5432;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 65_535) {
+    throw new Error(`DISPATCH_DATABASE_PORT must be a positive integer TCP port at most 65535, got ${value}`);
+  }
+  return parsed;
 }
