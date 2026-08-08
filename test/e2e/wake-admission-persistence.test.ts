@@ -261,6 +261,36 @@ describe("wake admission persistence", () => {
     expect((await pool.query("select count(*)::int as count from dispatch_outbox where aggregate_type = 'event-wake' and payload->>'executionId' = $1", [executionId])).rows[0]).toEqual({ count: 0 });
   });
 
+  it("cancels an unmerged pull request wait, releases its singleton, and replays the terminal result", async () => {
+    const correlation = randomUUID();
+    const executionId = await createWaitingExecution(correlation, { type: "empty" }, {}, "developer-issue");
+    await publishWakeBinding(`cancel-${correlation}`, "com.github.pull_request.closed", {
+      type: "cancel", reason: "PULL_REQUEST_CLOSED_UNMERGED",
+    });
+    const command = admissionCommand("com.github.pull_request.closed", { key: correlation, pullRequest: { merged: false } });
+
+    const first = await store.admitEvent(command);
+    const replay = await store.admitEvent(command);
+
+    expect(first.wakes).toEqual([expect.objectContaining({ executionId, action: "CANCELLED", inputSequence: null, state: "CANCELLED" })]);
+    expect(replay).toEqual({ ...first, replayed: true });
+    expect(await store.getExecution("default", executionId)).toMatchObject({ state: "CANCELLED" });
+    expect((await pool.query("select state from dispatch_event_waits where execution_id = $1", [executionId])).rows[0]).toEqual({ state: "CONSUMED" });
+    expect((await pool.query("select state from dispatch_execution_attempts where execution_id = $1", [executionId])).rows).toEqual([{ state: "SUCCEEDED" }]);
+    expect((await pool.query("select count(*)::int as count from dispatch_execution_inputs where execution_id = $1", [executionId])).rows[0]).toEqual({ count: 1 });
+    expect((await pool.query("select count(*)::int as count from dispatch_outbox where aggregate_type = 'event-wake' and payload->>'executionId' = $1", [executionId])).rows[0]).toEqual({ count: 0 });
+    expect((await pool.query("select from_state, to_state, actor, reason from dispatch_execution_transitions where execution_id = $1 order by sequence desc limit 1", [executionId])).rows[0]).toEqual({
+      from_state: "WAITING", to_state: "CANCELLED", actor: "event-admission", reason: "PULL_REQUEST_CLOSED_UNMERGED",
+    });
+
+    const replacement = await store.admitEvent(admissionCommand("work.start", { key: correlation }));
+    expect(replacement.executions).toHaveLength(1);
+    expect(replacement.executions[0]!.id).not.toBe(executionId);
+    await store.requestExecutionCancellation({
+      actor: "test", executionId: replacement.executions[0]!.id, reason: "test cleanup", requestedAt: new Date().toISOString(), tenantId: "default", transitionId: randomUUID(),
+    });
+  });
+
   it("uses stable binding order when multiple wake policies match one wait", async () => {
     const correlation = randomUUID();
     const executionId = await createWaitingExecution(correlation);
@@ -298,6 +328,7 @@ describe("wake admission persistence", () => {
     correlation: string,
     workspace: BindingWorkspace = { type: "empty" },
     extraData: Record<string, JsonValue> = {},
+    activeSingletonName?: string,
   ): Promise<string> {
     const bindingId = `start-${correlation}`;
     const createdAt = new Date().toISOString();
@@ -306,6 +337,7 @@ describe("wake admission persistence", () => {
       definition: {
         schemaVersion: 1, eventTypes: ["work.start"], filter: { all: [{ path: "/key", op: "eq", value: correlation }] },
         prompt: { literal: "Start work.", includeEvent: "data" }, workspace,
+        ...(activeSingletonName ? { activeSingleton: { name: activeSingletonName, key: ["/key"] } } : {}),
         afterTurn: { disposition: "wait", wait: { name: "work-lifecycle", correlation: [{ name: "key", path: "/key" }], deadlineSeconds: 600 } },
       },
     });
@@ -341,7 +373,7 @@ describe("wake admission persistence", () => {
     return (await store.admitEvent(admissionCommand("work.busy-start", { key: correlation }))).executions[0]!.id;
   }
 
-  async function publishWakeBinding(bindingId: string, eventType: string, action: { type: "complete" } | {
+  async function publishWakeBinding(bindingId: string, eventType: string, action: { type: "complete" } | { type: "cancel"; reason: string } | {
     type: "continue"; prompt: { literal: string; includeEvent: "data" }; workspace?: BindingWorkspace;
   }): Promise<void> {
     await store.publishBindingVersion({
@@ -349,7 +381,7 @@ describe("wake admission persistence", () => {
       profile: { id: "developer", version: 1 }, tenantId: "default", triggerId: "events", version: 1,
       definition: {
         disposition: "wake", schemaVersion: 1, eventTypes: [eventType], filter: { all: [] },
-        wake: { waitName: "work-lifecycle", delivery: "active-or-coalesced", correlation: [{ name: "key", path: "/key" }], action },
+        wake: { waitName: "work-lifecycle", ...(action.type === "cancel" ? {} : { delivery: "active-or-coalesced" }), correlation: [{ name: "key", path: "/key" }], action },
       },
     });
   }

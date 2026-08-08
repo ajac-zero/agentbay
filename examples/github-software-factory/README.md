@@ -101,7 +101,12 @@ ineligible Dependabot update after required checks
   -> create the normal one-shot reviewer execution for the exact head SHA
 
 pull_request.closed
+  where pullRequest.merged=true
   -> complete the developer wait for that correlation key
+
+pull_request.closed
+  where pullRequest.merged=false
+  -> cancel the developer wait with PULL_REQUEST_CLOSED_UNMERGED
 ```
 
 The developer and reviewer use separate GitHub Apps. The developer App authors

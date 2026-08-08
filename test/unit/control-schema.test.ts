@@ -168,6 +168,9 @@ describe("binding schemas", () => {
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, delivery: "active-or-coalesced" } }).success).toBe(true);
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, delivery: "unknown" } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, action: { type: "complete" } } }).success).toBe(true);
+    expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, action: { type: "cancel", reason: "PULL_REQUEST_CLOSED_UNMERGED" } } }).success).toBe(true);
+    expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, delivery: "active-or-coalesced", action: { type: "cancel", reason: "PULL_REQUEST_CLOSED_UNMERGED" } } }).success).toBe(false);
+    expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, action: { type: "cancel", reason: "pr closed" } } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...wake, wake: { ...wake.wake, action: { type: "complete", workspace: { type: "empty" } } } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...wake, workspace: { type: "empty" } }).success).toBe(false);
     expect(bindingDefinitionSchema.safeParse({ ...wake, activeSingleton: { name: "bad", key: ["/repository/id"] } }).success).toBe(false);

@@ -110,6 +110,24 @@ definition:
 ---
 version: 1
 triggerId: engineering-github
+profile: { id: developer-easy, version: 1 }
+definition:
+  schemaVersion: 1
+  disposition: wake
+  eventTypes: [com.github.pull_request.closed]
+  filter:
+    all:
+      - { path: /repository/fullName, op: eq, value: acme/dispatch }
+      - { path: /pullRequest/merged, op: eq, value: false }
+  wake:
+    waitName: developer-pr-lifecycle
+    correlation:
+      - { name: repositoryId, path: /repository/id }
+      - { name: pullRequestNumber, path: /pullRequest/number }
+    action: { type: cancel, reason: PULL_REQUEST_CLOSED_UNMERGED }
+---
+version: 1
+triggerId: engineering-github
 profile: { id: reviewer, version: 1 }
 definition:
   schemaVersion: 1

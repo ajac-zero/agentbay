@@ -47,6 +47,7 @@ describe("isValidExecutionTransition", () => {
     expect(isValidExecutionTransition("PROVISIONING", "TIMED_OUT")).toBe(true);
     expect(isValidExecutionTransition("RUNNING", "WAITING")).toBe(true);
     expect(isValidExecutionTransition("WAITING", "QUEUED")).toBe(true);
+    expect(isValidExecutionTransition("WAITING", "CANCELLED")).toBe(true);
     expect(isValidExecutionTransition("WAITING", "CANCEL_REQUESTED")).toBe(true);
     expect(isValidExecutionTransition("WAITING", "TIMED_OUT")).toBe(true);
   });

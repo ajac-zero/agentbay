@@ -88,9 +88,9 @@ export type AdmissionWakeResult = {
   executionId: string;
   eventWaitId: string;
   binding: { id: string; version: number };
-  action: "CONTINUED" | "COMPLETED";
+  action: "CONTINUED" | "COMPLETED" | "CANCELLED";
   inputSequence: number | null;
-  state: "QUEUED" | "COMPLETED";
+  state: "QUEUED" | "COMPLETED" | "CANCELLED";
   consumedAt: string;
 };
 

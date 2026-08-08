@@ -70,8 +70,8 @@ const cloudEventRequestSchema = z.object({
 }).catchall(z.union([z.string(), z.boolean(), z.number()]));
 const admissionWakeResultSchema = z.object({
   id: z.string(), executionId: z.string(), eventWaitId: z.string(), binding: profileRefSchema,
-  action: z.enum(["CONTINUED", "COMPLETED"]), inputSequence: z.number().int().positive().nullable(),
-  state: z.enum(["QUEUED", "COMPLETED"]), consumedAt: z.string().datetime(),
+  action: z.enum(["CONTINUED", "COMPLETED", "CANCELLED"]), inputSequence: z.number().int().positive().nullable(),
+  state: z.enum(["QUEUED", "COMPLETED", "CANCELLED"]), consumedAt: z.string().datetime(),
 }).strict().openapi("AdmissionWakeResult");
 const admissionResultSchema = z.object({
   event: admittedEventSchema,
